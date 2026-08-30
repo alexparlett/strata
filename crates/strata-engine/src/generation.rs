@@ -40,7 +40,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::{env, fs, process};
 
-    use strata_model::{ConnectionDef, Provider, S3Auth, S3Store, SourceFormat, ViewDef};
+    use strata_model::{SourceDef, SourceFormat, ViewDef};
 
     use super::*;
     use crate::register::CatalogSpec;
@@ -78,22 +78,21 @@ mod tests {
             paths: vec![root.join("t.csv").display().to_string()],
             format: SourceFormat::from_name("csv"),
             partitions: Vec::new(),
-            connection: None,
+            source: None,
             internal: false,
         }
     }
 
-    /// A connection refused before any socket opens (S3 with no region), so the connection
+    /// A connection refused before any socket opens (S3 with no region), so the data source
     /// gestures can be driven without dialing out.
-    fn unreachable(name: &str) -> ConnectionDef {
-        ConnectionDef {
-            address: "no-region".into(),
+    fn unreachable(name: &str) -> SourceDef {
+        SourceDef {
+            config: [("address".to_string(), "no-region".into())]
+                .into_iter()
+                .collect(),
+            kind: "s3".into(),
             name: name.into(),
-            provider: Provider::S3(S3Store {
-                auth: S3Auth::Anonymous,
-                ..Default::default()
-            }),
-            client_config: Default::default(),
+            ..Default::default()
         }
     }
 
@@ -179,7 +178,7 @@ mod tests {
         moved("a typed statement that removes a table", &engine);
 
         let _ = engine.sources().connect(unreachable("lake")).await;
-        moved("a connection, refused or not", &engine);
+        moved("a data source, refused or not", &engine);
         engine
             .sources()
             .connect(fake_def::<TestDoc>("sales", "fixture"))
@@ -189,9 +188,9 @@ mod tests {
         engine
             .sources()
             .show_schemas("sales", &["public".to_string()]);
-        moved("changing which schemas a connection shows", &engine);
+        moved("changing which schemas a data source shows", &engine);
         engine.sources().disconnect("lake");
-        moved("forgetting a connection", &engine);
+        moved("forgetting a data source", &engine);
 
         let report = engine.catalog().sync(CatalogSpec::default(), |_| {}).await;
         moved("a pass that took the remaining views out", &engine);

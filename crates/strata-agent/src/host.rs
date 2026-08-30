@@ -120,15 +120,15 @@ pub enum Described {
         /// the view reads and the caller asked what it reads.
         reads: Vec<String>,
     },
-    /// A relation in a **database connection's** catalog. There is no def behind it and so no
+    /// A relation in a **data source's** catalog. There is no def behind it and so no
     /// registration state: a database answers for itself, which is why the whole catalog comes
-    /// through a connection rather than one def per table. What can be said about it is its
-    /// address, the connection it is in, and the schema that connection reports.
+    /// through a data source rather than one def per table. What can be said about it is its
+    /// address, the data source it is in, and the schema that data source reports.
     Remote {
         /// The qualified name, as the caller has to write it in SQL.
         name: String,
-        /// The catalog the connection registered — the first part of `name`.
-        connection: String,
+        /// The catalog the data source registered — the first part of `name`.
+        source: String,
         /// Whether the server calls it a view.
         view: bool,
         columns: Vec<ColumnInfo>,

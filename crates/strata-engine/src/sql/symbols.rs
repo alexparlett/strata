@@ -78,14 +78,14 @@ impl PreparedSym {
     }
 }
 
-/// One **database connection's catalog**, as a qualified name's first segment (DB-06).
+/// One **data source's catalog**, as a qualified name's first segment (DB-06).
 ///
-/// The two halves come from two places on purpose. The [`name`](Self::name) is the connection's
-/// def — so it is offered whether or not the connection is live, exactly as the tree draws a
+/// The two halves come from two places on purpose. The [`name`](Self::name) is the data source's
+/// def — so it is offered whether or not the data source is live, exactly as the tree draws a
 /// collapsed database node it has never reached. The [`schemas`](Self::schemas) are the
 /// connect-time enumeration, scoped by the def's enabled set
 /// ([`Sources::listing`](crate::Sources::listing), the one visibility source), so a
-/// connection that has not answered offers its name and nothing under it.
+/// data source that has not answered offers its name and nothing under it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DatabaseSym {
     pub name: String,
@@ -123,7 +123,7 @@ pub struct RelationSym {
 pub struct Catalog {
     /// Registered tables and saved views (both address columns).
     pub tables: Vec<TableSym>,
-    /// The project's database connections, for the qualified offer (DB-06). Set through
+    /// The project's database sources, for the qualified offer (DB-06). Set through
     /// [`with_databases`](Self::with_databases) rather than taken by [`build`](Self::build),
     /// because a project with no database says nothing about them.
     pub databases: Vec<DatabaseSym>,
@@ -187,13 +187,13 @@ impl Catalog {
             .find(|f| f.name.eq_ignore_ascii_case(name))
     }
 
-    /// The project's database connections — see [`DatabaseSym`].
+    /// The project's data sources — see [`DatabaseSym`].
     pub fn with_databases(mut self, databases: Vec<DatabaseSym>) -> Self {
         self.databases = databases;
         self
     }
 
-    /// The database connection addressed as `name`, case-insensitively as SQL resolves it.
+    /// The data source addressed as `name`, case-insensitively as SQL resolves it.
     pub fn database(&self, name: &str) -> Option<&DatabaseSym> {
         self.databases
             .iter()

@@ -32,9 +32,9 @@ use freya::winit::window::WindowId;
 use strata_core::project::STRATA_DIR;
 
 use crate::apps::configure::ConfigureTarget;
-use crate::apps::connection::ConnectionTarget;
 use crate::apps::launcher::LauncherApp;
 use crate::apps::project::{window_geometry, ProjectApp};
+use crate::apps::source::SourceTarget;
 use crate::menu::{use_file_menu, MenuScope};
 use crate::state::{abandon_install, write_config, AppCtx, ConfigChan, ConfigStation};
 
@@ -69,27 +69,27 @@ pub enum WindowKind {
         owner: WindowId,
         target: ConfigureTarget,
     },
-    /// A connection editor, pinned above the project window that opened it.
+    /// A data source editor, pinned above the project window that opened it.
     ///
     /// **One per target**, on Configure's terms and for its reason: it is opened on a *def*, so
-    /// two windows on one connection would both `upsert_connection` and both persist. The owner
+    /// two windows on one data source would both `upsert_source` and both persist. The owner
     /// sits beside the target because one owner window shows one project, and two projects can
-    /// each hold a connection to `s3://lake`.
-    Connection {
+    /// each hold a data source to `s3://lake`.
+    Source {
         owner: WindowId,
-        target: ConnectionTarget,
+        target: SourceTarget,
     },
 }
 
 impl WindowKind {
     /// Whether this is a window the user *works* in — a project or the welcome screen.
-    /// None of Settings, Export, Configure or the connection editor is: each is a panel over one
+    /// None of Settings, Export, Configure or the data source editor is: each is a panel over one
     /// of these, so it can neither be the app's last window nor keep the launcher from taking a
     /// closing project's place.
     fn is_workspace(&self) -> bool {
         !matches!(
             self,
-            Self::Settings | Self::Export | Self::Configure { .. } | Self::Connection { .. }
+            Self::Settings | Self::Export | Self::Configure { .. } | Self::Source { .. }
         )
     }
 }
@@ -182,7 +182,7 @@ impl Windows {
 
     /// Every live window by id — for the questions the named accessors above don't cover: which
     /// project a child window's owner is showing now ([`crate::platform::owner`]), and whether a
-    /// Configure or connection-editor window is already open on a given owner's def.
+    /// Configure or data-source editor window is already open on a given owner's def.
     pub fn by_id(&self) -> &HashMap<WindowId, WindowKind> {
         &self.by_id
     }

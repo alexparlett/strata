@@ -22,21 +22,22 @@ use freya::components::MenuItemThemePartial;
 use freya::prelude::*;
 use freya::radio::{use_radio_station, RadioStation};
 use strata_engine::quote_ident;
-use strata_model::{CatalogKind, Origin, ProviderId, SavedQuery};
+use strata_engine::SourceMode;
+use strata_model::{CatalogKind, Origin, SavedQuery};
 use uuid::Uuid;
 
 use super::node::Remote;
 use crate::apps::configure::ConfigureTarget;
-use crate::apps::connection::ConnectionTarget;
 use crate::apps::project::query::ProfileTarget;
 use crate::apps::project::state::{
     persisted_defs, refresh_table, use_catalog, use_catalog_rescan, use_report, Anchor, Catalog,
     CatalogRescan, Chan, ChatsCtx, ProjChan, ProjectState, Reg, ReportCtx, SessionState,
 };
 use crate::apps::project::views::{
-    ask_about, profile_verb, use_profile_actions, ConfigureRequest, ConnectionRequest, DropTarget,
-    ProfileActions, SchemasRequest,
+    ask_about, profile_verb, use_profile_actions, ConfigureRequest, DropTarget, ProfileActions,
+    SchemasRequest, SourceRequest,
 };
+use crate::apps::source::SourceTarget;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::metrics::{CONTEXT_MENU_WIDTH, MENU_ICON, SP_4};
@@ -437,7 +438,7 @@ pub fn view_row(actions: &CatalogActions, name: &str) {
 ///
 /// Three items and no more. Everything the workspace rows offer beyond these is about a **def** —
 /// Configure edits one, Drop removes one, Refresh re-infers one — and a remote relation has none:
-/// the database answers for itself, and the connection's own row is where its lifecycle lives.
+/// the database answers for itself, and the data source's own row is where its lifecycle lives.
 /// Profile (DB-07) is the one that arrived later, and it arrived as an arm of the entry point every
 /// other profile gesture already went through, not as a second one.
 pub fn relation_menu(actions: &CatalogActions, relation: &Remote) -> Menu {
@@ -546,17 +547,17 @@ pub fn open_saved_query(actions: &CatalogActions, id: Uuid) {
         .open_or_focus(&name, sql, Origin::SavedQuery(id));
 }
 
-/// The handles a **connection** row's menu acts through, gathered once per row — this module's
-/// [`CatalogActions`] shape, with only what a connection's three items need.
+/// The handles a **data source** row's menu acts through, gathered once per row — this module's
+/// [`CatalogActions`] shape, with only what a data source's three items need.
 #[derive(Clone, Copy)]
-pub struct ConnectionActions {
+pub struct SourceActions {
     /// The remove-confirm slot provided at the window root. Setting it *is* Forget: the dialog
     /// owns the store mutation, the persist, the keystore entry and the `Sources::disconnect`
     /// behind it.
     drop_target: State<Option<DropTarget>>,
     /// The editor-window request slot, on the same terms: setting it *is* Edit, and
-    /// `ConnectionLauncher` at the project root opens the window.
-    editor: ConnectionRequest,
+    /// `Data sourceLauncher` at the project root opens the window.
+    editor: SourceRequest,
     /// The schemas-picker slot, likewise — the picker is a dialog at the window root.
     schemas: SchemasRequest,
     /// The destructive tone, resolved here because a menu is built from an event handler, where
@@ -564,17 +565,17 @@ pub struct ConnectionActions {
     danger: Color,
 }
 
-/// Gather a connection row's action handles.
-pub fn use_connection_actions() -> ConnectionActions {
-    ConnectionActions {
+/// Gather a data source row's action handles.
+pub fn use_source_actions() -> SourceActions {
+    SourceActions {
         drop_target: use_consume::<State<Option<DropTarget>>>(),
-        editor: use_consume::<ConnectionRequest>(),
+        editor: use_consume::<SourceRequest>(),
         schemas: use_consume::<SchemasRequest>(),
         danger: tones().error,
     }
 }
 
-/// A **connection** row's menu: edit it · pick its schemas · forget it.
+/// A **data source** row's menu: edit it · pick its schemas · forget it.
 ///
 /// Every item **sets a slot and stops** — the editor window, the schemas picker and the remove
 /// confirm are all the project root's, and a menu built inside an event handler can run no hook
@@ -582,8 +583,13 @@ pub fn use_connection_actions() -> ConnectionActions {
 ///
 /// *Schemas…* is absent on an object store rather than parked, for [`table_menu`]'s reason: a
 /// bucket has no schemas to scope, ever, where parking means "not this second".
-pub fn connection_menu(actions: &ConnectionActions, name: String, provider: ProviderId) -> Menu {
+///
+/// *Edit data source* is offered for **every** source, because every data source is now a
+/// registrant's and the editor draws its form from what that kind declared. It was parked for
+/// exactly as long as the object stores were not registrants.
+pub fn source_menu(actions: &SourceActions, name: String, mode: SourceMode) -> Menu {
     let actions = *actions;
+    let catalogued = mode == SourceMode::Catalog;
     Menu::new()
         .min_width(Size::px(CONTEXT_MENU_WIDTH))
         .child(
@@ -592,13 +598,13 @@ pub fn connection_menu(actions: &ConnectionActions, name: String, provider: Prov
                     let name = name.clone();
                     move |_| {
                         let mut slot = actions.editor;
-                        slot.set(Some(ConnectionTarget::Edit(name.clone())));
+                        slot.set(Some(SourceTarget::Edit(name.clone())));
                         ContextMenu::close();
                     }
                 })
-                .child(menu_row(IconName::Pencil, "Edit connection")),
+                .child(menu_row(IconName::Pencil, "Edit data source")),
         )
-        .maybe_child((provider == ProviderId::Source).then(|| {
+        .maybe_child(catalogued.then(|| {
             let name = name.clone();
             MenuButton::new()
                 .on_press(move |_| {
@@ -615,13 +621,13 @@ pub fn connection_menu(actions: &ConnectionActions, name: String, provider: Prov
                 .theme(MenuItemThemePartial::default().color(actions.danger))
                 .on_press(move |_| {
                     let mut slot = actions.drop_target;
-                    slot.set(Some(DropTarget::Connection {
+                    slot.set(Some(DropTarget::Source {
                         name: name.clone(),
-                        provider,
+                        mode,
                     }));
                     ContextMenu::close();
                 })
-                .child(menu_row(IconName::Trash, "Forget connection")),
+                .child(menu_row(IconName::Trash, "Forget data source")),
         )
 }
 

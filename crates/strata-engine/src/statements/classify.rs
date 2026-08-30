@@ -284,7 +284,7 @@ fn reads_reserved<V: Visit>(node: &V) -> bool {
 /// because the provider's hiding rule asks the same question and the two must not drift.
 ///
 /// Where the name points, not merely how it is spelled: the namespace is the workspace catalog's,
-/// and a database connection's `__snap_3` is whatever the server called a table. The qualifier is
+/// and a data source's `__snap_3` is whatever the server called a table. The qualifier is
 /// read through DataFusion's own normalization rather than a second reading of the identifier
 /// rules, so the reference judged is the one the planner would resolve.
 ///
@@ -550,7 +550,7 @@ mod tests {
     }
 
     /// **The prefix is a namespace, and the namespace is the workspace catalog's.** A `__snap_`
-    /// name qualified into a database connection's catalog is a relation somebody else named, so
+    /// name qualified into a data source's catalog is a relation somebody else named, so
     /// reading it is ordinary and writing to it is refused for being remote rather than reserved.
     ///
     /// Deliberately **syntactic**: nothing asks whether `pg` is registered, because the classifier

@@ -10,7 +10,7 @@
 //! subscriber on each click.
 //!
 //! The selection's value is a [`ColRef`] — `{ owner, path }`, where the owner is a workspace table
-//! or view **or** a relation inside a database connection's catalog — because a name alone can't
+//! or view **or** a relation inside a data source's catalog — because a name alone can't
 //! say *which* `city`, the top-level one or the one inside `address`, and the sidebar renders both.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -42,7 +42,7 @@ pub fn use_catalog_selection() -> CatalogSelection {
 /// keeps on its own catalog row, for the relations that have no row to keep it on.
 ///
 /// A database answers for itself, so there are no defs and no `Reg` rows under a database
-/// connection (DB-02) — which leaves the "an expensive, opt-in result is freya-query keyed by the
+/// data source (DB-02) — which leaves the "an expensive, opt-in result is freya-query keyed by the
 /// request; the store holds the request" rule with nowhere to put the request. The rule generalizes
 /// rather than being excepted: **whoever owns the surface holds the request**. For a workspace
 /// entry that is `ProjectState`; for a remote relation it is the window, here. Nothing is minted
@@ -55,38 +55,43 @@ pub type RemoteScans = State<BTreeMap<RemoteRef, ScanId>>;
 /// Provide this window's remote-scan requests, and keep them true. Call once in the window root.
 ///
 /// **Invalidation is a reconciliation, not an event.** A scan describes a relation as the
-/// connection last answered for it, so it survives exactly as long as that connection is connected:
-/// a Forget takes its row away, and a whole-catalog ↻ drops every connection row to `Loading` before
-/// re-connecting ([`ProjectState::reload_connections`]), which rebuilds every provider — so both
-/// gestures are covered by the one rule, and a single table's Refresh (which touches no connection)
+/// data source last answered for it, so it survives exactly as long as that data source is connected:
+/// a Forget takes its row away, and a whole-catalog ↻ drops every data source row to `Loading` before
+/// re-connecting ([`ProjectState::reload_data sources`]), which rebuilds every provider — so both
+/// gestures are covered by the one rule, and a single table's Refresh (which touches no data source)
 /// leaves a remote scan alone. Nothing here has to notice *which* gesture happened.
 pub fn use_init_remote_scans() -> RemoteScans {
     let scans: RemoteScans = use_provide_context(|| State::create(BTreeMap::new()));
-    let project = use_radio::<ProjectState, ProjChan>(ProjChan::Connections);
+    let project = use_radio::<ProjectState, ProjChan>(ProjChan::Sources);
     use_side_effect(move || {
-        let connected = connected_catalogs(&project.read());
+        let connected = connected_sources(&project.read());
         let mut scans = scans;
         if scans
             .peek()
             .keys()
-            .any(|relation| !connected.contains(&relation.connection))
+            .any(|relation| !connected.contains(&relation.source))
         {
             scans
                 .write()
-                .retain(|relation, _| connected.contains(&relation.connection));
+                .retain(|relation, _| connected.contains(&relation.source));
         }
     });
     scans
 }
 
-/// The catalog names of every database connection that is currently connected — what a remote
-/// relation's [`RemoteRef::connection`] is addressed by, from the defs that decide it.
-fn connected_catalogs(project: &ProjectState) -> BTreeSet<String> {
+/// The names of every data source that is currently connected — what a remote relation's
+/// [`RemoteRef::data source`] is addressed by, from the defs that decide it.
+///
+/// Every connected one, not only the ones that register a catalog: a name is a name, whether a
+/// kind's mode makes relations under it is the registry's answer and this reader has none, and a
+/// name that can never key a remote scan prunes nothing. The predicate is "is this still
+/// connected", and it answers that exactly.
+fn connected_sources(project: &ProjectState) -> BTreeSet<String> {
     project
-        .connections
+        .sources
         .iter()
         .filter(|row| matches!(row.reg, Reg::Ready(())))
-        .filter_map(|row| row.def.catalog())
+        .map(|row| row.def.named())
         .collect()
 }
 

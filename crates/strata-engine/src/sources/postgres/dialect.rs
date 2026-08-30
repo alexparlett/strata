@@ -1,14 +1,14 @@
-//! **The connection's own unparser dialect**: `PostgreSqlDialect`, plus the JSON accessor family
+//! **The data source's own unparser dialect**: `PostgreSqlDialect`, plus the JSON accessor family
 //! spelled the way the server spells it ([`json`]).
 //!
 //! The dialect is where the rewrite belongs because it is where the *rendering* decision is made:
 //! `Dialect::scalar_function_to_sql_overrides` is consulted for every `Expr::ScalarFunction` the
 //! unparser writes, so a mapped accessor becomes an operator expression and an unmapped one
-//! refuses wherever this connection's SQL is written down — the federated statement, the fallback
+//! refuses wherever this data source's SQL is written down — the federated statement, the fallback
 //! provider's own scan, and its pushdown check. The rewrite it replaces ran *after* unparsing, on
 //! the federation executor's `ast_analyzer`, and so reached only the first of those three.
 //!
-//! It carries the connection's name because a refusal names it, which is also why there is one
+//! It carries the data source's name because a refusal names it, which is also why there is one
 //! dialect per registered relation rather than one shared value.
 //!
 //! **A newtype, not a fork.** `PostgreSqlDialect` overrides nine of the trait's methods and every
@@ -27,16 +27,16 @@ use super::json;
 /// What every method below delegates to.
 const POSTGRES: PostgreSqlDialect = PostgreSqlDialect {};
 
-/// `PostgreSqlDialect` as one connection speaks it.
+/// `PostgreSqlDialect` as one data source speaks it.
 #[derive(Debug)]
 pub(super) struct PgDialect {
-    /// The catalog the connection registered under — what a refusal names.
-    connection: String,
+    /// The catalog the data source registered under — what a refusal names.
+    source: String,
 }
 
 impl PgDialect {
-    pub(super) fn new(connection: String) -> Self {
-        Self { connection }
+    pub(super) fn new(source: String) -> Self {
+        Self { source }
     }
 }
 
@@ -49,7 +49,7 @@ impl Dialect for PgDialect {
         func_name: &str,
         args: &[Expr],
     ) -> DfResult<Option<SqlExpr>> {
-        match json::override_call(unparser, func_name, args, &self.connection) {
+        match json::override_call(unparser, func_name, args, &self.source) {
             Some(spelled) => spelled.map(Some),
             None => POSTGRES.scalar_function_to_sql_overrides(unparser, func_name, args),
         }
@@ -100,12 +100,12 @@ mod tests {
 
     use super::*;
 
-    /// One connection's dialect, under the name every refusal below names.
+    /// One data source's dialect, under the name every refusal below names.
     fn pg() -> PgDialect {
         PgDialect::new("pg".to_string())
     }
 
-    /// The statement this connection's provider writes for `sql`, or the refusal that stopped it.
+    /// The statement this data source's provider writes for `sql`, or the refusal that stopped it.
     ///
     /// A planned query rather than a hand-built expression, because what the override is handed is
     /// what the *planner* made of what the user typed: `->>` is a `json_as_text` call by the time
@@ -114,7 +114,7 @@ mod tests {
     ///
     /// **No federation anywhere in it.** The rewrite used to ride the federation executor and so
     /// reached only a subplan the federation rule had taken; on the dialect it is simply how this
-    /// connection's SQL is written, which is what an ordinary `Unparser` here demonstrates.
+    /// data source's SQL is written, which is what an ordinary `Unparser` here demonstrates.
     async fn unparsed(sql: &str) -> Result<String, String> {
         Unparser::new(&pg())
             .plan_to_sql(&planned(sql).await)
@@ -218,7 +218,7 @@ mod tests {
         );
         assert!(
             why.contains("'json_get'") && why.contains("'->>'") && why.contains("'pg'"),
-            "the refusal names the function, the alternative and the connection: {why}"
+            "the refusal names the function, the alternative and the data source: {why}"
         );
         assert!(why.contains("CREATE TABLE"), "and the way out: {why}");
     }

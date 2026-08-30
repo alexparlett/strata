@@ -104,7 +104,7 @@ impl Component for Hive {
 /// round trip per level and may be a network one. Spawned rather than awaited inline for that
 /// reason, and re-checked inside the write, because the user can flip it back while it runs.
 fn toggle(ctx: ConfigureCtx, engine: EngineCtx, root: &std::path::Path) {
-    let (connection, paths) = {
+    let (source, paths) = {
         let draft = ctx.draft.peek();
         (draft.store().map(str::to_string), draft.nonblank_sources())
     };
@@ -122,7 +122,7 @@ fn toggle(ctx: ConfigureCtx, engine: EngineCtx, root: &std::path::Path) {
     spawn(async move {
         let found = engine
             .catalog()
-            .detect_partitions(connection, Some(root), paths)
+            .detect_partitions(source, Some(root), paths)
             .await;
         ctx.edit(move |draft| {
             if draft.hive_on && draft.partitions.is_empty() {

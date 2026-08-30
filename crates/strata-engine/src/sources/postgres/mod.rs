@@ -1,4 +1,4 @@
-//! The `PostgreSQL` data source, registered like any other.
+//! The `PostgreSQL` source, registered like any other.
 //!
 //! Everything `PostgreSQL`-specific in the sources layer is here: the settings it declares, the pool
 //! (which is the probe), the enumeration query, the federated read path, the JSON operator family,
@@ -8,7 +8,7 @@
 //! so.
 //!
 //! **This module holds a password for the length of one login, and never stores one.** The def
-//! says only that one is set; the value is read per pool connection from the engine's
+//! says only that one is set; the value is read per pool data source from the engine's
 //! `SecretProvider` ([`SecretPassword`]), from this machine's keystore or from `PGPASSWORD`.
 //! Passwordless authentication is `None` rather than a mode anything has to know about.
 
@@ -34,7 +34,7 @@ use datafusion_table_providers_postgres::DynPostgresConnectionPool;
 use secrecy::SecretString;
 use tokio::task::spawn_blocking;
 
-use strata_model::ConnectionDef;
+use strata_model::SourceDef;
 
 use self::dialect::PgDialect;
 use self::settings::{PgSettings, PASSWORD, PASSWORD_ENV};
@@ -42,16 +42,16 @@ use crate::catalog::readable;
 use crate::secrets::{SecretProvider, SecretRequest};
 use crate::sources::secret_slot;
 use crate::sources::source::{
-    ConnectionKey, DataSource, FunctionMap, Listing, Located, Relation, SourceCatalog, SourceKind,
-    SourceMode, Sourced,
+    DataSource, FunctionMap, Listing, Located, Relation, SourceCatalog, SourceKind, SourceMode,
+    SourceSetting, Sourced,
 };
 use crate::sources::sql::{federated, SQLExecutor, SqlSpec};
 use crate::statements::Remote;
 
-/// The `PostgreSQL` data source.
+/// The `PostgreSQL` source.
 ///
-/// Stateless: everything about one connection lives on the [`PgCatalog`] a connect hands back, so
-/// one registered value serves every `PostgreSQL` connection a project holds.
+/// Stateless: everything about one data source lives on the [`PgCatalog`] a connect hands back, so
+/// one registered value serves every `PostgreSQL` data source a project holds.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Pg;
 
@@ -60,32 +60,24 @@ impl SourceKind for Pg {
     const LABEL: &'static str = "PostgreSQL";
     const BADGE: &'static str = "PG";
     const MODE: SourceMode = SourceMode::Catalog;
+    const WRITABLE: bool = true;
 }
 
 #[async_trait]
 impl DataSource for Pg {
     /// **Building the pool is the probe**, and for free: `PostgresConnectionPool::new` resolves
-    /// the host, opens a TCP connection, authenticates, builds the pool and runs `SELECT 1`,
+    /// the host, opens a TCP data source, authenticates, builds the pool and runs `SELECT 1`,
     /// failing on any of them. There is nothing left to ask — a server either let us in or did
     /// not.
     async fn connect(
         &self,
-        def: &ConnectionDef,
+        def: &SourceDef,
         secrets: Arc<dyn SecretProvider>,
     ) -> Result<Sourced, String> {
-        let source = def
-            .provider
-            .source()
-            .ok_or_else(|| format!("'{}' is not a PostgreSQL connection.", def.named()))?;
-        let settings = PgSettings::read(&source.config)?;
-        let passwords = match source.secrets.contains(PASSWORD) {
-            false => None,
-            true => {
-                let request = secret_slot(def, PASSWORD, PASSWORD_ENV)
-                    .ok_or_else(|| format!("'{}' is not a data source.", def.named()))?;
-                Some(Arc::new(SecretPassword { request, secrets }) as Arc<dyn PasswordProvider>)
-            }
-        };
+        let settings = PgSettings::read(&def.config)?;
+        let passwords = secret_slot(def, PASSWORD, PASSWORD_ENV).map(|request| {
+            Arc::new(SecretPassword { request, secrets }) as Arc<dyn PasswordProvider>
+        });
         let pool = build_pool(def, &settings, passwords).await?;
         Ok(Sourced::Catalog(Arc::new(PgCatalog {
             pool: Arc::new(pool),
@@ -96,12 +88,12 @@ impl DataSource for Pg {
         settings::parse_address(address.trim()).map(|_| ())
     }
 
-    fn config_keys(&self) -> &'static [ConnectionKey] {
-        settings::KEYS
+    fn settings(&self) -> &'static [SourceSetting] {
+        settings::SETTINGS
     }
 }
 
-/// One live `PostgreSQL` connection: the pool, and everything a catalog is asked about it.
+/// One live `PostgreSQL` data source: the pool, and everything a catalog is asked about it.
 #[derive(Debug)]
 pub struct PgCatalog {
     pool: Arc<PostgresConnectionPool>,
@@ -138,7 +130,7 @@ impl SourceCatalog for PgCatalog {
         })))
     }
 
-    /// One call into the SQL assembly, over the crate's `SqlTable` in this connection's own
+    /// One call into the SQL assembly, over the crate's `SqlTable` in this data source's own
     /// unparser dialect.
     ///
     /// The **same** dialect value on both, which is what puts the JSON rewrite on the federated
@@ -150,7 +142,7 @@ impl SourceCatalog for PgCatalog {
     ) -> Result<Arc<dyn TableProvider>, String> {
         let pool: Arc<DynPostgresConnectionPool> =
             Arc::clone(&self.pool) as Arc<DynPostgresConnectionPool>;
-        let dialect = Arc::new(PgDialect::new(at.connection.clone()));
+        let dialect = Arc::new(PgDialect::new(at.source.clone()));
         let table = Arc::new(
             SqlTable::new(Pg::NAME, &pool, at.relation.clone())
                 .await
@@ -176,8 +168,8 @@ impl SourceCatalog for PgCatalog {
 
     /// `undefined_function` (`SQLSTATE` 42883), which covers a missing function *and* a missing
     /// operator — what a federated statement gets back for carrying a name only DataFusion knows.
-    fn remote_refusal(&self, raw: &str, connection: &str) -> Option<String> {
-        json::lacks_the_name(raw).then(|| json::remote_refusal(raw, connection))
+    fn remote_refusal(&self, raw: &str, source: &str) -> Option<String> {
+        json::lacks_the_name(raw).then(|| json::remote_refusal(raw, source))
     }
 
     fn writer(
@@ -269,11 +261,11 @@ ORDER BY 1, 2";
 
 /// The pool itself, with every failure turned into a sentence naming what to fix.
 async fn build_pool(
-    conn: &ConnectionDef,
+    conn: &SourceDef,
     settings: &PgSettings,
     passwords: Option<Arc<dyn PasswordProvider>>,
 ) -> Result<PostgresConnectionPool, String> {
-    let address = settings::parse_address(conn.address.trim())?;
+    let address = settings::parse_address(conn.setting("address"))?;
     let mut params = HashMap::from([
         ("host".to_string(), address.host.to_string()),
         ("port".to_string(), address.port.to_string()),
@@ -303,10 +295,10 @@ async fn build_pool(
 ///
 /// The crate's own prose is good and is kept wherever it already names the fault; the two arms
 /// rewritten here are the ones it cannot word as well as we can, because it does not know there
-/// is a connection editor behind them. Nothing in any of it is a password: the crate builds its
+/// is a data source editor behind them. Nothing in any of it is a password: the crate builds its
 /// connection string without one on purpose, and our own provider's failure is
 /// [`SecretPassword`]'s sentence.
-fn refused(conn: &ConnectionDef, settings: &PgSettings, e: pool::Error) -> String {
+fn refused(conn: &SourceDef, settings: &PgSettings, e: pool::Error) -> String {
     match e {
         pool::Error::InvalidHostOrPortError { host, port, .. } => format!(
             "Cannot reach a PostgreSQL server at '{host}:{port}'. Check the address, and that \
@@ -321,17 +313,17 @@ fn refused(conn: &ConnectionDef, settings: &PgSettings, e: pool::Error) -> Strin
     }
 }
 
-/// One connection's password: read **per new pool connection**, never cached, never held past the
+/// One data source's password: read **per new pool data source**, never cached, never held past the
 /// login it is for.
 ///
-/// The slot is derived from the connection's identity rather than stored on the def, so the
+/// The slot is derived from the data source's identity rather than stored on the def, so the
 /// committed `project.json` carries no machine-local id. Which means the ordinary answer on a
 /// colleague's machine is *there is no entry*, and that is a sentence rather than a fault — one
 /// naming both the keystore and `PGPASSWORD`.
 ///
 /// The read is blocking — a keystore call can wait on a platform lock or on the user — so it goes
 /// through `spawn_blocking` rather than stalling a runtime worker while the pool opens a
-/// connection.
+/// data source.
 struct SecretPassword {
     request: SecretRequest,
     secrets: Arc<dyn SecretProvider>,
@@ -347,14 +339,14 @@ impl PasswordProvider for SecretPassword {
             .map_err(|e| {
                 format!(
                     "Reading the password for '{}' failed: {e}",
-                    self.request.connection
+                    self.request.source
                 )
             })?;
         match read? {
             Some(secret) => Ok(SecretString::from(secret.expose().to_string())),
             None => Err(format!(
                 "No password is stored on this machine for '{}'. {}",
-                self.request.connection,
+                self.request.source,
                 self.request.fixes()
             )
             .into()),

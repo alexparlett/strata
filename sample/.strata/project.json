@@ -1,22 +1,5 @@
 {
   "name": "sample",
-  "connections": [
-    {
-      "address": "127.0.0.1:55432/strata_sample",
-      "provider": {
-        "provider": "postgres",
-        "catalog": "pg",
-        "user": "strata",
-        "sslmode": "disable",
-        "sslrootcert": "",
-        "password": "none",
-        "schemas": [
-          "public",
-          "analytics"
-        ]
-      }
-    }
-  ],
   "tables": [
     {
       "name": "config",
@@ -26,31 +9,28 @@
         "infer_rows": null,
         "compression": "none"
       },
-      "sources": [
-        "config.json"
-      ],
       "partition_cols": [],
-      "origin": "external"
+      "origin": "external",
+      "paths": [
+        "config.json"
+      ]
     },
     {
       "name": "daily",
       "format": {
         "type": "arrow"
       },
-      "sources": [
-        ".strata/tables/daily/"
-      ],
       "partition_cols": [],
-      "origin": "internal"
+      "origin": "internal",
+      "paths": [
+        ".strata/tables/daily/"
+      ]
     },
     {
       "name": "events",
       "format": {
         "type": "parquet"
       },
-      "sources": [
-        "events"
-      ],
       "partition_cols": [
         [
           "year",
@@ -61,40 +41,43 @@
           "Utf8"
         ]
       ],
-      "origin": "external"
+      "origin": "external",
+      "paths": [
+        "events"
+      ]
     },
     {
       "name": "product_catalog",
       "format": {
         "type": "arrow"
       },
-      "sources": [
-        ".strata/tables/product_catalog/"
-      ],
       "partition_cols": [],
-      "origin": "internal"
+      "origin": "internal",
+      "paths": [
+        ".strata/tables/product_catalog/"
+      ]
     },
     {
       "name": "products",
       "format": {
         "type": "parquet"
       },
-      "sources": [
-        "products.parquet"
-      ],
       "partition_cols": [],
-      "origin": "external"
+      "origin": "external",
+      "paths": [
+        "products.parquet"
+      ]
     },
     {
       "name": "region_totals",
       "format": {
         "type": "arrow"
       },
-      "sources": [
-        ".strata/tables/region_totals/"
-      ],
       "partition_cols": [],
-      "origin": "internal"
+      "origin": "internal",
+      "paths": [
+        ".strata/tables/region_totals/"
+      ]
     },
     {
       "name": "regions",
@@ -110,11 +93,11 @@
         "infer_rows": null,
         "compression": "none"
       },
-      "sources": [
-        "regions.csv"
-      ],
       "partition_cols": [],
-      "origin": "external"
+      "origin": "external",
+      "paths": [
+        "regions.csv"
+      ]
     },
     {
       "name": "signups",
@@ -124,33 +107,33 @@
         "infer_rows": null,
         "compression": "none"
       },
-      "sources": [
-        "signups.json"
-      ],
       "partition_cols": [],
-      "origin": "external"
+      "origin": "external",
+      "paths": [
+        "signups.json"
+      ]
     },
     {
       "name": "signups_by_region",
       "format": {
         "type": "arrow"
       },
-      "sources": [
-        ".strata/tables/signups_by_region/"
-      ],
       "partition_cols": [],
-      "origin": "internal"
+      "origin": "internal",
+      "paths": [
+        ".strata/tables/signups_by_region/"
+      ]
     },
     {
       "name": "t",
       "format": {
         "type": "arrow"
       },
-      "sources": [
-        ".strata/tables/t/"
-      ],
       "partition_cols": [],
-      "origin": "internal"
+      "origin": "internal",
+      "paths": [
+        ".strata/tables/t/"
+      ]
     },
     {
       "name": "test",
@@ -166,22 +149,22 @@
         "infer_rows": null,
         "compression": "none"
       },
-      "sources": [
-        "regions.csv"
-      ],
       "partition_cols": [],
-      "origin": "external"
+      "origin": "external",
+      "paths": [
+        "regions.csv"
+      ]
     },
     {
       "name": "users",
       "format": {
         "type": "parquet"
       },
-      "sources": [
-        "users.parquet"
-      ],
       "partition_cols": [],
-      "origin": "external"
+      "origin": "external",
+      "paths": [
+        "users.parquet"
+      ]
     }
   ],
   "views": [
@@ -240,6 +223,22 @@
       "name": "top spenders",
       "sql": "SELECT u.name, SUM(e.amount) AS spend\nFROM users u\nJOIN events e ON e.user_id = u.user_id\nWHERE e.action = 'purchase'\nGROUP BY u.name\nORDER BY spend DESC;",
       "meta": "—"
+    }
+  ],
+  "sources": [
+    {
+      "kind": "postgres",
+      "name": "pg",
+      "config": {
+        "address": "127.0.0.1:55432/strata_sample",
+        "user": "strata",
+        "sslmode": "disable"
+      },
+      "schemas": [
+        "public",
+        "analytics"
+      ],
+      "read_only": true
     }
   ]
 }

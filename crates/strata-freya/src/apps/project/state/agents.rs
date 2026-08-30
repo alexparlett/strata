@@ -28,7 +28,7 @@
 //! something already finished and cannot be re-derived, and the window's agent driver watched every
 //! one of these facts.
 //!
-//! **Everything here is bounded.** An agent is retracted when its connection ends and a session
+//! **Everything here is bounded.** An agent is retracted when its data source ends and a session
 //! when it closes, but a *run trail* has no natural end — so both are capped oldest-first.
 
 use std::collections::VecDeque;
@@ -67,7 +67,7 @@ pub struct AgentRun {
 /// What closing a query session did.
 ///
 /// Two answers rather than one, because a close can arrive while a run is being dispatched
-/// into the very session it names — MCP permits concurrent requests on one connection, and
+/// into the very session it names — MCP permits concurrent requests on one data source, and
 /// the dispatch is the *caller's* (`agent::directory`), bracketed by an ask and a notice. In
 /// that window the engine has not been given the work yet, so tearing the workspace down
 /// aborts and retires **nothing**, and the dispatch then lands on a `WsId` the satellite no
@@ -94,7 +94,7 @@ pub struct QuerySession {
     /// It stays in the list rather than being tracked beside it, and that is what reaps it:
     /// [`Agents::gone`] hands back every session an agent held, so a tombstone whose settle
     /// never arrives (a client that hung up mid-run, dropping the run future) goes when the
-    /// connection does. The engine side of that case is already covered — `DispatchGuard`
+    /// data source does. The engine side of that case is already covered — `DispatchGuard`
     /// retires whatever a dropped run materialized.
     pub closing: bool,
     pub runs: VecDeque<AgentRun>,
@@ -105,7 +105,7 @@ impl QuerySession {
     /// driver observed — `Workspace::is_running` is the authority a *tool* is answered with
     /// (`state::agent::sessions`), and asking it here would put a second answer beside it.
     ///
-    /// Any, not the newest: MCP permits concurrent requests on one connection, so an agent
+    /// Any, not the newest: MCP permits concurrent requests on one data source, so an agent
     /// can have two runs open in one session, and a fast second settling first would
     /// otherwise report the session idle while the first is still executing. Both consumers
     /// want the same reading — the eviction gate and the tombstone above — and each destroys
@@ -309,7 +309,7 @@ impl Agents {
         self.next_seq + 1
     }
 
-    /// Every agent this satellite holds, newest connection first — the assistant included, for
+    /// Every agent this satellite holds, newest data source first — the assistant included, for
     /// the bookkeeping that must not care where an agent came from (attribution in the event
     /// log).
     pub fn held(&self) -> impl Iterator<Item = &ConnectedAgent> {
@@ -545,7 +545,7 @@ mod tests {
     }
 
     /// The workspace belongs to whichever run settles **last**. MCP permits concurrent
-    /// requests on one connection, so a tombstone can be waiting on two — and retiring on the
+    /// requests on one data source, so a tombstone can be waiting on two — and retiring on the
     /// first would abort the second, which the agent would then be told it had stopped
     /// itself.
     #[test]
@@ -640,7 +640,7 @@ mod tests {
         );
     }
 
-    /// **A tombstone whose settle never comes is reaped by the connection ending** — the case
+    /// **A tombstone whose settle never comes is reaped by the data source ending** — the case
     /// a deferred teardown has to answer for. A client that hangs up mid-run drops the run
     /// future, so no notice ever arrives; the session is still in the agent's list, so `gone`
     /// hands it back like any other.
@@ -681,7 +681,7 @@ mod tests {
         assert!(!listed.sessions[0].is_running());
     }
 
-    /// A connection ending takes the agent and every session it held — and says which, so
+    /// A data source ending takes the agent and every session it held — and says which, so
     /// their engine workspaces can be retired rather than left holding snapshots.
     #[test]
     fn a_departed_agent_hands_back_its_sessions() {

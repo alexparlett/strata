@@ -40,7 +40,7 @@ use freya::prelude::{spawn_forever, State, TaskHandle};
 use strata_agent::assistant::list_models_blocking;
 use strata_core::ai::{Ai, ProviderKind};
 use strata_core::models::{self, Listings};
-use strata_core::secret::{Secret, SecretRef};
+use strata_core::secret::{Keystore, Secret, SecretRef};
 
 use crate::task::offload;
 

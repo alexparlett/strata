@@ -58,7 +58,7 @@ pub fn open_configure(platform: Platform, launch: ConfigureLaunch) {
             launch.engine.clone(),
             launch.target.clone(),
             launch.report,
-            launch.connections,
+            launch.editor,
             owner,
         ));
         register(

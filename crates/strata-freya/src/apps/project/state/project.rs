@@ -32,7 +32,7 @@ use freya::radio::RadioChannel;
 use strata_core::project::{self as project_io, name_ord, ProjectDefs};
 use strata_engine::register::view_order;
 use strata_engine::{TableMeta, ViewMeta};
-use strata_model::{CatalogKind, ColumnInfo, ConnectionDef, SavedQuery, TableDef, ViewDef};
+use strata_model::{CatalogKind, ColumnInfo, SavedQuery, SourceDef, TableDef, ViewDef};
 use uuid::Uuid;
 
 use crate::apps::project::query::ScanId;
@@ -45,11 +45,11 @@ pub enum ProjChan {
     /// Project identity: name / root path. Subscribed by the header's project switcher (a
     /// rename / re-open re-labels the trigger); the window title joins it with P4-13.
     Meta,
-    /// The project's connections (W7 · DB-02) — object stores *and* databases, on their own
+    /// The project's data sources (W7 · DB-02) — object stores *and* databases, on their own
     /// channel for the same reason the sections have theirs: connecting one must not wake the
     /// TABLES section. Since DB-05 they are nodes of the data-sources tree rather than a pane
     /// beside it, which changes who subscribes and not why the channel is separate.
-    Connections,
+    Sources,
     Tables,
     Views,
     /// Notified by save-as-query (⌘S on a scratch / saved-query tab); subscribed by
@@ -89,20 +89,20 @@ impl<T> Reg<T> {
     }
 }
 
-/// One connection: its persisted def + whether its object store went in (W7).
+/// One data source: its persisted def + whether its object store went in (W7).
 ///
 /// `Reg<()>` and not `Reg<Something>` because connecting genuinely learns nothing —
 /// a store is *registered*, not inferred, so there is no answer to carry. What the
 /// three states mean is the whole value: `Loading` while the pass is out, `Ready` once
 /// the bucket is reachable, `Failed` with what to fix (no region, a profile the
 /// credential chain does not answer for). That is the sidebar pane's status dot.
-pub struct ConnRow {
-    pub def: ConnectionDef,
+pub struct SourceRow {
+    pub def: SourceDef,
     pub reg: Reg<()>,
 }
 
-impl ConnRow {
-    fn new(def: ConnectionDef) -> Self {
+impl SourceRow {
+    fn new(def: SourceDef) -> Self {
         Self {
             def,
             reg: Reg::Loading,
@@ -160,12 +160,12 @@ pub struct ViewInfo {
     /// [`ProjectState::dependent_views`] (P3-05); profile invalidation takes the same list
     /// (P3-09).
     pub deps: Vec<String>,
-    /// The relations it reads in a **database connection's** catalog, qualified
+    /// The relations it reads in a **data source's** catalog, qualified
     /// (`pg.public.orders`) — the engine's [`ViewMeta::remote`], kept apart from `deps` for the
     /// reason it is kept apart there: every question `deps` answers is asked of the project's
     /// own rows, and a remote relation has none. It is not a missing dependency, it is not a
     /// table any drop can name, and the only thing that knows whether it still exists is the
-    /// connection.
+    /// data source.
     pub remote_deps: Vec<String>,
     /// The views it reads (transitive), resolved from the engine's raw aliases. The view
     /// half of the drop warning: `deps` is base tables *by construction*, so it can answer
@@ -205,10 +205,10 @@ pub struct ProjectState {
     /// canonicalized is an unrecoverable error, not a rootless fallback.
     pub root: PathBuf,
     /// The sources the project reads through. Kept sorted by address like every other section is
-    /// sorted by name; **identity is the connection's own name**, which is what a landing answer
-    /// is addressed by. Two connections may share an address (`s3://lake` read two ways, one
+    /// sorted by name; **identity is the data source's own name**, which is what a landing answer
+    /// is addressed by. Two data sources may share an address (`s3://lake` read two ways, one
     /// server reached as two roles) and are then simply neighbours in the sort.
-    pub connections: Vec<ConnRow>,
+    pub sources: Vec<SourceRow>,
     pub tables: Vec<TableRow>,
     pub views: Vec<ViewRow>,
     pub saved_queries: Vec<SavedQuery>,
@@ -232,7 +232,7 @@ pub struct RegistrationFault {
 
 /// What kind of def a [`RegistrationFault`] is about.
 ///
-/// Its own closed vocabulary rather than [`CatalogKind`], because a **connection** is not one:
+/// Its own closed vocabulary rather than [`CatalogKind`], because a **data source** is not one:
 /// it registers beside the catalog and fails in exactly the same shape, but it is an object
 /// store rather than a member of the SQL namespace, so it has no place in the enum that
 /// `dependent_views` and `name_in_use` dispatch on. Saved queries go the other way — they are
@@ -243,7 +243,7 @@ pub struct RegistrationFault {
 /// first.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FaultKind {
-    Connection,
+    Source,
     Table,
     View,
 }
@@ -252,7 +252,7 @@ impl FaultKind {
     /// How a row refers to it — the Problems drawer's trailing tag.
     pub fn label(self) -> &'static str {
         match self {
-            Self::Connection => "connection",
+            Self::Source => "data source",
             Self::Table => "table",
             Self::View => "view",
         }
@@ -260,22 +260,22 @@ impl FaultKind {
 }
 
 impl ProjectState {
-    /// Every def the engine refused, **in registration order** — connections, then tables, then
+    /// Every def the engine refused, **in registration order** — data sources, then tables, then
     /// views — so anything broken *by* something above it reads below its cause.
     ///
-    /// A refused **connection** (W7) is here for the reason the probe behind it exists
+    /// A refused **data source** (W7) is here for the reason the probe behind it exists
     /// (`CONNECTIONS_SPEC.md` §3): a bucket with no usable credentials takes every table over
     /// it down with it, so without this row the drawer fills with signing failures on the
     /// tables and says nothing about the one thing that is actually wrong. It is named by the
-    /// connection's own name rather than by its address, which is the only form that tells two
-    /// connections over one bucket apart.
+    /// data source's own name rather than by its address, which is the only form that tells two
+    /// data sources over one bucket apart.
     ///
     /// Saved queries can't appear: they are stored strings that are never registered, so there is
     /// no engine answer for them to have failed.
     pub fn registration_faults(&self) -> Vec<RegistrationFault> {
-        let connections = self.connections.iter().filter_map(|r| {
+        let sources = self.sources.iter().filter_map(|r| {
             r.reg.error().map(|why| RegistrationFault {
-                kind: FaultKind::Connection,
+                kind: FaultKind::Source,
                 name: r.def.named(),
                 why: why.to_string(),
             })
@@ -294,7 +294,7 @@ impl ProjectState {
                 why: why.to_string(),
             })
         });
-        connections.chain(tables).chain(views).collect()
+        sources.chain(tables).chain(views).collect()
     }
 
     /// How many defs the engine refused — [`registration_faults`](Self::registration_faults)'s
@@ -305,7 +305,7 @@ impl ProjectState {
     /// screen. Going through the list would clone two `String`s per failed def just to drop them
     /// again a line later.
     pub fn registration_fault_count(&self) -> usize {
-        self.connections
+        self.sources
             .iter()
             .filter(|r| r.reg.error().is_some())
             .count()
@@ -327,7 +327,7 @@ impl ProjectState {
         Self {
             name: defs.name,
             root,
-            connections: defs.connections.into_iter().map(ConnRow::new).collect(),
+            sources: defs.sources.into_iter().map(SourceRow::new).collect(),
             tables: defs.tables.into_iter().map(TableRow::new).collect(),
             views: defs.views.into_iter().map(ViewRow::new).collect(),
             saved_queries: defs.saved_queries,
@@ -339,7 +339,7 @@ impl ProjectState {
     pub fn defs(&self) -> ProjectDefs {
         ProjectDefs {
             name: self.name.clone(),
-            connections: self.connections.iter().map(|r| r.def.clone()).collect(),
+            sources: self.sources.iter().map(|r| r.def.clone()).collect(),
             tables: self.tables.iter().map(|r| r.def.clone()).collect(),
             views: self.views.iter().map(|r| r.def.clone()).collect(),
             saved_queries: self.saved_queries.clone(),
@@ -406,20 +406,20 @@ impl ProjectState {
 
     /// Land a connected object store on its row (W7).
     ///
-    /// Addressed by the connection's **name** and **not** by its address, for the reason the name
-    /// is the identity at all: two connections may share an address, and an address-keyed lookup
+    /// Addressed by the data source's **name** and **not** by its address, for the reason the name
+    /// is the identity at all: two data sources may share an address, and an address-keyed lookup
     /// would land both answers on whichever row came first and leave the other `Loading` for the
     /// life of the window, with no error anywhere to say so.
-    pub fn connection_registered(&mut self, name: &str) {
-        if let Some(c) = self.connections.iter_mut().find(|c| c.def.named() == name) {
+    pub fn source_registered(&mut self, name: &str) {
+        if let Some(c) = self.sources.iter_mut().find(|c| c.def.named() == name) {
             c.reg = Reg::Ready(());
         }
     }
 
-    /// Land a connection the engine refused on its row — what to fix, in the pane's tooltip.
-    /// Addressed like [`connection_registered`](Self::connection_registered).
-    pub fn connection_failed(&mut self, name: &str, error: String) {
-        if let Some(c) = self.connections.iter_mut().find(|c| c.def.named() == name) {
+    /// Land a data source the engine refused on its row — what to fix, in the pane's tooltip.
+    /// Addressed like [`source_registered`](Self::source_registered).
+    pub fn source_failed(&mut self, name: &str, error: String) {
+        if let Some(c) = self.sources.iter_mut().find(|c| c.def.named() == name) {
             c.reg = Reg::Failed(error);
         }
     }
@@ -574,9 +574,9 @@ impl ProjectState {
     ///
     /// A cross-source view's **remote** reads ([`ViewInfo::remote_deps`]) are deliberately not
     /// checked here, and the reason is what this check *is*: a reconciliation against the
-    /// project's own rows. A relation in a database connection's catalog has no row, so every
+    /// project's own rows. A relation in a data source's catalog has no row, so every
     /// answer this loop could give about one would be "not in the catalog" — a triangle on every
-    /// working cross-source view. Whether the connection still has it is the connection's
+    /// working cross-source view. Whether the data source still has it is the data source's
     /// answer, and it lands the only way it can: the view fails to re-plan at the next
     /// registration pass, in `catalog::view_error`'s words.
     ///
@@ -713,15 +713,15 @@ impl ProjectState {
             .collect()
     }
 
-    /// Reset every connection row to `Loading` — the start of a whole-catalog re-scan
+    /// Reset every data source row to `Loading` — the start of a whole-catalog re-scan
     /// (W7). Same reasoning as [`reload_tables`](Self::reload_tables): mid-pass the store
     /// has no verdict, so keeping the old one would make `Failed` mean two things.
     ///
-    /// Connections are re-connected on ↻ and *not* on a single table's Refresh, because a
+    /// Data sources are re-connected on ↻ and *not* on a single table's Refresh, because a
     /// re-connect is exactly what fixes the case ↻ exists for — the user runs `aws sso
     /// login`, or fills in the region, and presses it.
-    pub fn reload_connections(&mut self) {
-        for c in &mut self.connections {
+    pub fn reload_sources(&mut self) {
+        for c in &mut self.sources {
             c.reg = Reg::Loading;
         }
     }
@@ -933,109 +933,105 @@ impl ProjectState {
         self.tables.insert(at.min(self.tables.len()), row);
     }
 
-    /// Insert-or-replace a connection def (the editor's Save), at its address-sorted slot. Resets
-    /// the row to `Loading`, like every other upsert here — the connection has to be registered
+    /// Insert-or-replace a data source def (the editor's Save), at its address-sorted slot. Resets
+    /// the row to `Loading`, like every other upsert here — the data source has to be registered
     /// again before the row may claim anything.
     ///
     /// **Matched on the name, inserted by `address`**, and the two being different keys is the
     /// whole of what this method has to get right. The list is sorted by address and identified by
-    /// name, so two connections over one bucket are neighbours in the sort and two different
+    /// name, so two data sources over one bucket are neighbours in the sort and two different
     /// rows: replacing on the address would let saving one silently take out the other,
     /// deregistering nothing and leaving a live store with no def.
     ///
     /// It does **not** deregister anything. An edit that moves the address or the kind changes
-    /// what the connection registered under, and that store survives this write untouched;
+    /// what the data source registered under, and that store survives this write untouched;
     /// dropping it is `Sources::disconnect`, owed by the gesture that knows both names.
-    pub fn upsert_connection(&mut self, def: ConnectionDef) {
+    pub fn upsert_source(&mut self, def: SourceDef) {
         let name = def.named();
-        self.connections.retain(|c| c.def.named() != name);
-        let at = self
-            .connections
-            .partition_point(|c| name_ord(&c.def.address, &def.address).is_lt());
-        self.connections.insert(at, ConnRow::new(def));
+        self.sources.retain(|c| c.def.named() != name);
+        let at = self.sources.partition_point(|c| {
+            name_ord(c.def.setting("address"), def.setting("address")).is_lt()
+        });
+        self.sources.insert(at, SourceRow::new(def));
     }
 
-    /// Save a connection that was **renamed**: the row moves, and every table reading through it
+    /// Save a data source that was **renamed**: the row moves, and every table reading through it
     /// moves with it.
     ///
-    /// A table names the connection it reads through, so a rename that left those references
-    /// behind would point them at a connection the project no longer has — the tables would fail
-    /// to register with "no suitable object store", naming a connection the user can see is
+    /// A table names the data source it reads through, so a rename that left those references
+    /// behind would point them at a data source the project no longer has — the tables would fail
+    /// to register with "no suitable object store", naming a data source the user can see is
     /// there under its new name.
     ///
     /// **In one settle**, and here rather than in the window that pressed Save: what a rename
-    /// costs is a property of how a connection is referenced, and a surface that had to remember
+    /// costs is a property of how a data source is referenced, and a surface that had to remember
     /// to fix the references would be one that could forget.
-    pub fn rename_connection(&mut self, from: &str, def: ConnectionDef) {
+    pub fn rename_source(&mut self, from: &str, def: SourceDef) {
         let to = def.named();
-        self.remove_connection(from);
-        self.upsert_connection(def);
+        self.remove_source(from);
+        self.upsert_source(def);
         if from == to {
             return;
         }
         for table in &mut self.tables {
-            if table.def.connection.as_deref() == Some(from) {
-                table.def.connection = Some(to.clone());
+            if table.def.source.as_deref() == Some(from) {
+                table.def.source = Some(to.clone());
             }
         }
     }
 
-    /// Edit a connection's def **in place**, keeping the row's `Reg` — the schemas picker's
+    /// Edit a data source's def **in place**, keeping the row's `Reg` — the schemas picker's
     /// write, and the only one here that does not reset a row to `Loading`.
     ///
     /// Legitimate exactly because the field it exists for is **display-only**: registration
-    /// exposes every schema a source connection can reach and the def's own `schemas` scopes what
-    /// Strata shows, so what the last pass answered about this connection is still true after
-    /// the write. Going through [`upsert_connection`](Self::upsert_connection) instead would
+    /// exposes every schema a data source can reach and the def's own `schemas` scopes what
+    /// Strata shows, so what the last pass answered about this data source is still true after
+    /// the write. Going through [`upsert_source`](Self::upsert_source) instead would
     /// replace the row with a fresh `Reg::Loading` that only a whole-catalog re-scan could
     /// answer: a permanent spinner over a change that touched no engine state.
     ///
     /// `edit` must not move the def's identity — the row keeps its slot and its key, so a URL or
     /// address change here would leave the list sorted wrong and the engine registered under a
-    /// URL no def names. That edit is the connection editor's, and it goes through `upsert`.
+    /// URL no def names. That edit is the data source editor's, and it goes through `upsert`.
     ///
-    pub fn update_connection_def(&mut self, name: &str, edit: impl FnOnce(&mut ConnectionDef)) {
-        let Some(row) = self.connections.iter_mut().find(|c| c.def.named() == name) else {
+    pub fn update_source_def(&mut self, name: &str, edit: impl FnOnce(&mut SourceDef)) {
+        let Some(row) = self.sources.iter_mut().find(|c| c.def.named() == name) else {
             return;
         };
         edit(&mut row.def);
     }
 
-    /// Forget the connection called `name` — the store half of the pane's Forget. Hands back the
+    /// Forget the data source called `name` — the store half of the pane's Forget. Hands back the
     /// row and its slot, like [`remove_view`](Self::remove_view).
     ///
     /// Matched on the name exactly, which is where it parts company with every other remover
     /// here: those fold, because a table or a view name is one the user may also write in SQL.
-    /// A connection is addressed by gesture rather than by typing — the callers pass back the
+    /// A data source is addressed by gesture rather than by typing — the callers pass back the
     /// spelling they read off the row — so there is no second spelling to reconcile with.
-    pub fn remove_connection(&mut self, name: &str) -> Option<(usize, ConnRow)> {
-        let at = self
-            .connections
-            .iter()
-            .position(|c| c.def.named() == name)?;
-        Some((at, self.connections.remove(at)))
+    pub fn remove_source(&mut self, name: &str) -> Option<(usize, SourceRow)> {
+        let at = self.sources.iter().position(|c| c.def.named() == name)?;
+        Some((at, self.sources.remove(at)))
     }
 
-    /// Put a row back where [`remove_connection`](Self::remove_connection) took it from.
-    pub fn restore_connection(&mut self, at: usize, row: ConnRow) {
-        self.connections.insert(at.min(self.connections.len()), row);
+    /// Put a row back where [`remove_source`](Self::remove_source) took it from.
+    pub fn restore_source(&mut self, at: usize, row: SourceRow) {
+        self.sources.insert(at.min(self.sources.len()), row);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::apps::connection::model::PgDraft;
     use strata_engine::sources::postgres::Pg;
     use strata_engine::SourceKind;
-    use strata_model::{GcsAuth, GcsStore, Provider, S3Store, SourceFormat, TableOrigin};
+    use strata_model::{SourceDef, SourceFormat, TableOrigin};
 
     fn table_def(name: &str) -> TableDef {
         TableDef {
             name: name.into(),
             format: SourceFormat::Parquet,
-            connection: None,
-            sources: vec![format!("{name}.parquet")],
+            source: None,
+            paths: vec![format!("{name}.parquet")],
             partition_cols: vec![("year".into(), "Int32".into())],
             origin: TableOrigin::External,
         }
@@ -1114,7 +1110,7 @@ mod tests {
             before.tables.iter().map(|t| &t.name).collect::<Vec<_>>(),
             after.tables.iter().map(|t| &t.name).collect::<Vec<_>>()
         );
-        assert_eq!(before.tables[0].sources, after.tables[0].sources);
+        assert_eq!(before.tables[0].paths, after.tables[0].paths);
         assert_eq!(
             before.tables[0].partition_cols,
             after.tables[0].partition_cols
@@ -1785,54 +1781,90 @@ mod tests {
         assert_eq!(p.view_problem(&p.views[0]), None);
     }
 
-    /// Two connections over **one bucket** — the pair every connection lookup has to tell apart,
+    /// Two data sources over **one bucket** — the pair every data source lookup has to tell apart,
     /// and the one a bucket-keyed store would land both answers on.
     fn two_stores_one_bucket() -> ProjectState {
         let defs = ProjectDefs {
             name: "test".into(),
-            connections: vec![
-                ConnectionDef {
-                    address: "lake".into(),
+            sources: vec![
+                SourceDef {
+                    config: [("address".to_string(), "lake".into())]
+                        .into_iter()
+                        .collect(),
                     name: "lake".into(),
-                    provider: Provider::S3(S3Store::default()),
-                    client_config: Default::default(),
+                    kind: "s3".into(),
+                    ..Default::default()
                 },
-                ConnectionDef {
-                    address: "lake".into(),
+                SourceDef {
+                    config: [("address".to_string(), "lake".into())]
+                        .into_iter()
+                        .collect(),
                     name: "lake2".into(),
-                    provider: Provider::Gcs(GcsStore::default()),
-                    client_config: Default::default(),
+                    kind: "gcs".into(),
+                    ..Default::default()
                 },
             ],
             ..Default::default()
         };
-        ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-connections-store-test"))
+        ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-sources-store-test"))
+    }
+
+    /// **A name is unique across the whole project, catalogs notwithstanding.**
+    ///
+    /// A store data source's catalog is *placement*, not a namespace liberalization: a bucket
+    /// table's provider lives in its source's catalog, and the name it lives under is still the
+    /// project's own, checked against every table, view and saved query regardless of what any
+    /// of them reads through. Asserted explicitly because the placement is exactly the change
+    /// that would tempt a per-catalog answer, and a bare name would then be ambiguous.
+    #[test]
+    fn a_name_is_taken_across_the_whole_project_whatever_it_reads_through() {
+        let over = |name: &str, source: &str| TableDef {
+            name: name.into(),
+            format: SourceFormat::from_name("csv"),
+            source: Some(source.into()),
+            paths: vec!["data/".into()],
+            partition_cols: Vec::new(),
+            origin: TableOrigin::External,
+        };
+        let defs = ProjectDefs {
+            name: "test".into(),
+            tables: vec![over("regions", "lake"), over("events", "lake2")],
+            ..Default::default()
+        };
+        let p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-global-names"));
+
+        for name in ["regions", "events"] {
+            assert_eq!(
+                p.name_in_use(name),
+                Some(CatalogKind::Table),
+                "'{name}' is taken whichever data source it reads through"
+            );
+        }
+        assert!(
+            p.name_taken("REGIONS").is_some(),
+            "and case-insensitively, like every other name in the catalog"
+        );
+        assert_eq!(p.name_in_use("unused"), None);
     }
 
     /// Forget takes the row it was asked for and **only** that one. Keyed on the name, so the
     /// address the two share is not what is matched — an address-keyed remover would take
-    /// whichever sorted first and leave the user's own connection gone.
+    /// whichever sorted first and leave the user's own data source gone.
     #[test]
-    fn remove_connection_matches_the_name_and_not_the_address() {
+    fn remove_source_matches_the_name_and_not_the_address() {
         let mut p = two_stores_one_bucket();
 
-        let (at, row) = p.remove_connection("lake2").expect("the GCS connection");
+        let (at, row) = p.remove_source("lake2").expect("the GCS data source");
         assert_eq!(row.def.named(), "lake2");
         assert_eq!(
-            p.connections
-                .iter()
-                .map(|c| c.def.named())
-                .collect::<Vec<_>>(),
+            p.sources.iter().map(|c| c.def.named()).collect::<Vec<_>>(),
             ["lake"],
-            "the S3 connection over the same bucket is untouched"
+            "the S3 data source over the same bucket is untouched"
         );
 
-        p.restore_connection(at, row);
+        p.restore_source(at, row);
         assert_eq!(
-            p.connections
-                .iter()
-                .map(|c| c.def.named())
-                .collect::<Vec<_>>(),
+            p.sources.iter().map(|c| c.def.named()).collect::<Vec<_>>(),
             ["lake", "lake2"]
         );
     }
@@ -1841,129 +1873,128 @@ mod tests {
     /// halves of this method use, and the pair that makes it worth a test.
     ///
     /// Saving over `lake2` must leave `lake` exactly where it was. Replacing on the address
-    /// instead (the sort's key, and the tempting one) takes out a connection the user never
+    /// instead (the sort's key, and the tempting one) takes out a data source the user never
     /// touched, deregisters nothing, and leaves a live object store with no def behind it.
-    /// **A rename takes the tables with it.** A table names the connection it reads through, so
-    /// the references move in the same settle — left behind, they would point at a connection the
+    /// **A rename takes the tables with it.** A table names the data source it reads through, so
+    /// the references move in the same settle — left behind, they would point at a data source the
     /// project no longer has while the user can see it under its new name.
     #[test]
     fn a_rename_moves_the_tables_that_read_through_it() {
         let mut p = two_stores_one_bucket();
         p.upsert_table(TableDef {
-            connection: Some("lake".into()),
+            source: Some("lake".into()),
             ..table_def("events")
         });
         p.upsert_table(TableDef {
-            connection: Some("lake2".into()),
+            source: Some("lake2".into()),
             ..table_def("shipments")
         });
         p.upsert_table(table_def("local"));
 
-        let renamed = ConnectionDef {
+        let renamed = SourceDef {
             name: "depot".into(),
-            ..p.connections
+            ..p.sources
                 .iter()
                 .find(|c| c.def.named() == "lake")
-                .expect("the S3 connection")
+                .expect("the S3 data source")
                 .def
                 .clone()
         };
-        p.rename_connection("lake", renamed);
+        p.rename_source("lake", renamed);
 
         let over = |table: &str| {
             p.tables
                 .iter()
                 .find(|t| t.def.name == table)
-                .and_then(|t| t.def.connection.clone())
+                .and_then(|t| t.def.source.clone())
         };
         assert_eq!(over("events").as_deref(), Some("depot"), "it moved with it");
         assert_eq!(
             over("shipments").as_deref(),
             Some("lake2"),
-            "and the other connection's tables did not"
+            "and the other data source's tables did not"
         );
-        assert_eq!(over("local"), None, "nor did a local one gain a connection");
+        assert_eq!(
+            over("local"),
+            None,
+            "nor did a local one gain a data source"
+        );
         assert!(
-            p.connections.iter().any(|c| c.def.named() == "depot")
-                && !p.connections.iter().any(|c| c.def.named() == "lake"),
+            p.sources.iter().any(|c| c.def.named() == "depot")
+                && !p.sources.iter().any(|c| c.def.named() == "lake"),
             "the row itself moved"
         );
     }
 
     #[test]
-    fn upsert_connection_replaces_the_name_and_sorts_the_address() {
+    fn upsert_source_replaces_the_name_and_sorts_by_it() {
         let mut p = two_stores_one_bucket();
-        p.connection_registered("lake");
+        p.source_registered("lake");
 
-        p.upsert_connection(ConnectionDef {
-            address: "lake".into(),
+        p.upsert_source(SourceDef {
+            kind: "gcs".into(),
             name: "lake2".into(),
-            provider: Provider::Gcs(GcsStore {
-                auth: GcsAuth::Anonymous,
-            }),
-            client_config: Default::default(),
+            config: [("address", "lake"), ("auth", "anonymous")]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            ..Default::default()
         });
 
-        assert_eq!(
-            p.connections.len(),
-            2,
-            "the GCS row was replaced, not added"
-        );
+        assert_eq!(p.sources.len(), 2, "the GCS row was replaced, not added");
         let gcs = p
-            .connections
+            .sources
             .iter()
             .find(|c| c.def.named() == "lake2")
-            .expect("the GCS connection");
+            .expect("the GCS data source");
+        assert_eq!(gcs.def.kind, "gcs", "…and it carries what was saved");
         assert_eq!(
-            gcs.def.provider,
-            Provider::Gcs(GcsStore {
-                auth: GcsAuth::Anonymous
-            }),
-            "…and it carries what was saved"
+            gcs.def.config.get("auth").map(String::as_str),
+            Some("anonymous")
         );
         let s3 = p
-            .connections
+            .sources
             .iter()
             .find(|c| c.def.named() == "lake")
-            .expect("the S3 connection over the same bucket");
+            .expect("the S3 data source over the same bucket");
         assert!(matches!(s3.reg, Reg::Ready(())));
-        p.upsert_connection(ConnectionDef {
-            address: "acme".into(),
+        p.upsert_source(SourceDef {
+            config: [("address".to_string(), "acme".into())]
+                .into_iter()
+                .collect(),
             name: "acme".into(),
-            provider: Provider::S3(S3Store::default()),
-            client_config: Default::default(),
+            kind: "s3".into(),
+            ..Default::default()
         });
         assert_eq!(
-            p.connections
-                .iter()
-                .map(|c| c.def.address.as_str())
-                .collect::<Vec<_>>(),
-            ["acme", "lake", "lake"]
+            p.sources.iter().map(|c| c.def.named()).collect::<Vec<_>>(),
+            ["acme", "lake2", "lake"],
+            "sorted by the name (`name_ord`'s own order), which is what a source is addressed by"
         );
     }
 
-    /// A saved connection goes back to `Loading`: the def it now holds has not been registered,
+    /// A saved data source goes back to `Loading`: the def it now holds has not been registered,
     /// so the row must not go on showing the verdict the *previous* def earned.
     #[test]
-    fn upsert_connection_awaits_its_own_registration() {
+    fn upsert_source_awaits_its_own_registration() {
         let mut p = two_stores_one_bucket();
-        p.connection_failed("lake", "This S3 connection needs a region.".into());
+        p.source_failed("lake", "This S3 data source needs a region.".into());
 
-        p.upsert_connection(ConnectionDef {
-            address: "lake".into(),
+        p.upsert_source(SourceDef {
+            kind: "s3".into(),
             name: "lake".into(),
-            provider: Provider::S3(S3Store {
-                region: "eu-west-2".into(),
-                ..Default::default()
-            }),
-            client_config: Default::default(),
+            config: [("region", "eu-west-2")]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            ..Default::default()
         });
 
         let row = p
-            .connections
+            .sources
             .iter()
             .find(|c| c.def.named() == "lake")
-            .expect("the S3 connection");
+            .expect("the S3 data source");
         assert!(
             matches!(row.reg, Reg::Loading),
             "the old verdict is dropped"
@@ -1972,21 +2003,21 @@ mod tests {
 
     /// A URL nothing is registered under removes nothing, rather than taking the nearest row.
     #[test]
-    fn remove_connection_ignores_a_name_it_does_not_hold() {
+    fn remove_source_ignores_a_name_it_does_not_hold() {
         let mut p = two_stores_one_bucket();
-        assert!(p.remove_connection("s3://other").is_none());
-        assert_eq!(p.connections.len(), 2);
+        assert!(p.remove_source("s3://other").is_none());
+        assert_eq!(p.sources.len(), 2);
     }
 
-    /// A refused **connection** is a project problem, and it leads the list: registration order
-    /// is connections, then tables, then views, so anything broken *by* the connection reads
+    /// A refused **data source** is a project problem, and it leads the list: registration order
+    /// is sources, then tables, then views, so anything broken *by* the data source reads
     /// below its cause. It is named by its URL, which is the only form that says which store.
     #[test]
-    fn a_refused_connection_leads_the_project_faults() {
+    fn a_refused_source_leads_the_project_faults() {
         let mut p = two_stores_one_bucket();
         p.upsert_table(table_def("orders"));
         p.table_failed("orders", "No suitable object store found".into());
-        p.connection_failed("lake", "This S3 connection needs a region.".into());
+        p.source_failed("lake", "This S3 data source needs a region.".into());
 
         let faults = p.registration_faults();
         assert_eq!(
@@ -1994,12 +2025,9 @@ mod tests {
                 .iter()
                 .map(|f| (f.kind, f.name.as_str()))
                 .collect::<Vec<_>>(),
-            [
-                (FaultKind::Connection, "lake"),
-                (FaultKind::Table, "orders")
-            ]
+            [(FaultKind::Source, "lake"), (FaultKind::Table, "orders")]
         );
-        assert_eq!(faults[0].why, "This S3 connection needs a region.");
+        assert_eq!(faults[0].why, "This S3 data source needs a region.");
         assert_eq!(
             p.registration_fault_count(),
             faults.len(),
@@ -2007,68 +2035,59 @@ mod tests {
         );
     }
 
-    /// A connection the pass has not answered for yet is **not** a problem — a project mid-scan
+    /// A data source the pass has not answered for yet is **not** a problem — a project mid-scan
     /// must not flash every bucket it has not reached as a fault.
     #[test]
-    fn an_unanswered_connection_is_not_a_fault() {
+    fn an_unanswered_source_is_not_a_fault() {
         let p = two_stores_one_bucket();
         assert!(p.registration_faults().is_empty());
         assert_eq!(p.registration_fault_count(), 0);
     }
 
-    /// A **database** connection def, for the two questions only a database raises here.
-    fn pg(database: &str, schemas: &[&str]) -> ConnectionDef {
-        ConnectionDef {
-            address: format!("db.internal:5432/{database}"),
-            name: String::new(),
-            provider: Provider::Source(
-                PgDraft {
-                    kind: Pg::NAME.to_string(),
-                    name: database.into(),
-                    user: "reader".into(),
-                    schemas: schemas.iter().map(ToString::to_string).collect(),
-                    ..Default::default()
-                }
-                .def(),
-            ),
-            client_config: Default::default(),
+    /// A **database** data source def, for the two questions only a database raises here.
+    fn pg(database: &str, schemas: &[&str]) -> SourceDef {
+        SourceDef {
+            kind: Pg::NAME.to_string(),
+            name: database.into(),
+            config: [
+                ("address", format!("db.internal:5432/{database}")),
+                ("user", "reader".to_string()),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+            schemas: schemas.iter().map(ToString::to_string).collect(),
+            ..Default::default()
         }
     }
 
-    /// **The schemas picker's write keeps the row's verdict.** Going through `upsert_connection`
-    /// instead would drop a fresh `Reg::Loading` on a connection that is still connected, and
+    /// **The schemas picker's write keeps the row's verdict.** Going through `upsert_source`
+    /// instead would drop a fresh `Reg::Loading` on a data source that is still connected, and
     /// nothing short of a whole-catalog re-scan would ever answer it — a permanent spinner over a
     /// change that touched no engine state.
     #[test]
-    fn editing_a_connection_def_in_place_keeps_its_registration() {
+    fn editing_a_source_def_in_place_keeps_its_registration() {
         let mut p = ProjectState::from_defs(
             ProjectDefs {
                 name: "test".into(),
-                connections: vec![pg("analytics", &["public"])],
+                sources: vec![pg("analytics", &["public"])],
                 ..Default::default()
             },
             PathBuf::from("/tmp/strata-schemas-write"),
         );
-        let name = p.connections[0].def.named();
-        p.connection_registered(&name);
+        let name = p.sources[0].def.named();
+        p.source_registered(&name);
 
-        p.update_connection_def(&name, |def| {
-            if let Provider::Source(store) = &mut def.provider {
-                store.schemas = vec!["public".into(), "warehouse".into()];
-            }
+        p.update_source_def(&name, |def| {
+            def.schemas = vec!["public".into(), "warehouse".into()];
         });
 
-        let row = &p.connections[0];
+        let row = &p.sources[0];
         assert!(
             matches!(row.reg, Reg::Ready(())),
             "the verdict is untouched"
         );
-        match &row.def.provider {
-            Provider::Source(store) => {
-                assert_eq!(store.schemas, ["public", "warehouse"]);
-            }
-            other => panic!("still a database: {other:?}"),
-        }
-        assert_eq!(p.connections.len(), 1, "edited in place, not inserted");
+        assert_eq!(row.def.schemas, ["public", "warehouse"]);
+        assert_eq!(p.sources.len(), 1, "edited in place, not inserted");
     }
 }

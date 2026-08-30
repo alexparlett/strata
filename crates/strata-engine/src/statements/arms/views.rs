@@ -65,11 +65,11 @@ const NOT_A_QUERY: &str = "A view's definition must be a query";
 ///
 /// **The body is parsed and resolved rather than handed to `ctx.sql`** ([`resolved_one`]): a
 /// view's body is a read like any other, and resolving it is what makes [`plan_deps`] record a
-/// body reading a connection's `orders` as the *remote* dependency it is. The def still stores
+/// body reading a data source's `orders` as the *remote* dependency it is. The def still stores
 /// the SQL the user wrote.
 ///
 /// A failure comes back through [`view_error`], the table funnel's `register_error` from the
-/// other side: one diagnosis — a relation a database connection no longer has — in front of the
+/// other side: one diagnosis — a relation a data source no longer has — in front of the
 /// same unwrapping a refused *table* gets. A view's failure lands in the same Problems list, one
 /// row below its cause, so a view carrying DataFusion's wrapper stack beside a table that has had
 /// it peeled would read as two faults worded by two apps. Both halves are no-ops on a message
@@ -104,7 +104,7 @@ pub async fn create(ctx: &SessionContext, name: &str, sql: &str) -> Result<ViewM
         .table(registered)
         .await
         .map_err(|e| view_error(ctx, &e.to_string()))?;
-    let deps = plan_deps(t.logical_plan());
+    let deps = plan_deps(ctx, t.logical_plan());
     let columns = t.schema().fields().iter().map(|f| column_info(f)).collect();
     Ok(ViewMeta {
         columns,
@@ -137,7 +137,7 @@ pub async fn drop(ctx: &SessionContext, name: &str) -> Result<(), String> {
 /// `LogicalPlan` and a `definition` string that is the whole `CREATE VIEW` rebuilt, neither of
 /// which is the query on its own.
 ///
-/// A name inside a database connection is [`remote`]'s: the view is the server's, so the
+/// A name inside a data source is [`remote`]'s: the view is the server's, so the
 /// statement is dispatched rather than reduced to a def, and `MATERIALIZED` is accepted there and
 /// nowhere else.
 pub async fn create_statement(
@@ -198,7 +198,7 @@ pub async fn create_statement(
 /// the existence test lives in `execute_logical_plan`, which is the half we are replacing.
 ///
 /// The remote branch is taken before that, off the AST, because a plan of a name in a database
-/// connection tells this arm nothing it does not already have.
+/// data source tells this arm nothing it does not already have.
 pub async fn drop_statement(
     cx: &StmtCtx,
     who: &Principal,
@@ -323,7 +323,7 @@ mod tests {
     use std::path::PathBuf;
     use std::{env, process};
 
-    use crate::register::{CatalogSpec, RegOutcome};
+    use crate::register::RegOutcome;
     use crate::statements::Fault;
     use crate::{Engine, RunOutcome, RunRows, RunTag, StatementReport, WsId};
     use strata_core::project::{save_defs, ProjectDefs};
@@ -742,7 +742,7 @@ mod tests {
         let cold = Engine::builder().build();
         let mut out = Vec::new();
         cold.catalog()
-            .sync(CatalogSpec::of_project(&root, &defs), |o| out.push(o))
+            .sync(cold.catalog().spec(&root, &defs), |o| out.push(o))
             .await;
 
         let failed: Vec<&RegOutcome> = out
@@ -750,7 +750,7 @@ mod tests {
             .filter(|o| match o {
                 RegOutcome::Table { result, .. } => result.is_err(),
                 RegOutcome::View { result, .. } => result.is_err(),
-                RegOutcome::Connection { result, .. } => result.is_err(),
+                RegOutcome::Source { result, .. } => result.is_err(),
                 RegOutcome::Removed { .. } => false,
             })
             .collect();

@@ -9,7 +9,7 @@
 //! is told. What P3-06 adds is the entry point — a catalog row's context menu setting the
 //! [`DropTarget`] slot this dialog watches — not a second copy of the mechanics.
 //!
-//! The Connections pane's **Forget** (W7) is the fourth target rather than a dialog of its own,
+//! The Data sources pane's **Forget** (W7) is the fourth target rather than a dialog of its own,
 //! for the reason [`DropTarget`] states: destroying a project's work asks on one set of terms.
 //!
 //! ## What the consequence line claims
@@ -20,18 +20,18 @@
 //! D10/D11). So the warning says exactly what the catalog row will say afterwards: these
 //! views are flagged, and they will not survive a reopen.
 //!
-//! **A connection's dependents depend on what kind of connection it is** (W7 · 04 · DB-05), and
+//! **A data source's dependents depend on what kind of data source it is** (W7 · 04 · DB-05), and
 //! the split is the same one the two kinds make everywhere else. An **object store** has no
 //! readers in the SQL namespace at all: nothing reads a bucket *by name*, so what it has is the
 //! defs that name it and everything reading one of those — the reading a table drop already
 //! reports. A **database** is the other way round: no def can name one, because its relations are
 //! discovered rather than declared, so its only readers are the views whose plans scan through it.
 //! Still "left invalid" in both cases, because that is what happens: the defs survive, still
-//! naming the connection, and it is the next registration that has nothing to read.
+//! naming the data source, and it is the next registration that has nothing to read.
 //!
 //! **Both halves are one engine read** ([`Sources::dependents`](strata_engine::Sources::dependents)),
 //! because both are derived from what registration established — a table's def named its
-//! connection, a view's plan named what it scanned — and this dialog re-deriving them was two
+//! data source, a view's plan named what it scanned — and this dialog re-deriving them was two
 //! copies of a dependency walk over data the engine produced. What is still the store's is the
 //! **table and view** drops below, whose dependents are a question about the project's own rows.
 //!
@@ -39,18 +39,19 @@
 //!
 //! **A database's stored password stays in the keystore.** DB-05 asked for it to be deleted here,
 //! and that was wrong: the slot is [derived](strata_core::secret::SecretRef::derived) from the
-//! connection's URL and nothing else, so it is *shared* by every project on this machine that
-//! names the same database. Forgetting a connection in one project would silently take the
+//! data source's URL and nothing else, so it is *shared* by every project on this machine that
+//! names the same database. Forgetting a data source in one project would silently take the
 //! password out from under the others, which would then fail their next pass with the server's
 //! own `password authentication failed` and nothing naming the cause. An orphan keystore entry
-//! costs nothing and is the user's to clear, from the connection editor's own password field —
+//! costs nothing and is the user's to clear, from the data source editor's own password field —
 //! the only surface that knows whether they still want it.
 
 use freya::components::{get_theme, ScrollView};
 use freya::prelude::*;
 use freya::radio::{use_radio, use_radio_station, RadioStation};
+use strata_engine::SourceMode;
 use strata_engine::{drop_intent, Dependents};
-use strata_model::{CatalogKind, ProviderId, TableOrigin};
+use strata_model::{CatalogKind, TableOrigin};
 use uuid::Uuid;
 
 use crate::apps::project::contexts::EngineCtx;
@@ -70,8 +71,8 @@ use crate::theme::{use_roles, Role};
 /// What a drop confirm is about. The variants mirror each section's identity rule: tables and
 /// views are addressed by **name** (their engine/SQL identity, one shared namespace), a saved
 /// query by its stable **id** — its name is only the label, carried so the dialog can show it —
-/// and a connection by its **name**, which is what the project keys on and the only form that
-/// tells two connections over one address apart.
+/// and a data source by its **name**, which is what the project keys on and the only form that
+/// tells two data sources over one address apart.
 ///
 /// **Forget is here rather than in a dialog of its own** because every path that destroys a
 /// project's work asks on the same terms: one card, one pair of actions, one Esc/Enter barrier,
@@ -94,17 +95,17 @@ pub enum DropTarget {
         id: Uuid,
         name: String,
     },
-    /// A connection, by its own name — **with its provider**, carried from the row for
+    /// A data source, by its own name — **with its provider**, carried from the row for
     /// [`Table`](Self::Table)'s reason: by the time this copy renders, answering it would take a
     /// lookup that can fail, and the wrong default tells the user nothing in the *bucket* is
     /// deleted about a source that holds no files.
     ///
-    /// The [`ProviderId`] rather than a "is it a database" flag, so a fifth provider is a compile
+    /// The [`SourceMode`] rather than a "is it a database" flag, so a third mode is a compile
     /// error in every arm that words this card instead of a silent `false` that promises the
     /// wrong thing about whatever it turns out to be.
-    Connection {
+    Source {
         name: String,
-        provider: ProviderId,
+        mode: SourceMode,
     },
 }
 
@@ -112,34 +113,34 @@ impl DropTarget {
     /// The row's name, as the title shows it.
     pub fn name(&self) -> &str {
         match self {
-            DropTarget::View(name) | DropTarget::Connection { name, .. } => name,
+            DropTarget::View(name) | DropTarget::Source { name, .. } => name,
             DropTarget::Table { name, .. } | DropTarget::Query { name, .. } => name,
         }
     }
 
     /// Which catalog section it belongs to — what [`ProjectState::dependent_views`] dispatches
     /// on to pick the right dependency list — or `None` for a target that is not in the SQL
-    /// namespace at all. A connection is an object store, so nothing can *read* it by name; its
+    /// namespace at all. A data source is an object store, so nothing can *read* it by name; its
     /// dependents are the tables that name it, which [`DropConfirm`] asks for by URL instead.
     fn kind(&self) -> Option<CatalogKind> {
         match self {
             DropTarget::Table { .. } => Some(CatalogKind::Table),
             DropTarget::View(_) => Some(CatalogKind::View),
             DropTarget::Query { .. } => Some(CatalogKind::Query),
-            DropTarget::Connection { .. } => None,
+            DropTarget::Source { .. } => None,
         }
     }
 
     /// The action, used for both the title and the button (canvas `removeTitle` / `removeBtn`
     /// are the same string). A saved query is *deleted*, not dropped — it was never registered
-    /// with the engine — and a connection is *forgotten*, which is the spec's own word for it
+    /// with the engine — and a data source is *forgotten*, which is the spec's own word for it
     /// and the right one: nothing in the bucket changes.
     fn verb(&self) -> &'static str {
         match self {
             DropTarget::Table { .. } => "Drop table",
             DropTarget::View(_) => "Drop view",
             DropTarget::Query { .. } => "Delete query",
-            DropTarget::Connection { .. } => "Forget connection",
+            DropTarget::Source { .. } => "Forget data source",
         }
     }
 
@@ -159,12 +160,12 @@ impl DropTarget {
             DropTarget::Query { .. } => {
                 "Removes this saved query from the project. Any open tab keeps its SQL."
             }
-            DropTarget::Connection {
-                provider: ProviderId::Source,
+            DropTarget::Source {
+                mode: SourceMode::Catalog,
                 ..
-            } => "Removes the database connection. Nothing in the database is deleted.",
-            DropTarget::Connection {
-                provider: ProviderId::S3 | ProviderId::Gcs | ProviderId::Http,
+            } => "Removes the data source. Nothing on the server is deleted.",
+            DropTarget::Source {
+                mode: SourceMode::Store,
                 ..
             } => "Removes the object store from this project. Nothing in the bucket is deleted.",
         }
@@ -176,7 +177,7 @@ impl DropTarget {
             DropTarget::Table { .. } => "table",
             DropTarget::View(_) => "view",
             DropTarget::Query { .. } => "query",
-            DropTarget::Connection { .. } => "connection",
+            DropTarget::Source { .. } => "data source",
         }
     }
 }
@@ -188,7 +189,7 @@ fn past(target: &DropTarget) -> &'static str {
         DropTarget::Table { .. } => "Dropped table",
         DropTarget::View(_) => "Dropped view",
         DropTarget::Query { .. } => "Deleted query",
-        DropTarget::Connection { .. } => "Forgot connection",
+        DropTarget::Source { .. } => "Forgot data source",
     }
 }
 
@@ -209,17 +210,17 @@ fn consequence(count: usize, noun: &str) -> Option<String> {
     }
 }
 
-/// A **forget**'s consequence line (W7 · 04): the tables that read through the connection, and
+/// A **forget**'s consequence line (W7 · 04): the tables that read through the data source, and
 /// the views left invalid behind them.
 ///
 /// Its own sentence rather than [`consequence`]'s with a swapped noun, because it counts two
-/// different things. A connection has no readers in the SQL namespace at all — what breaks is
+/// different things. A data source has no readers in the SQL namespace at all — what breaks is
 /// the tables whose def names it, and then everything that reads *those*, which is the same
 /// reading a table drop reports. Naming only the tables would under-report a forget against the
 /// drop it is otherwise identical to; naming both in one count would say "3 defs", which is not
 /// a word the catalog uses.
 ///
-/// `views` is only ever spoken of behind the tables, so a connection with no tables says nothing
+/// `views` is only ever spoken of behind the tables, so a data source with no tables says nothing
 /// at all — there is nothing over it for a view to read through.
 fn forget_consequence(tables: usize, views: usize) -> Option<String> {
     if tables == 0 {
@@ -237,7 +238,7 @@ fn forget_consequence(tables: usize, views: usize) -> Option<String> {
         (n, _) => format!(", with {n} views over them"),
     };
     Some(format!(
-        "{subject} this connection and will be left invalid{behind}:"
+        "{subject} this data source and will be left invalid{behind}:"
     ))
 }
 
@@ -282,11 +283,11 @@ impl Component for DropConfirm {
         };
 
         let (dependents, consequence) = match (&target, target.kind()) {
-            (DropTarget::Connection { name, provider }, _) => {
+            (DropTarget::Source { name, mode }, _) => {
                 let Dependents { tables, views } = engine.sources().dependents(name);
-                let line = match provider {
-                    ProviderId::Source => consequence(views.len(), target.noun()),
-                    _ => forget_consequence(tables.len(), views.len()),
+                let line = match mode {
+                    SourceMode::Catalog => consequence(views.len(), target.noun()),
+                    SourceMode::Store => forget_consequence(tables.len(), views.len()),
                 };
                 (tables.into_iter().chain(views).collect(), line)
             }
@@ -510,13 +511,13 @@ fn drop_row(
                 catalog_settled(catalog, &engine);
             });
         }
-        DropTarget::Connection { name, .. } => {
+        DropTarget::Source { name, .. } => {
             let landed = {
-                let mut p = project.write_channel(ProjChan::Connections);
-                let taken = p.remove_connection(name);
+                let mut p = project.write_channel(ProjChan::Sources);
+                let taken = p.remove_source(name);
                 let landed = persisted_defs(&p, report);
                 if let (false, Some((at, row))) = (landed, taken) {
-                    p.restore_connection(at, row);
+                    p.restore_source(at, row);
                 }
                 landed
             };
@@ -568,7 +569,6 @@ mod tests {
 
     use crate::apps::project::state::{CatalogState, Log, PersistFaults};
 
-    use crate::apps::connection::model::PgDraft;
     use freya_testing::TestingRunner;
     use futures::executor::block_on;
     use strata_core::project::{self as project_io, ProjectDefs};
@@ -576,8 +576,7 @@ mod tests {
     use strata_engine::register::CatalogSpec;
     use strata_engine::{RunTag, TableMeta, TableSpec, ViewMeta, WsId};
     use strata_model::{
-        ConnectionDef, GcsStore, Origin, Provider, S3Store, SavedQuery, SourceFormat, TableDef,
-        TableOrigin, ViewDef,
+        Origin, SavedQuery, SourceDef, SourceFormat, TableDef, TableOrigin, ViewDef,
     };
 
     use super::*;
@@ -587,30 +586,30 @@ mod tests {
         TableDef {
             name: name.into(),
             format: SourceFormat::Parquet,
-            connection: None,
-            sources: vec![format!("{name}.parquet")],
+            source: None,
+            paths: vec![format!("{name}.parquet")],
             partition_cols: Vec::new(),
             origin: TableOrigin::External,
         }
     }
 
-    /// The same table read through a connection (W7 · 04) — its source is then relative to that
+    /// The same table read through a data source (W7 · 04) — its source is then relative to that
     /// bucket rather than to the project folder.
     fn table_over(name: &str, url: &str) -> TableDef {
         TableDef {
-            connection: Some(url.into()),
+            source: Some(url.into()),
             ..table(name)
         }
     }
 
     /// A table def Strata wrote — `.strata/tables/<name>/`, exactly as a CTAS leaves it. Never
-    /// through a connection: an internal table's data is local to the machine that created it.
+    /// through a data source: an internal table's data is local to the machine that created it.
     fn internal(name: &str) -> TableDef {
         TableDef {
             name: name.into(),
             format: SourceFormat::Arrow,
-            connection: None,
-            sources: vec![format!(".strata/tables/{name}/")],
+            source: None,
+            paths: vec![format!(".strata/tables/{name}/")],
             partition_cols: Vec::new(),
             origin: TableOrigin::Internal,
         }
@@ -634,27 +633,31 @@ mod tests {
     const QUERY_ID: Uuid = Uuid::from_u128(7);
 
     /// `orders` ← `orders_daily` ← `orders_weekly` (the nested reader), plus an unrelated
-    /// `users` table, one saved query, and two connections **over one bucket** — the pair that
+    /// `users` table, one saved query, and two data sources **over one bucket** — the pair that
     /// only `url()` tells apart (W7).
     ///
-    /// `orders` reads through `s3://lake`, which is what makes the two connections tell apart in
+    /// `orders` reads through `s3://lake`, which is what makes the two data sources tell apart in
     /// the one place it matters: forgetting that one takes a table (and the views behind it) with
     /// it, and forgetting its `gs://` namesake takes nothing.
     fn project(root: &Path) -> ProjectState {
         let defs = ProjectDefs {
             name: "test".into(),
-            connections: vec![
-                ConnectionDef {
-                    address: "lake".into(),
+            sources: vec![
+                SourceDef {
+                    config: [("address".to_string(), "lake".into())]
+                        .into_iter()
+                        .collect(),
                     name: "lake".into(),
-                    provider: Provider::S3(S3Store::default()),
-                    client_config: Default::default(),
+                    kind: "s3".into(),
+                    ..Default::default()
                 },
-                ConnectionDef {
-                    address: "lake".into(),
+                SourceDef {
+                    config: [("address".to_string(), "lake".into())]
+                        .into_iter()
+                        .collect(),
                     name: "lake2".into(),
-                    provider: Provider::Gcs(GcsStore::default()),
-                    client_config: Default::default(),
+                    kind: "gcs".into(),
+                    ..Default::default()
                 },
             ],
             tables: vec![table_over("orders", "lake"), table("users")],
@@ -704,11 +707,11 @@ mod tests {
     ///
     /// The forget confirm reads what registration established
     /// ([`Sources::dependents`](strata_engine::Sources::dependents)), so the store built inline
-    /// above is only half the fixture: hand-writing what a connection is holding up would assert
+    /// above is only half the fixture: hand-writing what a data source is holding up would assert
     /// a state nothing produces.
     ///
-    /// The tables read a **local** CSV while their specs name the connection, which is the one
-    /// thing `table_spec` will not compose: it spends the connection turning the sources into
+    /// The tables read a **local** CSV while their specs name the data source, which is the one
+    /// thing `table_spec` will not compose: it spends the data source turning the sources into
     /// `s3://lake/…`, and a bucket is not something a unit test can read. The field the spec
     /// carries is exactly the subject here, so it is set directly — and the views are then created
     /// by DataFusion from real SQL, so what they are recorded as reading is derived rather than
@@ -717,19 +720,19 @@ mod tests {
         let engine = EngineCtx::default();
         std::fs::create_dir_all(root).expect("the scratch project");
         std::fs::write(root.join("t.csv"), "id,name\n1,a\n2,b\n").expect("the fixture's CSV");
-        let table = |name: &str, connection: Option<&str>| TableSpec {
+        let table = |name: &str, source: Option<&str>| TableSpec {
             name: name.into(),
             paths: vec![root.join("t.csv").display().to_string()],
             format: SourceFormat::from_name("csv"),
             partitions: Vec::new(),
-            connection: connection.map(str::to_string),
+            source: source.map(str::to_string),
             internal: false,
         };
         block_on(
             engine.catalog().sync(
                 CatalogSpec {
-                    connections: project(root)
-                        .connections
+                    sources: project(root)
+                        .sources
                         .iter()
                         .map(|c| c.def.clone())
                         .collect(),
@@ -1308,71 +1311,61 @@ mod tests {
         let (mut runner, (mut slot, _, project, ..)) = runner("forget-db");
         {
             let mut p = project;
-            let mut write = p.write_channel(ProjChan::Connections);
-            write.upsert_connection(ConnectionDef {
-                address: "db.internal:5432/analytics".into(),
+            let mut write = p.write_channel(ProjChan::Sources);
+            write.upsert_source(SourceDef {
                 name: "analytics".into(),
-                provider: Provider::Source(
-                    PgDraft {
-                        kind: Pg::NAME.to_string(),
-                        name: "analytics".into(),
-                        user: "reader".into(),
-                        ..Default::default()
-                    }
-                    .def(),
-                ),
-                client_config: Default::default(),
+                kind: Pg::NAME.to_string(),
+                config: [("user".to_string(), "reader".to_string())]
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
             });
         }
         let name = "analytics";
         open(
             &mut runner,
             &mut slot,
-            DropTarget::Connection {
+            DropTarget::Source {
                 name: name.into(),
-                provider: ProviderId::Source,
+                mode: SourceMode::Catalog,
             },
         );
 
         assert!(texts(&runner)
             .iter()
-            .any(|t| t.contains("Nothing in the database is deleted")));
+            .any(|t| t.contains("Nothing on the server is deleted")));
         assert_eq!(
-            consequence(1, "connection").as_deref(),
-            Some("1 view reads this connection and will be left invalid:"),
+            consequence(1, "data source").as_deref(),
+            Some("1 view reads this data source and will be left invalid:"),
             "and its dependents are counted in views, never in tables"
         );
 
-        click_action(&mut runner, "Forget connection");
+        click_action(&mut runner, "Forget data source");
         assert!(
-            !project
-                .peek()
-                .connections
-                .iter()
-                .any(|c| c.def.named() == name),
+            !project.peek().sources.iter().any(|c| c.def.named() == name),
             "confirming forgot it"
         );
     }
 
-    /// **Forget** is the same confirm on a fourth target: it names the connection by its
+    /// **Forget** is the same confirm on a fourth target: it names the data source by its
     /// `url()`, warns about nothing (an object store is not in the SQL namespace, so nothing can
-    /// read it by name), and confirming takes exactly that connection out of the project.
+    /// read it by name), and confirming takes exactly that data source out of the project.
     ///
-    /// The bucket the two connections share is the whole point of asserting the survivor: a
+    /// The bucket the two data sources share is the whole point of asserting the survivor: a
     /// removal keyed on it would take both, or the wrong one.
     #[test]
-    fn forgetting_a_connection_removes_the_one_its_url_names() {
+    fn forgetting_a_source_removes_the_one_its_name_names() {
         let (mut runner, (mut slot, _, project, ..)) = runner("forget");
         open(
             &mut runner,
             &mut slot,
-            DropTarget::Connection {
+            DropTarget::Source {
                 name: "lake2".into(),
-                provider: ProviderId::Gcs,
+                mode: SourceMode::Store,
             },
         );
 
-        assert_eq!(title(&runner), "Forget connection lake2");
+        assert_eq!(title(&runner), "Forget data source lake2");
         assert!(
             !texts(&runner).iter().any(|t| t.contains("left invalid")),
             "nothing reads an object store by name: {:?}",
@@ -1382,43 +1375,43 @@ mod tests {
             .iter()
             .any(|t| t.contains("Nothing in the bucket is deleted")));
 
-        click_action(&mut runner, "Forget connection");
+        click_action(&mut runner, "Forget data source");
 
         assert_eq!(
             project
                 .peek()
-                .connections
+                .sources
                 .iter()
                 .map(|c| c.def.named())
                 .collect::<Vec<_>>(),
             ["lake"],
-            "the other connection over the same bucket stays"
+            "the other data source over the same bucket stays"
         );
         assert!(slot.peek().is_none(), "the dialog closed itself");
     }
 
     /// **A forget names what it breaks** (W7 · 04): the tables whose def reads through this
-    /// connection, *and* the views behind them — the reading a table drop already reports, which
+    /// source, *and* the views behind them — the reading a table drop already reports, which
     /// a line that stopped at the tables would under-report.
     ///
     /// `orders` is the table over `s3://lake`, and both views come with it — including
     /// `orders_weekly`, which only reaches the bucket through another view.
     #[test]
-    fn forgetting_a_connection_names_the_tables_over_it_and_the_views_behind_them() {
+    fn forgetting_a_source_names_the_tables_over_it_and_the_views_behind_them() {
         let (mut runner, (mut slot, ..)) = runner("forget-deps");
         open(
             &mut runner,
             &mut slot,
-            DropTarget::Connection {
+            DropTarget::Source {
                 name: "lake".into(),
-                provider: ProviderId::S3,
+                mode: SourceMode::Store,
             },
         );
 
         assert!(
             shows(
                 &runner,
-                "1 table reads this connection and will be left invalid, with 2 views over it:"
+                "1 table reads this data source and will be left invalid, with 2 views over it:"
             ),
             "the line counts both, and says which is which: {:?}",
             texts(&runner)
@@ -1437,29 +1430,29 @@ mod tests {
         assert_eq!(forget_consequence(0, 3), None);
         assert_eq!(
             forget_consequence(1, 0).as_deref(),
-            Some("1 table reads this connection and will be left invalid:")
+            Some("1 table reads this data source and will be left invalid:")
         );
         assert_eq!(
             forget_consequence(2, 1).as_deref(),
-            Some("2 tables read this connection and will be left invalid, with 1 view over them:")
+            Some("2 tables read this data source and will be left invalid, with 1 view over them:")
         );
     }
 
     /// A forget is **recorded**, in the past tense and in the pane's own word — the row it
     /// describes is gone from the store by the time anyone reads the message.
     #[test]
-    fn forgetting_a_connection_records_the_event() {
+    fn forgetting_a_source_records_the_event() {
         let (mut runner, (mut slot, _, _, log)) = runner("forget-log");
         open(
             &mut runner,
             &mut slot,
-            DropTarget::Connection {
+            DropTarget::Source {
                 name: "lake".into(),
-                provider: ProviderId::S3,
+                mode: SourceMode::Store,
             },
         );
 
-        click_action(&mut runner, "Forget connection");
+        click_action(&mut runner, "Forget data source");
 
         let recorded: Vec<(LogLevel, String)> = log
             .peek()
@@ -1468,7 +1461,7 @@ mod tests {
             .collect();
         assert_eq!(
             recorded,
-            [(LogLevel::Info, "Forgot connection 'lake'".to_string())]
+            [(LogLevel::Info, "Forgot data source 'lake'".to_string())]
         );
     }
 

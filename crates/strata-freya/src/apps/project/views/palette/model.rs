@@ -351,8 +351,8 @@ mod tests {
             def: TableDef {
                 name: name.to_string(),
                 format: SourceFormat::Parquet,
-                connection: None,
-                sources: vec![format!("{name}/")],
+                source: None,
+                paths: vec![format!("{name}/")],
                 partition_cols: partition_cols
                     .iter()
                     .map(|c| (c.to_string(), "Utf8".to_string()))
@@ -371,7 +371,7 @@ mod tests {
         ProjectState {
             name: "sales".to_string(),
             root: PathBuf::from("/data/sales"),
-            connections: Vec::new(),
+            sources: Vec::new(),
             tables: vec![
                 table(
                     "orders",

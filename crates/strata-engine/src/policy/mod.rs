@@ -29,7 +29,7 @@ pub enum Locality {
     /// The workspace catalog: a project table, view or internal table.
     #[default]
     Local,
-    /// A relation inside a database connection's catalog.
+    /// A relation inside a data source's catalog.
     Remote,
 }
 
@@ -64,10 +64,10 @@ impl GrantFamily {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TargetFacts {
     pub locality: Locality,
-    /// The backend kind of the connection the target is in; `None` for a workspace target.
+    /// The backend kind of the data source the target is in; `None` for a workspace target.
     pub kind: Option<String>,
-    /// The connection's url, the key it is registered under; `None` for a workspace target.
-    pub connection: Option<String>,
+    /// The data source's url, the key it is registered under; `None` for a workspace target.
+    pub source: Option<String>,
 }
 
 impl TargetFacts {
@@ -76,12 +76,12 @@ impl TargetFacts {
         TargetFacts::default()
     }
 
-    /// A relation inside the database connection `connection`, of backend kind `kind`.
-    pub fn remote(kind: impl Into<String>, connection: impl Into<String>) -> Self {
+    /// A relation inside the data source `source`, of kind `kind`.
+    pub fn remote(kind: impl Into<String>, source: impl Into<String>) -> Self {
         TargetFacts {
             locality: Locality::Remote,
             kind: Some(kind.into()),
-            connection: Some(connection.into()),
+            source: Some(source.into()),
         }
     }
 }
@@ -164,7 +164,7 @@ pub enum Admit {
 pub enum DenyCode {
     /// The caller does not hold the grant this family needs.
     NotGranted,
-    /// The caller holds it, but not for this connection.
+    /// The caller holds it, but not for this data source.
     OutOfScope,
 }
 

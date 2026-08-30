@@ -369,7 +369,7 @@ fn blocked_ddl_keywords_are_never_offered() {
     }
 }
 
-/// The two statements only a database connection can take are offered like any other lead — the
+/// The two statements only a data source can take are offered like any other lead — the
 /// arm refuses a workspace target in its own words, which is a different thing from the editor
 /// pretending the verb does not exist.
 #[test]
@@ -1278,7 +1278,7 @@ fn completions_resume_after_a_closed_string() {
     pos(&items, "status");
 }
 
-/// **Qualified names over a database connection** — the offer grows a catalog segment,
+/// **Qualified names over a data source** — the offer grows a catalog segment,
 /// then a schema segment, and stops where the network would begin.
 mod qualified {
     use super::*;
@@ -1316,7 +1316,7 @@ mod qualified {
         }])
     }
 
-    /// A second connection that has never answered: a name from the def, and nothing under it.
+    /// A second data source that has never answered: a name from the def, and nothing under it.
     fn unconnected() -> Catalog {
         catalog().with_databases(vec![DatabaseSym {
             name: "warehouse".into(),
@@ -1342,7 +1342,7 @@ mod qualified {
     }
 
     #[test]
-    fn a_connection_that_has_not_answered_still_offers_its_name() {
+    fn a_source_that_has_not_answered_still_offers_its_name() {
         let items = offer("SELECT * FROM ware|", &unconnected());
         pos(&items, "warehouse");
         assert!(
@@ -1424,7 +1424,7 @@ mod qualified {
         absent(&items, "pg");
     }
 
-    /// **A connection's relations are offered where a relation goes**, not only behind a
+    /// **A data source's relations are offered where a relation goes**, not only behind a
     /// qualifier — the offer catching up with the fact that a bare name resolves. The detail names
     /// the schema it came from, because the label alone cannot say which source it is.
     #[test]
@@ -1439,7 +1439,7 @@ mod qualified {
     }
 
     /// **A name the project's own catalog holds is offered under its qualified name.** The
-    /// workspace fixture has a `users` table, so a bare `users` is *its* — the connection's
+    /// workspace fixture has a `users` table, so a bare `users` is *its* — the data source's
     /// relation is a different thing and says so, rather than losing its row to the pool's
     /// one-row-per-name rule or offering a spelling that reaches the other source.
     #[test]

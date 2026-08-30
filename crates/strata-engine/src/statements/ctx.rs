@@ -15,12 +15,12 @@ use crate::export::Owned;
 use crate::formats::Formats;
 use crate::functions::Functions;
 use crate::policy::{Admit, PolicyProvider, Principal, TargetFacts};
-use crate::sources::{connection_facts, Live};
+use crate::sources::{source_facts, Live};
 use crate::statements::classify::{denied, Form};
 use crate::statements::target::Target;
 use crate::statements::StmtKind;
 use crate::tables::InternalTableStore;
-use crate::{Connections, InternalTables};
+use crate::{InternalTables, SourceDefs};
 
 use super::arms::session::SessionScope;
 
@@ -64,12 +64,15 @@ pub struct StmtCtx {
     /// Where those tables' bytes live ([`EngineBuilder::with_table_store`](crate::EngineBuilder::with_table_store))
     /// — what a CTAS publishes into and an `INSERT` appends through.
     pub(crate) tables: Arc<dyn InternalTableStore>,
-    /// Which object stores this project has a connection to — what a typed
-    /// `CREATE EXTERNAL TABLE`'s `LOCATION` may name.
-    pub connections: Connections,
-    /// The live database connections — what a write into a remote relation goes through,
-    /// and what says whether one accepts writes at all.
-    pub(crate) sources: Live,
+    /// The data sources this project holds — what a typed `CREATE EXTERNAL TABLE`'s `LOCATION`
+    /// may name.
+    pub sources: SourceDefs,
+    /// The sources this engine can serve one with — what turns a data source's kind into the
+    /// `scheme://authority` its files hang off, which is the registry's answer and not the def's.
+    pub(crate) registrants: crate::sources::source::Registrants,
+    /// The **live** sources — what a write into a remote relation goes through, and what says
+    /// whether one accepts writes at all.
+    pub(crate) live: Live,
     /// The file formats this engine reads — what `STORED AS` may name, and what builds the
     /// reader a table registers with.
     pub(crate) formats: Formats,
@@ -93,7 +96,7 @@ impl StmtCtx {
     /// The grant family is derived from the kind and the locality from the target, so an arm
     /// names neither: it cannot ask about the wrong family, and it cannot check a locality other
     /// than the one it resolved. The scope narrowing rides the same answer, which is why the
-    /// connection's own facts are gathered here rather than passed in.
+    /// data source's own facts are gathered here rather than passed in.
     ///
     /// A [`Target::Nowhere`] permits: there is no locality to judge, and the arm refuses it in
     /// its own words on the next line. Refusing here instead would tell a caller they lack a
@@ -114,10 +117,10 @@ impl StmtCtx {
         };
         let form = Form::Statement(kind);
         let facts = match target {
-            Target::Remote(at) => connection_facts(&self.sources, &at.connection),
+            Target::Remote(at) => source_facts(&self.live, &at.source),
             // The second arm is unreachable past the guard above, and is stated rather than
             // wildcarded so a fourth kind of target has to decide what it tells the provider.
-            Target::Workspace { .. } | Target::Nowhere { .. } => TargetFacts {
+            Target::Workspace { .. } | Target::Store(_) | Target::Nowhere { .. } => TargetFacts {
                 locality,
                 ..Default::default()
             },
@@ -130,14 +133,14 @@ impl StmtCtx {
 }
 
 /// **The fine phase, end to end** — a capability the coarse phase admits, refused at the arm
-/// because the resolved target is a connection it does not reach.
+/// because the resolved target is a data source it does not reach.
 ///
 /// Not a unit test on `permits`, which passed before this call site existed: what is under test is
 /// that `Engine::run` actually asks. `Capability::full()` admits `DELETE` at *any* locality, so
 /// the coarse phase lets both statements through and the only thing that can tell them apart is
-/// the connection the target resolved into.
+/// the data source the target resolved into.
 ///
-/// Two connections of two registered kinds, so the scoped and the unscoped answer come from one
+/// Two data sources of two registered kinds, so the scoped and the unscoped answer come from one
 /// fixture and neither can be the fixture's own doing.
 #[cfg(test)]
 mod tests {
@@ -151,20 +154,18 @@ mod tests {
     use crate::{
         Admit, DenyCode, Engine, Form, PolicyProvider, Principal, RunTag, TargetFacts, WsId,
     };
-    use strata_model::ConnectionDef;
+    use strata_model::SourceDef;
 
     /// `fake_def`, opted in to writes — the def-level gate is the arm's third and is not what
     /// these tests are about.
-    fn writable(def: ConnectionDef) -> ConnectionDef {
+    fn writable(def: SourceDef) -> SourceDef {
         let mut def = def;
-        if let strata_model::Provider::Source(source) = &mut def.provider {
-            source.read_only = false;
-        }
+        def.read_only = false;
         def
     }
 
     /// An engine whose policy allows everything except remote targets outside `reaches`, holding
-    /// two writable connections: `docs` (kind `test-doc`) and `sales` (kind `test-sql`).
+    /// two writable data sources: `docs` (kind `test-doc`) and `sales` (kind `test-sql`).
     async fn engine(reaches: &str) -> Arc<Engine> {
         let eng = Engine::builder()
             .with_source(TestDoc::holding("docs", &["orders"]))
@@ -193,10 +194,10 @@ mod tests {
             .map_err(|e| e.to_string())
     }
 
-    /// A capability scoped to one backend kind refuses a write to a connection of another —
+    /// A capability scoped to one backend kind refuses a write to a data source of another —
     /// and the sentence is the engine's own table, not the provider's.
     #[tokio::test]
-    async fn a_scoped_capability_refuses_a_connection_of_another_kind() {
+    async fn a_scoped_capability_refuses_a_source_of_another_kind() {
         let eng = engine("test-sql").await;
         assert_eq!(
             run(&eng, "DELETE FROM docs.public.orders WHERE id = 1")
@@ -206,7 +207,7 @@ mod tests {
         );
     }
 
-    /// And the same statement against a connection the scope *does* reach gets past the policy —
+    /// And the same statement against a data source the scope *does* reach gets past the policy —
     /// landing on the source's own refusal, which is what says the gate was the only thing in the
     /// way. `TestDoc` runs no statement of its own, so the sentence is the trait's.
     #[tokio::test]

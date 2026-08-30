@@ -10,7 +10,7 @@
 //! open the pane/tab, or collapse it if it's already the active one.
 //!
 //! The top group is one button since DB-05: the data-sources tree answers for the project's
-//! catalog *and* its connections, so the Connections toggle beside it had nothing left to select.
+//! catalog *and* its sources, so the Data sources toggle beside it had nothing left to select.
 
 use freya::prelude::*;
 use freya::radio::use_radio;
@@ -109,7 +109,7 @@ impl Component for ActivityRail {
 /// It totals the **same two counts the drawer header does**, from the same two functions, so the
 /// badge and the header can never disagree — the SQL errors across every open tab
 /// (`error_count`) plus the project-scope conditions behind the Problems drawer's second tab
-/// (`project_error_count`: connections and defs the engine refused, and `.strata` files a failed
+/// (`project_error_count`: data sources and defs the engine refused, and `.strata` files a failed
 /// write left behind). A badge that counted only the first would go quiet while the project
 /// underneath was broken, which is the case P4-15 exists for.
 ///
@@ -120,11 +120,11 @@ struct ProblemsBadge;
 impl Component for ProblemsBadge {
     fn render(&self) -> impl IntoElement {
         let session = use_radio::<SessionState, Chan>(Chan::Diagnostics);
-        let connections = use_radio::<ProjectState, ProjChan>(ProjChan::Connections);
+        let sources = use_radio::<ProjectState, ProjChan>(ProjChan::Sources);
         let tables = use_radio::<ProjectState, ProjChan>(ProjChan::Tables);
         let views = use_radio::<ProjectState, ProjChan>(ProjChan::Views);
         let faults = use_consume::<FaultsCtx>();
-        let _ = connections.read();
+        let _ = sources.read();
         let _ = views.read();
         let errors =
             session.read().error_count() + project_error_count(&tables.read(), &faults.read());

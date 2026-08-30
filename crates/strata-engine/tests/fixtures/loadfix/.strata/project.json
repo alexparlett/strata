@@ -4,9 +4,6 @@
     {
       "name": "events",
       "format": "csv",
-      "sources": [
-        "events"
-      ],
       "partition_cols": [
         [
           "year",
@@ -16,31 +13,34 @@
           "month",
           "Utf8"
         ]
+      ],
+      "paths": [
+        "events"
       ]
     },
     {
       "name": "regions",
       "format": "csv",
-      "sources": [
+      "partition_cols": [],
+      "paths": [
         "regions.csv"
-      ],
-      "partition_cols": []
+      ]
     },
     {
       "name": "signups",
       "format": "json",
-      "sources": [
+      "partition_cols": [],
+      "paths": [
         "signups.json"
-      ],
-      "partition_cols": []
+      ]
     },
     {
       "name": "users",
       "format": "csv",
-      "sources": [
+      "partition_cols": [],
+      "paths": [
         "users.csv"
-      ],
-      "partition_cols": []
+      ]
     }
   ],
   "views": [

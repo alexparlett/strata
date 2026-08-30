@@ -9,8 +9,6 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
-use crate::connection::mint_name;
-
 /// What a pending removal targets — drives the confirm dialog's wording and the
 /// engine command sent on confirm.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -36,10 +34,10 @@ pub enum CatalogKind {
     Query,
 }
 
-/// One relation inside a database connection's catalog, addressed the way SQL addresses it: the
-/// catalog the connection registered, the server's own schema, and the relation.
+/// One relation inside a data source's catalog, addressed the way SQL addresses it: the
+/// catalog the data source registered, the server's own schema, and the relation.
 ///
-/// The **catalog name** rather than the connection's URL, because every question asked of a remote
+/// The **catalog name** rather than the data source's URL, because every question asked of a remote
 /// relation is asked in SQL — its columns come from resolving `catalog.schema.relation`, and a
 /// profile's `FROM` renders those same three segments. A URL can say neither, and carrying both
 /// would be two statements of one identity that can disagree.
@@ -49,7 +47,7 @@ pub enum CatalogKind {
 /// server rather than from us.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct RemoteRef {
-    pub connection: String,
+    pub source: String,
     pub schema: String,
     pub relation: String,
 }
@@ -57,7 +55,7 @@ pub struct RemoteRef {
 impl RemoteRef {
     /// The three segments as a person reads them — a panel header, never SQL.
     pub fn label(&self) -> String {
-        format!("{}.{}.{}", self.connection, self.schema, self.relation)
+        format!("{}.{}.{}", self.source, self.schema, self.relation)
     }
 }
 
@@ -71,7 +69,7 @@ impl RemoteRef {
 pub enum ColOwner {
     /// A workspace table or view, by name — their shared engine/SQL identity.
     Entry { kind: CatalogKind, name: String },
-    /// A relation inside a database connection's catalog.
+    /// A relation inside a data source's catalog.
     Remote(RemoteRef),
 }
 
@@ -437,26 +435,26 @@ impl TableOrigin {
 
 /// One logical table definition (a DataFusion `ListingTable` over many source paths).
 /// `sources` are stored project-relative where they sit inside the project folder — unless the
-/// def names a [`connection`](Self::connection), which is what they are relative to instead.
+/// def names a [`data source`](Self::source), which is what they are relative to instead.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct TableDef {
     pub name: String,
     /// The reader and its options — see [`SourceFormat`].
     #[serde(deserialize_with = "de_format", serialize_with = "se_format")]
     pub format: SourceFormat,
-    /// **Which connection [`sources`](Self::sources) are read through**, by its
-    /// [`name`](crate::ConnectionDef::name) — `acme_lake`. `None` is the local disk.
+    /// **Which data source [`sources`](Self::sources) are read through**, by its
+    /// [`name`](crate::SourceDef::name) — `acme_lake`. `None` is the local disk.
     ///
     /// A *reference*, not a copy: the bucket, its provider and its credentials belong to the
-    /// connection. The name rather than the address, because a name is what the user renames and
-    /// what every other surface addresses a connection by.
+    /// data source. The name rather than the address, because a name is what the user renames and
+    /// what every other surface addresses a data source by.
     ///
     /// The **one** field that says a table is remote: a source is bucket-relative exactly when this
     /// is `Some`, and `strata_core::project::resolve_source` is the single place that composes the
     /// two.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub connection: Option<String>,
-    pub sources: Vec<String>,
+    pub source: Option<String>,
+    pub paths: Vec<String>,
     /// Hive partition columns as `(name, arrow_type)` — the persisted source of truth for
     /// deterministic reload (types aren't re-detected).
     #[serde(default, deserialize_with = "de_partition_cols")]
@@ -476,7 +474,7 @@ mod format_tests {
 
     #[test]
     fn a_legacy_bare_format_string_loads_with_that_readers_defaults() {
-        let def = parse(r#"{"name":"t","format":"csv","sources":["/data"]}"#);
+        let def = parse(r#"{"name":"t","format":"csv","paths":["/data"]}"#);
         assert_eq!(def.format, SourceFormat::Csv(CsvRead::default()));
         assert_eq!(def.format.name(), "csv");
     }
@@ -506,8 +504,8 @@ mod format_tests {
                 compression: FileCompression::Gzip,
                 ..Default::default()
             }),
-            connection: None,
-            sources: vec!["/data".into()],
+            source: None,
+            paths: vec!["/data".into()],
             partition_cols: vec![],
             origin: TableOrigin::External,
         };
@@ -519,14 +517,14 @@ mod format_tests {
     #[test]
     fn an_origin_defaults_to_external_and_round_trips() {
         assert_eq!(
-            parse(r#"{"name":"t","format":"csv","sources":["/data"]}"#).origin,
+            parse(r#"{"name":"t","format":"csv","paths":["/data"]}"#).origin,
             TableOrigin::External
         );
         let def = TableDef {
             name: "daily".into(),
             format: SourceFormat::Arrow,
-            connection: None,
-            sources: vec![".strata/tables/daily/".into()],
+            source: None,
+            paths: vec![".strata/tables/daily/".into()],
             partition_cols: vec![],
             origin: TableOrigin::Internal,
         };
@@ -535,32 +533,32 @@ mod format_tests {
         assert_eq!(parse(&json), def);
     }
 
-    /// A def written before connections existed reads from the **local disk**; a remote one
+    /// A def naming no data source reads from the **local disk**; one that names a source
     /// round-trips, and a local one writes no key at all.
     #[test]
-    fn a_connection_defaults_to_the_local_disk_and_round_trips() {
+    fn a_source_defaults_to_the_local_disk_and_round_trips() {
         assert_eq!(
-            parse(r#"{"name":"t","format":"csv","sources":["/data"]}"#).connection,
+            parse(r#"{"name":"t","format":"csv","paths":["/data"]}"#).source,
             None
         );
         let local = TableDef {
             name: "events".into(),
             format: SourceFormat::Parquet,
-            connection: None,
-            sources: vec!["data/events/".into()],
+            source: None,
+            paths: vec!["data/events/".into()],
             partition_cols: vec![],
             origin: TableOrigin::External,
         };
         let json = serde_json::to_string(&local).expect("serialize");
-        assert!(!json.contains("connection"), "{json}");
+        assert!(!json.contains("data source"), "{json}");
 
         let remote = TableDef {
-            connection: Some("s3://acme-lake".into()),
-            sources: vec!["events/2024/**/*.parquet".into()],
+            source: Some("s3://acme-lake".into()),
+            paths: vec!["events/2024/**/*.parquet".into()],
             ..local
         };
         let json = serde_json::to_string(&remote).expect("serialize");
-        assert!(json.contains(r#""connection":"s3://acme-lake""#), "{json}");
+        assert!(json.contains(r#""source":"s3://acme-lake""#), "{json}");
         assert_eq!(parse(&json), remote);
     }
 
@@ -569,8 +567,8 @@ mod format_tests {
         let def = TableDef {
             name: "legacy".into(),
             format: SourceFormat::from_name("avro"),
-            connection: None,
-            sources: vec!["/data".into()],
+            source: None,
+            paths: vec!["/data".into()],
             partition_cols: vec![],
             origin: TableOrigin::External,
         };
@@ -588,8 +586,8 @@ mod format_tests {
         let def = TableDef {
             name: "places".into(),
             format: format.clone(),
-            connection: None,
-            sources: vec!["/data".into()],
+            source: None,
+            paths: vec!["/data".into()],
             partition_cols: vec![],
             origin: TableOrigin::External,
         };
@@ -600,7 +598,7 @@ mod format_tests {
 
     #[test]
     fn a_format_with_no_reader_here_is_kept_verbatim_rather_than_read_as_parquet() {
-        let def = parse(r#"{"name":"t","format":"avro","sources":["/data"]}"#);
+        let def = parse(r#"{"name":"t","format":"avro","paths":["/data"]}"#);
         assert_eq!(def.format, SourceFormat::from_name("avro"));
         assert_eq!(def.format.name(), "avro");
     }
@@ -653,70 +651,4 @@ pub struct SavedQuery {
     pub name: String,
     pub sql: String,
     pub meta: String,
-}
-
-impl TableDef {
-    /// Upgrade a def that points at its connection by URL or by identity.
-    ///
-    /// A table names the connection it reads through the way everything else does now — by its
-    /// **name** — where it used to name the URL the engine registered a store under. Both older
-    /// spellings carry the address, and a name is minted from an address, so one pass maps them
-    /// forward; anything else is left alone, which fails visibly at registration rather than
-    /// silently reading as a local path.
-    pub fn migrated(mut self) -> Self {
-        self.connection = self.connection.map(|named| match named.contains("://") {
-            true => mint_name(&named),
-            false => match named.split_once(':') {
-                Some((kind, address)) if !kind.is_empty() && !address.is_empty() => {
-                    mint_name(address)
-                }
-                _ => named,
-            },
-        });
-        self
-    }
-}
-
-#[cfg(test)]
-mod migration_tests {
-    use super::*;
-
-    /// **A table keeps pointing at its connection across both renamings.** The reference was a
-    /// URL, then an identity, and is a name now — all three carry the address, and a name is what
-    /// an address mints.
-    #[test]
-    fn a_tables_connection_reference_migrates_to_a_name() {
-        let pointing = |at: Option<&str>| {
-            TableDef {
-                name: "events".into(),
-                format: SourceFormat::Parquet,
-                connection: at.map(str::to_string),
-                sources: vec!["events/*.parquet".into()],
-                partition_cols: Vec::new(),
-                origin: TableOrigin::default(),
-            }
-            .migrated()
-            .connection
-        };
-        for written in ["s3://acme-lake", "s3:acme-lake", "acme_lake"] {
-            assert_eq!(
-                pointing(Some(written)).as_deref(),
-                Some("acme_lake"),
-                "{written}"
-            );
-        }
-        assert_eq!(
-            pointing(Some("https://files.example.com")).as_deref(),
-            Some("files_example_com")
-        );
-        assert_eq!(
-            pointing(Some("postgres:db.internal:5432/analytics")).as_deref(),
-            Some("analytics")
-        );
-        assert_eq!(
-            pointing(None),
-            None,
-            "a local table points at nothing and keeps pointing at nothing"
-        );
-    }
 }

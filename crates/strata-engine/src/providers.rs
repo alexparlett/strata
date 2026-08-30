@@ -11,11 +11,11 @@
 //!   even with the router bypassed. `CREATE DATABASE` cannot be stopped here — `register_catalog`
 //!   returns an `Option` and has no way to refuse — so the classifier's `Fault::CreateDatabase` is
 //!   its only gate. The scoping is load-bearing since the DB workstream: the session holds one
-//!   catalog per database connection too, and it is the *workspace* whose flat bare-name namespace
+//!   catalog per data source too, and it is the *workspace* whose flat bare-name namespace
 //!   is one-catalog-one-schema.
 //! * **Removability** — [`StrataCatalogList`] exists for the one thing DataFusion cannot serve:
 //!   `CatalogProviderList` has `register_catalog` and no counterpart. Forgetting a database
-//!   connection has to make its catalog stop resolving, or a removed source stays queryable until
+//!   data source has to make its catalog stop resolving, or a removed source stays queryable until
 //!   the window is re-opened.
 //! * **Replaceability** — [`StrataSchemaProvider::replace`] is the other operation the traits do
 //!   not have. `register_table` refuses a name that is already there, so a re-registration needs
@@ -27,7 +27,7 @@
 //!   snapshot **by name**, so none notices. The prefix is [`is_snapshot_name`], beside the function
 //!   that mints the names, so the hiding rule and the naming rule cannot drift.
 //!
-//! That filter is **this** provider's, and a source connection's
+//! That filter is **this** provider's, and a data source's
 //! ([`SourceSchemaProvider`](super::sources::providers::SourceSchemaProvider)) deliberately has
 //! none: the namespace is the workspace
 //! catalog's, so a remote relation a server happens to call `__snap_x` is an ordinary table — the
@@ -39,6 +39,7 @@
 
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use async_trait::async_trait;
@@ -82,7 +83,7 @@ pub(super) fn in_workspace(name: &TableReference) -> bool {
 /// The engine's **catalog list**: DataFusion's, plus the one operation it does not have.
 ///
 /// `MemoryCatalogProviderList` can register a catalog and never remove one, so a database
-/// connection could be forgotten and go on answering `pg.public.orders` for the life of the
+/// data source could be forgotten and go on answering `pg.public.orders` for the life of the
 /// window. This is the same map with [`deregister`](Self::deregister) on it — installed at
 /// [`build_context`](super::build_context) time via `SessionStateBuilder::with_catalog_list`,
 /// so the builder registers the workspace catalog into *this* list and nothing else moves.
@@ -101,7 +102,7 @@ pub struct StrataCatalogList {
     /// and stamps whatever it answers into `information_schema.tables.table_catalog` and every
     /// `SHOW` form, so folding the *enumeration* — which `MemoryCatalogProviderList` does not do
     /// — would print a catalog name no def, no surface and no user ever wrote. A database
-    /// connection deliberately registers the user's own spelling.
+    /// data source deliberately registers the user's own spelling.
     catalogs: RwLock<BTreeMap<String, Registered>>,
 }
 
@@ -111,7 +112,7 @@ type Registered = (String, Arc<dyn CatalogProvider>);
 impl StrataCatalogList {
     /// Take the catalog registered under `name` back out — the half `CatalogProviderList` is
     /// missing. `None` when nothing was registered under it, which is the ordinary case for a
-    /// connection that never connected and is not a fault.
+    /// data source that never connected and is not a fault.
     pub fn deregister(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
         self.catalogs
             .write()
@@ -181,7 +182,7 @@ pub fn deregister_catalog(ctx: &SessionContext, name: &str) -> Option<Arc<dyn Ca
 /// Register a catalog shaped the way a live source's is — one namespace, some relations — so a
 /// test can ask what the app does about a name inside one without a server.
 ///
-/// The providers are the real pair a connection registers, over a source that speaks no SQL, so
+/// The providers are the real pair a data source registers, over a source that speaks no SQL, so
 /// what these tests drive is the thing itself rather than a stand-in for it. The connect is
 /// skipped because their subject is the **catalog list**: each asks whether a catalog of that
 /// name is registered and then works off the resolved reference.
@@ -237,7 +238,192 @@ impl CatalogProvider for StrataCatalogProvider {
     }
 }
 
-/// The one schema every Strata table, view and result snapshot lives in.
+/// A **store data source's catalog**: one schema, [`SCHEMA`], holding a provider per table def
+/// that reads through it.
+///
+/// Registered under the data source's own name while it is live, which is what makes forgetting
+/// one structural: the catalog comes off the list and its tables stop resolving with it, rather
+/// than a deregistration per table that a failure could half-finish.
+///
+/// It enumerates nothing. A bucket cannot say what its tables are, so what this holds is the
+/// project's own rows — the same `ListingTable`s
+/// [`register_external`](super::catalog::register_external) builds, placed here rather than in
+/// the workspace.
+pub struct StoreCatalogProvider {
+    /// The name the data source registered under — what a refusal from here names.
+    catalog: String,
+    schema: Arc<StrataSchemaProvider>,
+}
+
+impl StoreCatalogProvider {
+    /// An empty catalog for the data source called `catalog`. The registration pass fills it:
+    /// sources register before tables, so it is in place before the first def that names it.
+    pub fn new(catalog: String) -> Self {
+        StoreCatalogProvider {
+            catalog,
+            schema: Arc::new(StrataSchemaProvider::default()),
+        }
+    }
+}
+
+impl fmt::Debug for StoreCatalogProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StoreCatalogProvider")
+            .field("catalog", &self.catalog)
+            .finish_non_exhaustive()
+    }
+}
+
+impl CatalogProvider for StoreCatalogProvider {
+    fn schema_names(&self) -> Vec<String> {
+        vec![SCHEMA.to_string()]
+    }
+
+    fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
+        (name == SCHEMA).then(|| Arc::clone(&self.schema) as Arc<dyn SchemaProvider>)
+    }
+
+    fn register_schema(
+        &self,
+        _name: &str,
+        _schema: Arc<dyn SchemaProvider>,
+    ) -> Result<Option<Arc<dyn SchemaProvider>>> {
+        exec_err!(
+            "'{}' holds the tables this project reads through it, in one schema, '{SCHEMA}'. \
+             New schemas cannot be created in it",
+            self.catalog
+        )
+    }
+
+    fn deregister_schema(
+        &self,
+        _name: &str,
+        _cascade: bool,
+    ) -> Result<Option<Arc<dyn SchemaProvider>>> {
+        exec_err!(
+            "'{}' holds the tables this project reads through it, in one schema, '{SCHEMA}'. \
+             It cannot be dropped",
+            self.catalog
+        )
+    }
+}
+
+/// Whether `catalog` is a **store** data source's — a name whose relations are the project's own
+/// table defs rather than a server's.
+///
+/// Asked of the session because that is what resolves the name, and answered by the provider's
+/// own type: a store catalog is registered exactly while its data source is live.
+pub(crate) fn is_store_catalog(ctx: &SessionContext, catalog: &str) -> bool {
+    ctx.catalog(catalog)
+        .is_some_and(|provider| (provider.as_ref() as &dyn Any).is::<StoreCatalogProvider>())
+}
+
+/// The catalog a table def registers **into**: the store data source it reads through while that
+/// source is live, and the workspace otherwise.
+///
+/// The fallback is not a defeat — it is every local table, and it is also a def whose source
+/// failed to connect, which registers into the workspace and then fails on its paths with the
+/// sentence that names the bucket. Asking the session rather than taking a parameter keeps this
+/// one decision in one place: the sources phase runs first, so by the time a def is registered
+/// the answer is already true.
+pub(crate) fn def_home(ctx: &SessionContext, source: Option<&str>) -> String {
+    match source.filter(|name| is_store_catalog(ctx, name)) {
+        Some(name) => name.to_string(),
+        None => CATALOG.to_string(),
+    }
+}
+
+/// Every catalog on this session whose relations are def-backed: the workspace, then each live
+/// store data source's, in the spelling each is registered under.
+///
+/// What [`registered`](super::catalog::registered) walks, so the pass's removal diff sees a
+/// table wherever it was placed.
+pub(crate) fn def_catalogs(ctx: &SessionContext) -> Vec<String> {
+    let mut names = vec![CATALOG.to_string()];
+    names.extend(
+        ctx.catalog_names()
+            .into_iter()
+            .filter(|name| is_store_catalog(ctx, name)),
+    );
+    names
+}
+
+/// Takes `name` out of whichever def-backed catalog holds it, answering that catalog **and** the
+/// provider it removed.
+///
+/// The catalog comes back because a caller that has to put the table back has to put it back
+/// where it was: a drop that fails after deregistering would otherwise re-register a bucket
+/// table into the workspace, which resolves under the same name and reads through nothing.
+pub(crate) fn take_table(
+    ctx: &SessionContext,
+    name: &str,
+) -> Option<(String, Arc<dyn TableProvider>)> {
+    for catalog in def_catalogs(ctx) {
+        if let Ok(Some(provider)) = remove_table(ctx, &catalog, name) {
+            return Some((catalog, provider));
+        }
+    }
+    None
+}
+
+/// The reference that **resolves** the project's own bare `name` — a plain name in the workspace,
+/// and the full three-part address when a live store data source's catalog holds it.
+///
+/// Every programmatic lookup goes through this rather than handing `ctx.table` a bare string:
+/// bare resolution is `datafusion.catalog.default_catalog`'s, so a table placed in a store
+/// catalog would simply not be found. SQL the user writes needs none of it — `sql::qualify`
+/// already rewrites a bare name across catalogs — so this is the same rule for the callers that
+/// never parse a statement.
+///
+/// A name nothing holds answers bare, which is the honest address for a table that is not
+/// registered: the caller's own error is the one worth reading. A name that is **already**
+/// qualified is parsed and handed back untouched — a database relation addresses itself, and
+/// there is no project row to look for.
+pub(crate) fn def_ref(ctx: &SessionContext, name: &str) -> TableReference {
+    let parsed = TableReference::parse_str(name);
+    let TableReference::Bare { table } = &parsed else {
+        return parsed;
+    };
+    let name = table.as_ref();
+    for catalog in def_catalogs(ctx).into_iter().skip(1) {
+        let holds = ctx
+            .catalog(&catalog)
+            .and_then(|held| held.schema(SCHEMA))
+            .is_some_and(|schema| schema.table_exist(name));
+        if holds {
+            return TableReference::full(catalog, SCHEMA, name.to_string());
+        }
+    }
+    parsed
+}
+
+/// Whether `name` addresses a relation this project has a **def** for — the workspace's one
+/// schema, or a store data source's catalog.
+///
+/// The **checkability** split, and deliberately not [`in_workspace`]: a view's recorded
+/// dependencies are two lists because only one of them can be reconciled against the project's
+/// rows, and a bucket table is a row. `in_workspace` answers a different question — whose
+/// *namespace* a name is in, which is what reserves `__snap_` — and a store catalog is not the
+/// workspace's namespace even though its tables are the project's.
+pub(crate) fn def_backed(ctx: &SessionContext, name: &TableReference) -> bool {
+    if in_workspace(name) {
+        return true;
+    }
+    match name {
+        TableReference::Full {
+            catalog, schema, ..
+        } => schema.as_ref() == SCHEMA && is_store_catalog(ctx, catalog),
+        _ => false,
+    }
+}
+
+/// A schema **Strata owns**: a fold-keyed table map with the one operation the trait lacks.
+///
+/// It serves two catalogs of the same shape — the workspace's one schema, holding its tables,
+/// its views and the result spool, and each store data source's
+/// ([`StoreCatalogProvider`]), holding the providers its table defs registered. Both are
+/// flat, both are keyed by the project's own names, and neither enumerates anything: what is
+/// in the map is what a registration put there.
 ///
 /// Keyed by [`fold_ident`] — the same fold `TableReference::parse_str` applies on the way in,
 /// so this changes no identity that ever worked; it is depth for the fact that the namespace
@@ -289,17 +475,57 @@ impl StrataSchemaProvider {
 /// The workspace catalog is not this crate's.
 pub(crate) fn replace_table(
     ctx: &SessionContext,
+    catalog: &str,
     name: &str,
     table: Arc<dyn TableProvider>,
 ) -> Result<Option<Arc<dyn TableProvider>>, String> {
+    with_schema(ctx, catalog, |schema| Ok(schema.replace(name, table)))
+}
+
+/// Takes `name` out of `catalog`'s one schema, answering what was there.
+///
+/// The counterpart to [`replace_table`], and reached for the same reason: `SessionContext`'s own
+/// `deregister_table` resolves against the *default* catalog, so it cannot take a table out of
+/// the store data source it was placed in.
+pub(crate) fn remove_table(
+    ctx: &SessionContext,
+    catalog: &str,
+    name: &str,
+) -> Result<Option<Arc<dyn TableProvider>>, String> {
+    with_schema(ctx, catalog, |schema| {
+        schema.deregister_table(name).map_err(|e| e.to_string())
+    })
+}
+
+/// Runs `f` against the [`StrataSchemaProvider`] behind `catalog`'s one schema — the workspace's,
+/// or a store data source's.
+///
+/// A closure rather than a returned reference because the provider is reached through an `Arc`
+/// the session hands out by value: borrowing out of that temporary is what the borrow checker
+/// (rightly) refuses, and holding it for the call is all any caller needs.
+///
+/// The downcast is DataFusion's own pattern for a custom provider, as [`deregister_catalog`] is,
+/// and cannot miss on a catalog this crate registered: [`build_context`](super::build_context)
+/// installs the workspace's before anything can replace it, and a store data source's is
+/// [`StoreCatalogProvider`]'s own. Reported rather than unwrapped, so a session assembled
+/// elsewhere gets a sentence instead of a panic.
+///
+/// # Errors
+///
+/// There is no such catalog on this session, or its schema is not one of ours.
+fn with_schema<T>(
+    ctx: &SessionContext,
+    catalog: &str,
+    f: impl FnOnce(&StrataSchemaProvider) -> Result<T, String>,
+) -> Result<T, String> {
     let schema = ctx
-        .catalog(CATALOG)
-        .and_then(|catalog| catalog.schema(SCHEMA))
-        .ok_or_else(|| format!("This session has no '{CATALOG}.{SCHEMA}' to register into"))?;
-    let workspace: &StrataSchemaProvider = (schema.as_ref() as &dyn Any)
+        .catalog(catalog)
+        .and_then(|held| held.schema(SCHEMA))
+        .ok_or_else(|| format!("This session has no '{catalog}.{SCHEMA}' to register into"))?;
+    let owned: &StrataSchemaProvider = (schema.as_ref() as &dyn Any)
         .downcast_ref()
-        .ok_or_else(|| format!("'{CATALOG}.{SCHEMA}' is not Strata's own schema"))?;
-    Ok(workspace.replace(name, table))
+        .ok_or_else(|| format!("'{catalog}.{SCHEMA}' is not Strata's own schema"))?;
+    f(owned)
 }
 
 #[async_trait]
@@ -488,6 +714,74 @@ mod tests {
         assert!(ctx.sql("DESCRIBE events").await.is_ok());
     }
 
+    /// **A store data source's catalog is placement, not a namespace.**
+    ///
+    /// The five decisions the placement rests on, asked of a registered `StoreCatalogProvider`
+    /// with no data source and no network behind it:
+    ///
+    /// * a def naming a live store source homes there, and one naming nothing homes in the
+    ///   workspace — including a def whose source never connected, which is the honest fallback;
+    /// * a bare project name **resolves** to the full address, so every programmatic lookup
+    ///   finds a table wherever it was put;
+    /// * the name is `def_backed`, which is what keeps a view over it checkable, while
+    ///   `in_workspace` still answers false — the `__snap_` namespace is not widened;
+    /// * deregistering the catalog takes its tables with it, which is what makes a Forget
+    ///   structural.
+    #[tokio::test]
+    async fn a_store_catalog_holds_the_defs_that_read_through_it() {
+        let ctx = test_context(&BTreeMap::new());
+        ctx.register_catalog("lake", Arc::new(StoreCatalogProvider::new("lake".into())));
+
+        assert_eq!(
+            def_home(&ctx, Some("lake")),
+            "lake",
+            "a def homes in its source"
+        );
+        assert_eq!(
+            def_home(&ctx, None),
+            CATALOG,
+            "a local def homes in the workspace"
+        );
+        assert_eq!(
+            def_home(&ctx, Some("never_connected")),
+            CATALOG,
+            "and so does one whose data source is not live"
+        );
+
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let table = Arc::new(MemTable::try_new(Arc::clone(&schema), vec![vec![]]).unwrap());
+        replace_table(&ctx, "lake", "regions", table).expect("the store schema takes it");
+
+        assert_eq!(
+            def_ref(&ctx, "regions"),
+            TableReference::full("lake", SCHEMA, "regions"),
+            "a bare project name resolves to where the def was placed"
+        );
+        assert_eq!(
+            def_ref(&ctx, "absent"),
+            TableReference::bare("absent"),
+            "and a name nothing holds stays bare, so the caller's own error is the one read"
+        );
+
+        let at = TableReference::full("lake", SCHEMA, "regions");
+        assert!(
+            def_backed(&ctx, &at),
+            "a bucket table is one of the project's rows"
+        );
+        assert!(
+            !in_workspace(&at),
+            "but it is not in the workspace's namespace, which is what reserves '__snap_'"
+        );
+
+        assert!(ctx.table(at.clone()).await.is_ok(), "and it resolves");
+        deregister_catalog(&ctx, "lake").expect("the catalog was registered");
+        assert!(
+            ctx.table(at).await.is_err(),
+            "forgetting the data source takes its tables with it, rather than one deregistration \
+             per table that a failure could half-finish"
+        );
+    }
+
     /// A user's own `datafusion.catalog.information_schema = false` still wins: Strata's
     /// default is a default, not an owned key.
     #[tokio::test]
@@ -532,7 +826,8 @@ mod tests {
         ]));
         let replacement = Arc::new(MemTable::try_new(Arc::clone(&wider), vec![vec![]]).unwrap());
 
-        let displaced = replace_table(&ctx, "events", replacement).expect("the workspace schema");
+        let displaced =
+            replace_table(&ctx, CATALOG, "events", replacement).expect("the workspace schema");
 
         assert!(
             displaced.is_some(),

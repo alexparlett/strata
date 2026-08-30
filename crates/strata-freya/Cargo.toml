@@ -51,6 +51,7 @@ rfd = "0.17"
 [dev-dependencies]
 freya-testing = { workspace = true }
 datafusion = "54"
+async-trait = "0.1"
 
 [lints]
 workspace = true

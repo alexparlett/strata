@@ -161,8 +161,9 @@ jobs:
       - name: cargo test
         run: |
           cargo test --workspace --locked -- \
-            --skip a_table_over_a_connection_reads_through_the_object_store \
-            --skip a_database_connection_registers_a_federated_catalog
+            --skip a_table_over_a_source_reads_through_the_object_store \
+            --skip a_bucket_table_lives_in_its_data_sources_catalog \
+            --skip a_database_source_registers_a_federated_catalog
 
       # The engine with **no data sources compiled in** — the proof that a shipped source
       # reaches the engine only through the public registration an embedder calls, and that

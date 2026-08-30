@@ -78,7 +78,7 @@ impl ProfileTarget {
         match self {
             ProfileTarget::Workspace { name, .. } => name.clone(),
             ProfileTarget::Remote { relation, .. } => qualified([
-                relation.connection.as_str(),
+                relation.source.as_str(),
                 relation.schema.as_str(),
                 relation.relation.as_str(),
             ]),
@@ -186,7 +186,7 @@ mod tests {
         ProfileTarget::Remote {
             kind: CatalogKind::Table,
             relation: RemoteRef {
-                connection: "pg".into(),
+                source: "pg".into(),
                 schema: "public".into(),
                 relation: relation.into(),
             },
@@ -207,7 +207,7 @@ mod tests {
             )],
             format: SourceFormat::from_name("csv"),
             partitions: Vec::new(),
-            connection: None,
+            source: None,
             internal: false,
         }))
         .expect("register");

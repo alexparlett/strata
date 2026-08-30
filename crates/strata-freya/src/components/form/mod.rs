@@ -3,6 +3,7 @@
 //!
 //! ```text
 //! Form                 the container: sets the register once, separates the rows
+//!   Section            optional: a heading over the rows that follow it
 //!   Row                a label, its explanation, and where the control goes
 //!     <control>        just a child — ValueField, NumberField, PathField, Switch,
 //!                      SegmentedToggle, …
@@ -46,7 +47,7 @@ use crate::components::metrics::{SP_1, SP_3, SP_4, SP_5, SP_6};
 pub use field::{NumberField, PathField, ValueField, FIELD_HEIGHT};
 pub use options::{Choice, Control, Group, Make, OptionList, TextField};
 pub use reveal::{Reveal, RevealScroll};
-pub use row::{Note, Row};
+pub use row::{Note, Row, Section};
 
 define_theme!(
     %[no_ext]

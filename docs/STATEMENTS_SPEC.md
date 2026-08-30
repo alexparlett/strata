@@ -57,10 +57,10 @@ with the same dialect resolution and the same `recursion_limit`.
 
 **Between the parse and the classification, the statement's bare reads resolve** (`sql::qualify`,
 DB-09): a name the workspace does not hold and exactly one connected database does is rewritten to
-its three-part form, so a `SELECT * FROM orders` over a connection is judged, planned and recorded
+its three-part form, so a `SELECT * FROM orders` over a data source is judged, planned and recorded
 as the `pg.public.orders` it reaches. It sits inside the pipeline — in front of the classification
 — because a bare `__snap_3` the workspace does not hold is not a reserved name once it resolves
-into a database connection, where the prefix reserves nothing, and a gate that judged the
+into a database source, where the prefix reserves nothing, and a gate that judged the
 unresolved statement would refuse a read the run then performs. Create and drop targets are never
 rewritten; the full rule, and why it is a statement pass rather than a current-database setting, is
 `docs/CONNECTIONS_SPEC.md` § *Unqualified names*.
@@ -207,7 +207,7 @@ pub enum Admit { Allow, Deny(DenyCode) }   // codes, never prose
 any locality?); `permit` is **fine** and runs at the arm, once the target is resolved. Its one
 entry is `StmtCtx::require_target(who, kind, &target)`: the grant family is derived from the kind
 and the locality from the target, so an arm names neither and cannot check the wrong one, and the
-connection's own facts (backend kind, the name it is held under) are gathered there rather than
+source's own facts (backend kind, the name it is held under) are gathered there rather than
 passed in. A `Target::Nowhere` permits — there is no locality to judge, and the arm refuses it in
 its own words on the next line; refusing there instead would tell a caller they lack a grant when
 what they actually named is a catalog that does not exist.
@@ -234,7 +234,7 @@ whoever is deciding.
 **The shipped provider is data.** `CapabilityPolicyProvider` answers from a `Capability`: a bitset
 of `Grant::{Read, Write(Locality), Ddl(Locality), ViewDdl, CopyOut, Session, Functions}` plus a
 `RemoteScope::{All, Only([Kind|Connection])}` refining the remote half — so "this MCP may write the
-sqlite connections, never the RDS postgres" is one expression. `Locality::{Local, Remote}` is shared
+sqlite sources, never the RDS postgres" is one expression. `Locality::{Local, Remote}` is shared
 with the Target axis, so the fine check is derived from the resolved target and an arm never names
 a scope.
 
@@ -243,8 +243,8 @@ agent. **A caller's capability narrows the provider's and never widens it**, whi
 engine serve a full editor and a read-only agent while an engine built read-only — the headless
 host's — stays read-only whatever a caller asks for. The ceiling and the caller are asked
 *separately* rather than merged into one capability: a `RemoteScope` has no lossless intersection,
-since `Kind("postgres")` and `Connection("postgres://acme/orders")` can denote the same connection
-while being different selectors, so merging the selector sets would refuse a connection both
+since `Kind("postgres")` and `Connection("postgres://acme/orders")` can denote the same source
+while being different selectors, so merging the selector sets would refuse a source both
 operands reach. `EngineBuilder::with_policy` is the one slot;
 unset it is `CapabilityPolicyProvider::new(Capability::full())`, so an engine nobody restricted
 refuses nothing and restriction is explicit data.
@@ -280,10 +280,10 @@ not something the parsed statement says, and the arm refuses a workspace target 
   so smuggled nested DDL still dies at the second gate — but it can only refuse a class of plan,
   not name the surface that owns a capability.
 
-**Names inside a database connection's catalog** (DB-03, relaxed by DB-10 and DB-11). Since the DB
+**Names inside a database source's catalog** (DB-03, relaxed by DB-10 and DB-11). Since the DB
 workstream the session holds more than one catalog: the workspace's `strata`, plus one per live
-database connection. A statement may now **change** a name qualified into one of those, on a
-connection whose `read_only` is off (`docs/CONNECTIONS_SPEC.md`), and the split is by **mechanism**:
+database source. A statement may now **change** a name qualified into one of those, on a
+source whose `read_only` is off (`docs/CONNECTIONS_SPEC.md`), and the split is by **mechanism**:
 `INSERT` and CTAS are what DataFusion can plan, so they are planned and driven (§6.8); the rest are
 what only the server can run, so they are dispatched as text (§6.9). The choke point in front of
 every arm is **one** answer, `statements::resolve_target`:
@@ -291,21 +291,34 @@ every arm is **one** answer, `statements::resolve_target`:
 ```rust
 pub enum Target {
     Workspace { name: String },      // the one schema, under the bare name registration takes
-    Remote(Remote),                  // a relation inside a live connection's catalog
+    Store(Stored),                   // a table in a store data source's catalog — file-backed
+    Remote(Remote),                  // a relation inside a live database source's catalog
     Nowhere { qualifier: String },   // a qualifier that resolves to no catalog at all
 }
-pub struct Remote { pub connection: String, pub reference: TableReference }
+pub struct Stored { pub source: String, pub name: String }
+pub struct Remote { pub source: String, pub reference: TableReference }
 ```
 
 Total, so an arm matches wildcard-free and a case it has no answer for is a compile error rather
-than a silent fallthrough. An arm with no remote branch asks `target.workspace(what)`, which is the
-same three-way match with the other two answers as its refusals — the one place either sentence is
-worded. `resolve_target` is a **pure function of the session**: the editor asks it of a statement it
-is only judging, where no dispatch state exists, so the connection's own gates (is it writable, may
+than a silent fallthrough — and that totality is load-bearing rather than tidy. `Store` was first
+folded into `Workspace`, on the argument that a store catalog is placement rather than a
+namespace. True, and the wrong conclusion: `Workspace { name }` hands an arm a **bare** name, the
+arms resolve bare names in the workspace catalog only, and `DROP TABLE regions` answered *"Table
+'regions' does not exist"* about a bucket table that was right there. Restoring the arm broke
+compilation at four match sites, each of which had been silently inheriting the workspace's
+answer.
+
+An arm that acts on the workspace and nothing else asks `target.workspace(what)`, whose other
+three answers are its refusals — a store catalog's in its own words (`in_store`), because a
+bucket does not describe its own relations the way a server does and the fix is a LOCATION rather
+than a server. An arm that manages a **def** asks `target.def(what)` instead, which accepts both
+placements: `lake.public.regions` and a bare `regions` are one project row, and the arm resolves
+it through `providers::def_ref` rather than being handed a catalog. `resolve_target` is a **pure function of the session**: the editor asks it of a statement it
+is only judging, where no dispatch state exists, so the source's own gates (is it writable, may
 this caller reach it) are asked of the resolved answer rather than folded into it.
 
-`Remote.connection` is the catalog name in the spelling it was **registered** under, because that
-is what the connection is called everywhere else the user meets it. `Remote.reference` is the
+`Remote.source` is the catalog name in the spelling it was **registered** under, because that
+is what the data source is called everywhere else the user meets it. `Remote.reference` is the
 resolved `TableReference` itself, and that is a rule rather than a convenience: **a rendered
 spelling is never a lookup key.** `PlanDeps::remote` records `TableScan::table_name.to_string()` —
 every part bare — while the address a message prints quotes the parts that need it, so a remote
@@ -330,8 +343,8 @@ form is planned never reaches the splice, and the editor's "do not judge this" p
 disagree about which statements the server owns.
 
 **What the engine hands every arm** is one value, `StmtCtx` — the session, the buffer the statement
-was parsed from, the project root, the internal-table set, the object-store connections, the live
-database connections, the `SET` overlay, the function catalog, the engine's `datafusion.*` baseline
+was parsed from, the project root, the internal-table set, the object-store sources, the live
+database sources, the `SET` overlay, the function catalog, the engine's `datafusion.*` baseline
 and the policy provider. Every member is a copy, because the arms run inside the task
 `Engine::bookkeep` spawned and that task must not hold the engine. It makes the arm contract
 uniform:
@@ -352,39 +365,39 @@ enum can say, and the editor's completion lead is pinned by
 `policy_and_completion_agree_on_statement_leads`, whose lead → canonical-tail table panics on a
 lead with no entry.
 
-> `The database connection 'pg' is read-only, so 'pg.public.loaded' cannot be written. Turn off
-> 'Read only' in the connection's settings`
+> `The data source 'pg' is read-only, so 'pg.public.loaded' cannot be written. Turn off
+> 'Read only' in the data source's settings`
 
-> `'pg.public.orders' is in the database connection 'pg', which describes its own relations.
+> `'pg.public.orders' is in the data source 'pg', which describes its own relations.
 > Tables cannot be registered inside one`
 
 The first names the setting, because the user is one toggle away and a sentence that does not say
 which is no use; it is minted once and every arm reads it. The second is now about one statement
 rather than about the catalog — once every other statement gained a remote branch, registering a
-table externally is the only thing left that a database connection cannot take, and it says so. A
+table externally is the only thing left that a database source cannot take, and it says so. A
 qualifier that resolves to **no** catalog keeps the older wording ("Strata has one schema,
 'public'. Tables cannot be created elsewhere"), because that is a different fact and there is no
-connection to name. All of it comes off the session's own catalog list, which holds a database's
-catalog exactly while its connection is live — the same window in which the user can address it at
+source to name. All of it comes off the session's own catalog list, which holds a database's
+catalog exactly while its source is live — the same window in which the user can address it at
 all.
 
 The sixteen kinds, and what each answers for a remote-qualified name:
 
 | Kind | Remote-qualified target |
 |---|---|
-| `Ctas` | **runs** on a writable connection: the server table is created from the input's schema and filled, and a failed fill — or a cancel — drops it again. Read-only refuses by name; `OR REPLACE` is refused where the relation exists, since it would drop a server table, and creates where it does not |
-| `Insert` | **runs** on a writable connection, appending in one transaction — reached **before** `Catalog::is_internal`, which is not a question to ask about a relation whose data Strata could never own. Read-only refuses by name; `INSERT OVERWRITE` is refused as it is locally |
+| `Ctas` | **runs** on a writable source: the server table is created from the input's schema and filled, and a failed fill — or a cancel — drops it again. Read-only refuses by name; `OR REPLACE` is refused where the relation exists, since it would drop a server table, and creates where it does not |
+| `Insert` | **runs** on a writable source, appending in one transaction — reached **before** `Catalog::is_internal`, which is not a question to ask about a relation whose data Strata could never own. Read-only refuses by name; `INSERT OVERWRITE` is refused as it is locally |
 | `CreateTable` (column list) | **runs** on the server, dispatched as text, so its types are the server's own vocabulary (`jsonb`, `serial`) and the server judges them |
 | `CreateView` | **runs** on the server, `MATERIALIZED` included — the one place that clause is accepted, the workspace having no such concept |
 | `DropTable`, `DropView` | **run** on the server. Existence is the server's question (`IF EXISTS` travels in the statement), and the workspace views left reading the relation are named without cascading |
 | `Update`, `Delete` | **run** on the server and report its own affected-row count. A **workspace** target is refused in its own words, since a project table is files that cannot be changed in place |
-| `CreateExternalTable` | refused, naming the connection. A `postgres://…` `LOCATION` is a separate rule: it splits like any remote location and lands on the membership refusal, naming a connection the project does not have |
+| `CreateExternalTable` | refused, naming the source. A `postgres://…` `LOCATION` is a separate rule: it splits like any remote location and lands on the membership refusal, naming a source the project does not have |
 | `Copy` | **runs.** Its target is a path, and a remote relation in its *source* is an ordinary read |
 | `Prepare`, `Execute`, `Deallocate` | **run.** A prepared body over a remote relation is a query |
 | `Set`, `Reset` | unaffected — they name no relation |
 | `CreateFunction`, `DropFunction` | refused by **DataFusion**, while planning: `Qualified functions are not supported` (`datafusion-sql`'s `statement.rs`). One refusal in one place; Strata adds no second fence, since that one already names what is wrong |
 
-Reading is never refused, and that is the point of the connection: a plain `SELECT`, a
+Reading is never refused, and that is the point of the source: a plain `SELECT`, a
 cross-source join, an `EXPLAIN` and a `PREPARE`d body all resolve `pg.public.orders` normally.
 `Capability::read_only()` is untouched by any of it — the agent surface refuses every one of these
 statements exactly as it did, `UPDATE` and `DELETE` with the `Unsupported` wording they already
@@ -395,14 +408,14 @@ which already exists resolves exactly as a read does, so `INSERT INTO orders`,
 `DROP TABLE orders`, `UPDATE orders` and `DELETE FROM orders` all dispatch to `pg.public.orders`
 the way `SELECT * FROM orders` reads it, and whatever refuses one is the arm's — one funnel,
 whether or not the qualifier was typed.
-Three things make that safe with no second gate in the resolution pass: the connection is
+Three things make that safe with no second gate in the resolution pass: the source is
 read-only by default and someone opted this one in, an ambiguous name still refuses by name so a
 write never picks between two servers, and the arm is reached with a qualified name either way.
 Until DB-10 the pass refused a bare remote write target itself, because "not found" is the wrong
 answer about a relation the same session will happily read; that was what the rule looked like
 while writing to a database was impossible at all. A **create** target is the permanent exception —
 it names something that does not exist yet, so `CREATE TABLE orders` goes on making a workspace
-table while a connection has an `orders`.
+table while a data source has an `orders`.
 
 **Reserved names.** **Any** statement typed into the editor that references a `__snap_`-prefixed
 table **in the workspace catalog** — or names one as its target — refuses with
@@ -429,7 +442,7 @@ is refused by this.
 
 *Scoped to the workspace catalog, and this is the DB workstream's correction.* The rule was once
 the prefix alone, on any part of any name — which was exactly right while `strata` was the only
-catalog there was. A database connection can perfectly well hold a relation somebody called
+catalog there was. A database source can perfectly well hold a relation somebody called
 `__snap_3`, and there the name reserves nothing, hides nothing and collides with nothing: it is
 not the namespace a Run mints into, the workspace schema provider is not what enumerates it, and
 reading it hands back that server's rows rather than another tab's result. So the predicate is
@@ -492,14 +505,14 @@ third:
   a user's `false` still wins; `ENGINE_KEYS` names `true` so a removed override lands back on it) —
   which is why `SHOW TABLES` works on a fresh project. The prefix predicate is `is_snapshot_name`,
   defined next to the function that mints the names, so the hiding rule and the naming rule cannot
-  drift. A **database connection's** schema provider deliberately has no such filter: the
+  drift. A **database source's** schema provider deliberately has no such filter: the
   namespace is this catalog's, so a remote relation named `__snap_x` is an ordinary table — the
   same scoping the refusal applies through `is_snapshot_ref`.
 
 Since the DB workstream this is the **workspace** catalog, and the session holds N of them: one
-per live database connection, each with as many schemas as its server has. The catalog *list* is
+per live database source, each with as many schemas as its server has. The catalog *list* is
 `StrataCatalogList` — DataFusion's, plus the `deregister` its `CatalogProviderList` has no method
-for, without which a forgotten connection would answer for the life of the window. One-catalog-
+for, without which a forgotten source would answer for the life of the window. One-catalog-
 one-schema is a statement about the workspace, whose flat bare-name namespace is the deepest
 assumption in the app, and never about the session.
 
@@ -522,10 +535,10 @@ whose data Strata owns** — `TableOrigin::Internal` is a flag on `TableDef`, ne
 thing.
 
 The target is resolved **before** the project folder is looked at, because since DB-10 a CTAS whose
-target is qualified into a writable database connection needs no project folder: it branches to
+target is qualified into a writable database source needs no project folder: it branches to
 `db::create_table_as` and everything below is the workspace's path
 (`docs/CONNECTIONS_SPEC.md` for the remote half). The duplicate-column check is in front of both.
-A workspace CTAS whose *query* reads a connection executes that read federated exactly as a
+A workspace CTAS whose *query* reads a source executes that read federated exactly as a
 typed query would — the input is executed to a stream, and only its scans reach §6.8's rules.
 
 The parsed statement goes to `SessionState::statement_to_plan`, which executes nothing and buys
@@ -618,7 +631,7 @@ local arm executes the input (`sink::insert_stream` — the same projection coll
 decides whether anything is unparsed is where the rows are read from) and hands the stream to the
 table store's `append` (the EA-08 seam); under the default store that is the single LZ4-frame IPC
 file the sink has always appended, made visible by rename once the unit is whole. The remote arm
-drives the input through the connection's own sink (`sink::append_rows`). Re-dispatching the text
+drives the input through the source's own sink (`sink::append_rows`). Re-dispatching the text
 would gate one value and execute another; handing the **node** to a planner breaks it the other
 way — see §6.8. The provider registration serves is read through, never written through: the arm
 is the only writer.
@@ -766,7 +779,7 @@ def, and the only thing the DB workstream had to change is how its dependencies 
 (DB-03). `plan_deps` used to insert `scan.table_name.table()`, the bare component with catalog and
 schema discarded, which made `pg.public.orders` indistinguishable from a workspace table called
 `orders`: dropping that table named a view which never read it, the view's own missing-dependency
-check cried wolf over a relation the store has no row for, and a forget of the connection matched
+check cried wolf over a relation the store has no row for, and a forget of the source matched
 nothing anywhere. So `PlanDeps` has **two** lists — `tables`, workspace scans by bare name, and
 `remote`, non-workspace scans qualified whole — split by the same `providers::in_workspace` the
 statement gate uses. `ViewMeta` and the store's `ViewInfo` carry the split through
@@ -779,9 +792,9 @@ our side can observe a server-side rename, the view goes on answering from the p
 and the first Strata hears of it is the next registration pass failing to re-plan. DataFusion's
 own answer there (`table 'pg.public.orders' not found`) reads like a bug in the SQL, so
 `catalog::view_error` — the view funnel's counterpart to `register_error`, one diagnosis in front
-of `readable`'s unwrapping — rewrites it to *"'pg.public.orders' is not in the database connection
+of `readable`'s unwrapping — rewrites it to *"'pg.public.orders' is not in the data source
 'pg'. Refresh the catalog to re-read the database"*. The staleness that sentence reports is
-bounded by the last connect, which is why the fix it names is a refresh: a connection's relation
+bounded by the last connect, which is why the fix it names is a refresh: a source's relation
 list is its connect-time enumeration, and a ↻ re-runs the pass, which re-connects.
 
 Completion (ED-11): `CREATE VIEW` and `CREATE OR REPLACE VIEW` are statement leads; the view's
@@ -800,7 +813,7 @@ once — planning a `COPY` executes nothing — and that one value is what the g
 what is then driven, so **the plan that was judged is the plan that runs**, the rule the `INSERT`
 arm already keeps. Driving it is `ctx.sql` minus the re-parse: `execute_logical_plan` special-cases
 `Ddl` and `Statement` and hands everything else, `LogicalPlan::Copy` included, to exactly that.
-A source inside a database connection needs one more thing of that plan — §6.8.
+A source inside a database source needs one more thing of that plan — §6.8.
 
 **One write path serves both.** The plan's five values become a `statements::copy_job::CopyJob` —
 input, target, file type, options, partition columns — and `copy_job::run_copy` gates it and drives
@@ -1072,7 +1085,7 @@ clause sqlparser learns later is a compile error rather than a promise quietly b
 | Clause | Answer |
 |---|---|
 | `STORED AS` | any word the engine has a **registered format** for — the shipped four (`PARQUET` / `CSV` / `JSON` / `ARROW`) plus whatever an embedder added with `EngineBuilder::with_format`. Anything else — `AVRO`, and `NDJSON`, which names a *layout* of JSON rather than a format — is refused **by name**, listing the words that would have worked, never falling through onto a reader (P4-11) and never minting an extension def a registration would then have to refuse |
-| `LOCATION` | a path takes the local rule (`project::relativize`, stored portable inside the project folder); a URL is a **connection** (below) |
+| `LOCATION` | a path takes the local rule (`project::relativize`, stored portable inside the project folder); a URL is a **data source** (below) |
 | `PARTITIONED BY` | the def's partition columns, typed. Bare names are `Utf8` — what DataFusion infers and what Configure defaults to, with the same cast warning behind it. A name repeated in the list is refused, because Arrow's `Schema` permits duplicate fields: the table would register carrying the column twice and every read would resolve the second onto the first |
 | a column list | refused: "Schemas are inferred. Remove the column list" — unless every entry is a partition column's *definition*, which is how a partition states its type (`VARCHAR`, `INT`, `BIGINT`, `DATE`, the four Configure offers, so a def cannot carry a type its picker can't show) |
 | `TEMPORARY` · `UNBOUNDED` · `WITH ORDER` · constraints | refused by name — a `TableDef` has no field for any of them, and a constraint is refused for `CREATE TABLE`'s reason (DataFusion does not enforce one) |
@@ -1086,16 +1099,16 @@ which for a COPY matches no field and for a registration is a stored column name
 equal a `key=` folder segment.
 
 **`OPTIONS` is two vocabularies wearing one syntax, and that is where this statement collides with
-connections.** In `datafusion-cli` the same list carries the reader's settings
+data sources.** In `datafusion-cli` the same list carries the reader's settings
 (`format.has_header`) *and* the object store's (`aws.access_key_id`, `aws.region`, `aws.endpoint`,
 client timeouts). Strata keeps those in two different files on purpose — the reader's are the table
-def's, and the store's belong to a `ConnectionDef`, which holds a *reference* to credentials and
+def's, and the store's belong to a `SourceDef`, which holds a *reference* to credentials and
 never a credential — so the list is split by namespace:
 
 | Key | Answer |
 |---|---|
 | a `format.` key the format's own reader takes | read onto the def by that format's `FormatProvider::read`. For the first-party four the key set **is** the def: every `CsvRead` / `JsonRead` field has a DataFusion name and nothing else does (`docs/IMPORT_OPTIONS.md` is the same table from the other side). A registered format keeps its own keys verbatim on `SourceFormat::Extension`, its reader being the only thing that knows what they mean |
-| a store namespace (`aws.`, `s3.`, `gcp.`, `google.`, `azure.`) or a client option (`strata_arrow::client::CLIENT_KEYS`, shared rather than re-listed) | refused toward Connections, **on the key alone** — the value is never read and never echoed, because it may be a secret and a refusal is a sentence the user then reads and copies. (A refused statement is also never recorded: history keeps successful runs only, so a pasted key does not outlive the buffer) |
+| a store namespace (`aws.`, `s3.`, `gcp.`, `google.`, `azure.`) or a client option (`strata_arrow::client::CLIENT_KEYS`, shared rather than re-listed) | refused toward Sources, **on the key alone** — the value is never read and never echoed, because it may be a secret and a refusal is a sentence the user then reads and copies. (A refused statement is also never recorded: history keeps successful runs only, so a pasted key does not outlive the buffer) |
 | anything else | refused **by name** by the format that was asked for, which is what keeps the mechanism total rather than a list of the keys we thought of — a CSV option on a parquet table lands here, naming the format, which is the state `SourceFormat` exists to make unwritable |
 
 The three CSV options DataFusion has and the def deliberately lacks (`format.null_regex`,
@@ -1109,31 +1122,31 @@ for this third surface — rather than through DataFusion's `u8` config parse, w
 string as the byte *value* (so `'format.delimiter' '9'` would silently mean tab) and has no escape
 for one at all.
 
-**A `LOCATION` with a scheme names a connection, and the split is `resolve_source` read backwards**
+**A `LOCATION` with a scheme names a data source, and the split is `resolve_source` read backwards**
 (`project::split_remote`, asserted round-trip). `s3://acme-lake/events/2024/` becomes
-`connection: Some("s3://acme-lake")` plus the bucket-relative source `events/2024/`, which is the
-pair every other path already holds. The URL has to be a connection **this project has**, refused
+`source: Some("acme_lake")` plus the bucket-relative path `events/2024/`, which is the
+pair every other path already holds. The URL has to be a data source **this project has**, refused
 otherwise on the terms Configure's Save is blocked on:
 
-> 's3://acme-lake' is not a connection in this project. Add it in Connections
+> 's3://acme-lake' is not a data source in this project. Add it in Sources
 
-A statement cannot mint one: a connection carries a provider, a region and where its credentials
+A statement cannot mint one: a data source carries a kind, a region and where its credentials
 come from, none of which a `CREATE EXTERNAL TABLE` says and one of which it must never carry. And
 refusing here is what keeps DataFusion's "No suitable object store found" — the message the
-connections-first phase exists to prevent — off a table row. Membership is
-the engine's `Connections` set, a set of URLs noted by `connect` **whatever the outcome** and
+sources-first phase exists to prevent — off a table row. Membership is
+the engine's `SourceDefs` map, noted by `connect` **whatever the outcome** and
 removed by
 `disconnect`: the same shape as the internal-name set, and for the same reason it holds names and
-nothing else. Whether a connection resolved a credential today is not whether the project has it,
+nothing else. Whether a source resolved a credential today is not whether the project has it,
 and asking DataFusion's object-store registry instead would have answered *no* for exactly the
-connections whose row the user is about to go and fix.
+sources whose row the user is about to go and fix.
 
 It is a `resolve`, not a `contains`, in both halves of that word. The match falls back to
 **case-insensitive**, because the registry is: a URL reaches DataFusion through `Url::parse`, which
 lower-cases the scheme and the host, so `S3://acme-lake/events/` names a store that is registered
-and a byte-for-byte test would refuse it. And the answer is the **connection's own spelling**,
+and a byte-for-byte test would refuse it. And the answer is the **source's own spelling**,
 which is what the def then stores — that string is what the Configure picker, `resolve_source` and
-the Forget confirm all address the connection by, so the def cannot end up holding the user's
+the Forget confirm all address the source by, so the def cannot end up holding the user's
 casing of a URL nothing else matches.
 
 This is *not* the Configure window's LOCATION toggle read differently. That toggle is an explicit
@@ -1158,13 +1171,13 @@ terminated and unterminated literals both), from each format's own `reader_optio
 table its `read` consumes projected — format-aware, empty for Parquet/Arrow/unwritten, for a
 format that offers none, and for a word nothing is registered for (which is what the arm's own
 by-name refusal means) — with `Bool` and `Enum` value offers. Store-namespace and client keys are never offered: the arm refuses them
-toward Connections, and absence from the offer is the same policy. `LOCATION '…'` stays silent —
+toward Sources, and absence from the offer is the same policy. `LOCATION '…'` stays silent —
 a path, the user's filesystem.
 
 ### 6.8 Writing over a federated read
 
 Three of the statements above put a node that **writes** at the root of a plan that may read
-nothing but a database connection: a CTAS spooling a remote query (§6.1), an `INSERT` from one
+nothing but a database source: a CTAS spooling a remote query (§6.1), an `INSERT` from one
 (§6.2), and a typed `COPY … TO` (§6.4). `datafusion-federation` federates any plan whose every scan
 belongs to one source, root node included; the federated node then writes itself down as SQL to
 execute, and `plan_to_sql` has no arm for a write. What the user got was several hundred characters
@@ -1202,10 +1215,10 @@ renders as a derived table whose outer references still name the scan.
 
 `CREATE VIEW pg.public.active AS …`, `CREATE MATERIALIZED VIEW`, `DROP VIEW`, `DROP TABLE`, a
 column-list `CREATE TABLE pg.public.t (payload jsonb, …)`, `UPDATE` and `DELETE` — all against a
-relation inside a database connection, all executed **on the server** (DB-11). DataFusion cannot
+relation inside a database source, all executed **on the server** (DB-11). DataFusion cannot
 plan any of them against a remote catalog, so the mechanism is dispatch rather than planning, and
 that is the whole of the split with §6.8: what DataFusion can plan is planned, what only the server
-can run is sent to it. The same opt-in gates both — a read-only connection refuses with the toggle
+can run is sent to it. The same opt-in gates both — a read-only source refuses with the toggle
 named.
 
 **The statement the server runs is the statement the user typed**, with the catalog qualifier cut
@@ -1223,15 +1236,15 @@ drops nothing.
 
 **A target may never have been written.** DB-09's resolution rewrites a bare name into a three-part
 one before anything plans, and a target addressing an existing relation resolves like a read — so
-`DROP TABLE orders` is this section's when only a connection has an `orders`. Such a name has no
+`DROP TABLE orders` is this section's when only a data source has an `orders`. Such a name has no
 three-part bytes to cut: its parts share the one span the bare token occupied, so the token is
 replaced by the server's spelling of `schema.relation`, quoted unconditionally as every identifier
 Strata composes is. A span that cannot be trusted — the empty sentinel, or bytes that do not match
 the identifier they claim to be — is a **refusal**, never a guess, because the guess would be a
 different statement sent to a server. A **create** target is still never resolved (§4).
 
-**Two gates in front of the dispatch.** The connection must accept writes, and every relation the
-statement names must be one of that connection's, refused **by name** otherwise: a server-side view
+**Two gates in front of the dispatch.** The source must accept writes, and every relation the
+statement names must be one of that source's, refused **by name** otherwise: a server-side view
 cannot read across sources, and an unqualified name would resolve by the server's search path,
 which is a different answer from the one the editor gives the same spelling. The names are
 collected off the parsed statement — sqlparser's own relation visitor, plus the three targets it
@@ -1248,7 +1261,7 @@ on a statement Run performs, inverting §4's contract in the direction that matt
 editor feedback on names the server owns anyway, which is the same trade the dispatch itself makes.
 
 **What each reports.** The DDL arms answer in the server's terms — `View 'public.active' created on
-'pg'` — and carry `StoreEffect::RemoteRelationsChanged`, after re-enumerating the connection: that
+'pg'` — and carry `StoreEffect::RemoteRelationsChanged`, after re-enumerating the source: that
 is what puts a new relation in the tree with no ↻ and what drops the cached provider of one a
 `DROP` removed, so a re-query gets the reconciliation's sentence rather than rows. A remote `DROP`
 names the workspace views left reading the relation, in the table drop's own words, off the

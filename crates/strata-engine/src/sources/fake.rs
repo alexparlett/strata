@@ -22,11 +22,11 @@ use datafusion::sql::unparser::dialect::{DefaultDialect, Dialect};
 use datafusion::sql::TableReference;
 use futures::TryStreamExt;
 
-use strata_model::{ConnectionDef, Provider, SourceDef};
+use strata_model::SourceDef;
 
 use super::source::{
-    ConnectionKey, DataSource, Field, Listing, Located, Relation, SourceCatalog, SourceKind,
-    SourceMode, Sourced,
+    DataSource, Field, Listing, Located, Relation, SourceCatalog, SourceKind, SourceMode,
+    SourceSetting, Sourced, When,
 };
 use super::sql::{federated, SQLExecutor, SqlSpec};
 use crate::secrets::SecretProvider;
@@ -41,20 +41,19 @@ pub(crate) fn fake_schema() -> SchemaRef {
 }
 
 /// A def for `catalog`, served by `S` at an address of its own.
-pub(crate) fn fake_def<S: SourceKind>(catalog: &str, address: &str) -> ConnectionDef {
-    ConnectionDef {
-        address: address.to_string(),
+pub(crate) fn fake_def<S: SourceKind>(catalog: &str, address: &str) -> SourceDef {
+    SourceDef {
+        config: [("address".to_string(), address.to_string())]
+            .into_iter()
+            .collect(),
+        kind: S::NAME.to_string(),
         name: catalog.to_string(),
-        provider: Provider::Source(SourceDef {
-            kind: S::NAME.to_string(),
-            schemas: vec!["public".to_string()],
-            ..Default::default()
-        }),
-        client_config: BTreeMap::new(),
+        schemas: vec!["public".to_string()],
+        ..Default::default()
     }
 }
 
-/// What a fake connection holds: the relations it was told to have, as batches.
+/// What a fake data source holds: the relations it was told to have, as batches.
 #[derive(Debug)]
 pub(crate) struct Rows(BTreeMap<String, Vec<RecordBatch>>);
 
@@ -110,15 +109,15 @@ impl Rows {
 /// statement would need refuses through the trait's own defaults.
 #[derive(Debug, Default)]
 pub(crate) struct TestDoc {
-    /// What each address holds, so one registered value serves several connections.
-    connections: Mutex<BTreeMap<String, Arc<Rows>>>,
+    /// What each address holds, so one registered value serves several data sources.
+    sources: Mutex<BTreeMap<String, Arc<Rows>>>,
 }
 
 impl TestDoc {
     /// A source that answers `address` with `relations`.
     pub(crate) fn holding(address: &str, relations: &[&str]) -> Self {
         let held = Self::default();
-        held.connections
+        held.sources
             .lock()
             .unwrap()
             .insert(address.to_string(), Arc::new(Rows::of(relations)));
@@ -126,7 +125,7 @@ impl TestDoc {
     }
 
     fn rows(&self, address: &str) -> Result<Arc<Rows>, String> {
-        self.connections
+        self.sources
             .lock()
             .unwrap()
             .get(address.trim())
@@ -142,29 +141,86 @@ impl SourceKind for TestDoc {
     const MODE: SourceMode = SourceMode::Catalog;
 }
 
-/// One key, so a test has something to assert a declaration reaches a surface with.
-const DOC_KEYS: &[ConnectionKey] = &[ConnectionKey {
-    key: "collection_prefix",
-    label: "PREFIX",
+/// A declaration exercising every facet a form is drawn from: an address, two groups, a default,
+/// a conditional key and a required one — so the contract body below has something to pass on and
+/// a surface has something to render.
+const DOC_SETTINGS: &[SourceSetting] = &[
+    SourceSetting {
+        key: "address",
+        label: "ADDRESS",
+        field: Field::Text,
+        group: Some("CONNECTION"),
+        required: true,
+        default: None,
+        when: None,
+        hint: Some("Where the documents are"),
+        placeholder: None,
+    },
+    SourceSetting {
+        key: "collection_prefix",
+        label: "PREFIX",
+        field: Field::Text,
+        group: Some("CONNECTION"),
+        required: false,
+        default: None,
+        when: None,
+        hint: Some("What every collection this data source reads is named under"),
+        placeholder: Some("app_"),
+    },
+    SourceSetting {
+        key: "mode",
+        label: "MODE",
+        field: Field::Choice(&["plain", "sharded"]),
+        group: Some("SHARDING"),
+        required: false,
+        default: Some("plain"),
+        when: None,
+        hint: None,
+        placeholder: None,
+    },
+    SourceSetting {
+        key: "shard_key",
+        label: "SHARD KEY",
+        field: Field::Text,
+        group: Some("SHARDING"),
+        required: true,
+        default: None,
+        when: Some(When {
+            key: "mode",
+            values: &["sharded"],
+        }),
+        hint: None,
+        placeholder: None,
+    },
+];
+
+/// The one key a source with nothing to configure still declares.
+const SQL_SETTINGS: &[SourceSetting] = &[SourceSetting {
+    key: "address",
+    label: "ADDRESS",
     field: Field::Text,
-    required: false,
+    group: None,
+    required: true,
     default: None,
+    when: None,
+    hint: None,
+    placeholder: None,
 }];
 
 #[async_trait]
 impl DataSource for TestDoc {
     async fn connect(
         &self,
-        def: &ConnectionDef,
+        def: &SourceDef,
         _secrets: Arc<dyn SecretProvider>,
     ) -> Result<Sourced, String> {
         Ok(Sourced::Catalog(Arc::new(DocCatalog(
-            self.rows(&def.address)?,
+            self.rows(def.setting("address"))?,
         ))))
     }
 
-    fn config_keys(&self) -> &'static [ConnectionKey] {
-        DOC_KEYS
+    fn settings(&self) -> &'static [SourceSetting] {
+        DOC_SETTINGS
     }
 }
 
@@ -196,13 +252,13 @@ impl SourceCatalog for DocCatalog {
 /// statement, and that statement is parsed and run here.
 #[derive(Debug, Default)]
 pub(crate) struct TestSql {
-    connections: Mutex<BTreeMap<String, Arc<Rows>>>,
+    sources: Mutex<BTreeMap<String, Arc<Rows>>>,
 }
 
 impl TestSql {
     pub(crate) fn holding(address: &str, relations: &[&str]) -> Self {
         let held = Self::default();
-        held.connections
+        held.sources
             .lock()
             .unwrap()
             .insert(address.to_string(), Arc::new(Rows::of(relations)));
@@ -219,18 +275,22 @@ impl SourceKind for TestSql {
 
 #[async_trait]
 impl DataSource for TestSql {
+    fn settings(&self) -> &'static [SourceSetting] {
+        SQL_SETTINGS
+    }
+
     async fn connect(
         &self,
-        def: &ConnectionDef,
+        def: &SourceDef,
         _secrets: Arc<dyn SecretProvider>,
     ) -> Result<Sourced, String> {
         let rows = self
-            .connections
+            .sources
             .lock()
             .unwrap()
-            .get(def.address.trim())
+            .get(def.setting("address"))
             .map(Arc::clone)
-            .ok_or_else(|| format!("no fake source at '{}'", def.address))?;
+            .ok_or_else(|| format!("no fake source at '{}'", def.setting("address")))?;
         Ok(Sourced::Catalog(Arc::new(SqlCatalog(rows))))
     }
 }
@@ -336,7 +396,7 @@ impl SQLExecutor for MemExecutor {
 mod tests {
     use super::*;
     use crate::secrets::MemSecrets;
-    use crate::sources::source::{unsupported, Sources};
+    use crate::sources::source::{unsupported, Registrants};
     use crate::statements::Remote;
     use crate::{Engine, RunTag, WsId};
 
@@ -347,9 +407,10 @@ mod tests {
     /// **The contract every source keeps**, run against each of them: connecting yields the mode
     /// the kind declared, the handle names the kind it was registered under, and what it does not
     /// implement refuses in the trait's own words rather than in an arm's.
-    async fn conforms<S: DataSource + SourceKind>(source: S, def: &ConnectionDef) {
+    async fn conforms<S: DataSource + SourceKind>(source: S, def: &SourceDef) {
         let mode = S::MODE;
         let kind = S::NAME;
+        declares_a_drawable_form(kind, source.settings());
         let connected = source.connect(def, secrets()).await.expect("a fixture");
         let catalog = match (connected, mode) {
             (Sourced::Catalog(catalog), SourceMode::Catalog) => catalog,
@@ -364,7 +425,7 @@ mod tests {
             "'{kind}' enumerated nothing to read"
         );
         let at = Remote {
-            connection: "fixture".into(),
+            source: "fixture".into(),
             reference: TableReference::full("fixture", "public", "orders"),
         };
         if let Err(why) = catalog.execute_text("SELECT 1").await {
@@ -377,20 +438,78 @@ mod tests {
         if let Err(why) = catalog.create_relation(&at, fake_schema()).await {
             assert_eq!(why, unsupported(kind, "have relations created in it"));
         }
-        if let Err(why) = catalog.writer(
+        let written = catalog.writer(
             catalog
                 .clone()
                 .table_provider(&Located {
-                    connection: "fixture".into(),
-                    identity: def.identity(),
+                    source: "fixture".into(),
+                    identity: def.named(),
                     relation: "public.orders".into(),
                 })
                 .await
                 .expect("a read provider"),
             &at,
             fake_schema(),
-        ) {
-            assert_eq!(why, unsupported(kind, "be written to"));
+        );
+        match (S::WRITABLE, written) {
+            (false, Err(why)) => assert_eq!(
+                why,
+                unsupported(kind, "be written to"),
+                "'{kind}' says it is not writable but refuses in its own words, so it has a \
+                 writer it is not admitting to"
+            ),
+            (false, Ok(_)) => panic!("'{kind}' says it is not writable and then wrote"),
+            (true, Err(why)) => assert_ne!(
+                why,
+                unsupported(kind, "be written to"),
+                "'{kind}' says it is writable and has no writer"
+            ),
+            (true, Ok(_)) => {}
+        }
+    }
+
+    /// **Every declaration a source hands over has to be one a form can draw**, which is three
+    /// things nothing else checks — because none of them shows up as a failure anywhere. The
+    /// editor simply draws a form missing a setting the source needs, or drawing one twice.
+    ///
+    /// A [`When`] naming a key that is not declared beside it hides its row **forever**: the
+    /// deciding value can never be typed, because there is no box to type it in. A duplicate key
+    /// gives one setting two rows, whose values overwrite each other. And a group interrupted by
+    /// another group's key prints its heading twice.
+    fn declares_a_drawable_form(kind: &str, keys: &[SourceSetting]) {
+        let mut seen_groups: Vec<Option<&str>> = Vec::new();
+        for declared in keys {
+            assert_eq!(
+                keys.iter()
+                    .filter(|other| other.key == declared.key)
+                    .count(),
+                1,
+                "'{kind}' declares '{}' twice",
+                declared.key
+            );
+            if seen_groups.last() != Some(&declared.group) {
+                assert!(
+                    !seen_groups.contains(&declared.group),
+                    "'{kind}' returns to the group {:?} after leaving it, so its heading is \
+                     printed twice",
+                    declared.group
+                );
+                seen_groups.push(declared.group);
+            }
+            let Some(when) = declared.when else { continue };
+            assert!(
+                keys.iter().any(|other| other.key == when.key),
+                "'{kind}' shows '{}' by '{}', which it does not declare, so the row can never \
+                 appear",
+                declared.key,
+                when.key
+            );
+            assert!(
+                !when.values.is_empty(),
+                "'{kind}' shows '{}' by no value of '{}', which is the same as never",
+                declared.key,
+                when.key
+            );
         }
     }
 
@@ -468,15 +587,15 @@ mod tests {
         );
     }
 
-    /// **Two connections of one kind never share plan-cache identity**, which is what stops a
+    /// **Two data sources of one kind never share plan-cache identity**, which is what stops a
     /// statement fused across them being sent to whichever executor won. The assembly stamps it,
     /// so a source that composes it cannot forget.
     #[tokio::test]
-    async fn two_connections_of_one_kind_are_two_compute_contexts() {
+    async fn two_sources_of_one_kind_are_two_compute_contexts() {
         let mut source = TestSql::default();
         for address in ["north", "south"] {
             source
-                .connections
+                .sources
                 .get_mut()
                 .unwrap()
                 .insert(address.to_string(), Arc::new(Rows::of(&["orders"])));
@@ -511,7 +630,7 @@ mod tests {
             .collect();
         assert_ne!(
             contexts[0], contexts[1],
-            "two connections of one kind fused into one"
+            "two data sources of one kind fused into one"
         );
     }
 
@@ -519,7 +638,7 @@ mod tests {
     /// panic, and no parse error either: the def is well-formed, the engine simply has nothing to
     /// serve it with.
     #[tokio::test]
-    async fn an_unregistered_kind_fails_the_connection_and_names_the_fix() {
+    async fn an_unregistered_kind_fails_the_source_and_names_the_fix() {
         let engine = Engine::builder().build();
         let why = engine
             .sources()
@@ -549,13 +668,16 @@ mod tests {
         assert_eq!(doc.label, TestDoc::LABEL);
         assert_eq!(doc.badge, TestDoc::BADGE);
         assert_eq!(doc.mode, SourceMode::Catalog);
-        assert_eq!(doc.keys, DOC_KEYS, "the form draws the source's own keys");
+        assert_eq!(
+            doc.settings, DOC_SETTINGS,
+            "the form draws the source's own declaration"
+        );
         assert_eq!(
             engine
                 .sources()
                 .check_address(TestDoc::NAME, "")
                 .map_err(|e| e.to_string()),
-            Err("This connection has no address.".into()),
+            Err("This data source has no address.".into()),
             "the default address rule is reached through the registry"
         );
     }
@@ -564,7 +686,7 @@ mod tests {
     /// is how an embedder substitutes their own for a shipped one.
     #[test]
     fn a_second_registration_of_one_name_replaces_the_first() {
-        let mut sources = Sources::default();
+        let mut sources = Registrants::default();
         sources.insert(TestDoc::holding("first", &["orders"]));
         sources.insert(TestDoc::holding("second", &["events"]));
         assert_eq!(sources.registrants().len(), 1);

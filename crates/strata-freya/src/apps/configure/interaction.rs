@@ -1,5 +1,5 @@
 //! The Configure window's **LOCATION** arm driven the way a user drives it (W7 · 04): the toggle,
-//! the connection picker, and what Save then writes.
+//! the data source picker, and what Save then writes.
 //!
 //! The window **root** is not mounted — it needs the app-globals, a menubar scope and an owner
 //! window id, none of which say anything about the form. What is mounted is the body and the
@@ -7,7 +7,7 @@
 //!
 //! Asserted through rendered text and the store, because that is the deliverable: a form that says
 //! which bucket a path is written against, a Save refused while it cannot say, and a def that
-//! carries the connection rather than a path composed into it.
+//! carries the data source rather than a path composed into it.
 //!
 //! **What is not driven here is a `Select`'s own menu.** Freya's `Select` closes itself when the
 //! focused accessibility node is not its own, and a press in the testing runner never lands that
@@ -21,16 +21,16 @@ use freya::radio::RadioStation;
 use freya_testing::TestingRunner;
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
-use strata_model::{ConnectionDef, Provider, ProviderId, S3Store};
+use strata_model::SourceDef;
 
 use super::model::Where;
 use super::views::{ConfigureBody, Footer};
 use super::{ConfigureCtx, ConfigureDraft, ConfigureTarget, Probes, Status};
-use crate::apps::connection::ConnectionTarget;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::{
-    CatalogState, ConnectionRequest, Log, PersistFaults, ProjChan, ProjectState, ScanRequest,
+    CatalogState, Log, PersistFaults, ProjChan, ProjectState, ScanRequest, SourceRequest,
 };
+use crate::apps::source::SourceTarget;
 use crate::theme::strata_theme;
 
 /// A scratch project folder for one test — `env::temp_dir()` + pid, the convention every test
@@ -39,21 +39,21 @@ fn temp_root(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!("strata-configure-{tag}-{}", std::process::id()))
 }
 
-/// A project with one S3 connection, or none at all — the two states the picker has to tell
+/// A project with one S3 data source, or none at all — the two states the picker has to tell
 /// apart, since only one of them has anything to offer.
 fn project(root: &Path, connected: bool) -> ProjectState {
     let defs = ProjectDefs {
         name: "test".into(),
-        connections: match connected {
+        sources: match connected {
             false => Vec::new(),
-            true => vec![ConnectionDef {
-                address: "acme-lake".into(),
+            true => vec![SourceDef {
+                kind: "s3".into(),
                 name: "acme_lake".into(),
-                provider: Provider::S3(S3Store {
-                    region: "eu-west-2".into(),
-                    ..Default::default()
-                }),
-                client_config: Default::default(),
+                config: [("region", "eu-west-2")]
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+                ..Default::default()
             }],
         },
         ..Default::default()
@@ -74,7 +74,7 @@ fn app() -> impl IntoElement {
 type Handles = (
     ConfigureCtx,
     RadioStation<ProjectState, ProjChan>,
-    ConnectionRequest,
+    SourceRequest,
 );
 
 /// The window's body and footer over `draft`, against its own scratch project.
@@ -92,8 +92,8 @@ fn runner(tag: &'static str, connected: bool, draft: ConfigureDraft) -> (Testing
             let project = r.provide_root_context(|| {
                 RadioStation::<ProjectState, ProjChan>::create(project(&root, connected))
             });
-            let connections: ConnectionRequest =
-                r.provide_root_context(|| State::create(None::<ConnectionTarget>));
+            let sources: SourceRequest =
+                r.provide_root_context(|| State::create(None::<SourceTarget>));
             let ctx = r.provide_root_context(|| ConfigureCtx {
                 draft: State::create(draft.clone()),
                 target: State::create(ConfigureTarget::New),
@@ -102,7 +102,7 @@ fn runner(tag: &'static str, connected: bool, draft: ConfigureDraft) -> (Testing
                 selected_column: State::create(0),
                 probes: State::create(Probes::new()),
             });
-            (ctx, project, connections)
+            (ctx, project, sources)
         },
         1.,
     )
@@ -163,27 +163,27 @@ fn draft_both(local: &str, remote: &str) -> ConfigureDraft {
     }
 }
 
-/// **A project with no connections for the chosen provider says so, and Save is refused** — the
+/// **A project with no data sources for the chosen provider says so, and Save is refused** — the
 /// two halves of the same fact, in the two places the user is looking: under the picker, and in
 /// the footer beside the button it disabled.
 #[test]
-fn remote_with_no_connection_explains_itself_and_blocks_save() {
+fn remote_with_no_source_explains_itself_and_blocks_save() {
     let (mut runner, (ctx, ..)) = runner("empty", false, draft("events/"));
     settle(&mut runner);
 
     click_lowest(&mut runner, "Remote");
 
     assert!(ctx.draft.peek().remote());
-    assert_eq!(ctx.draft.peek().connection, None, "there is none to pick");
+    assert_eq!(ctx.draft.peek().source, None, "there is none to pick");
     assert!(
-        shows(&runner, "No S3 connections yet. Add one to continue."),
+        shows(&runner, "No data sources yet. Add one to continue."),
         "the picker says why it is empty: {:?}",
         texts(&runner)
     );
     assert!(
         shows(
             &runner,
-            "A remote table needs a connection to read through."
+            "A remote table needs a data source to read through."
         ),
         "and the footer says why Save is off: {:?}",
         texts(&runner)
@@ -192,18 +192,18 @@ fn remote_with_no_connection_explains_itself_and_blocks_save() {
     click_lowest(&mut runner, "GCS");
     assert!(shows(
         &runner,
-        "No GCS connections yet. Add one to continue."
+        "No GCS data sources yet. Add one to continue."
     ));
 }
 
-/// **The headline**: flipping to the object store picks the project's connection, the path box
-/// wears that bucket, and Save writes a def naming the connection with the path left
+/// **The headline**: flipping to the object store picks the project's data source, the path box
+/// wears that bucket, and Save writes a def naming the data source with the path left
 /// bucket-relative — which is what `register::table_spec` composes back into an address.
 ///
 /// The draft opens with a path on **each** arm, so what is saved also says which of the two the
 /// LOCATION chose.
 #[test]
-fn a_table_saved_over_a_connection_carries_the_url_and_a_relative_path() {
+fn a_table_saved_over_a_source_carries_the_name_and_a_relative_path() {
     let draft = draft_both("/data/events.parquet", "events/2024/");
     let (mut runner, (ctx, project, _)) = runner("save", true, draft);
     settle(&mut runner);
@@ -211,9 +211,9 @@ fn a_table_saved_over_a_connection_carries_the_url_and_a_relative_path() {
     click_lowest(&mut runner, "Remote");
 
     assert_eq!(
-        ctx.draft.peek().connection.as_deref(),
+        ctx.draft.peek().source.as_deref(),
         Some("acme_lake"),
-        "the provider's first connection is picked for you"
+        "the provider's first data source is picked for you"
     );
     assert!(
         shows(&runner, "SOURCE PATH"),
@@ -222,7 +222,7 @@ fn a_table_saved_over_a_connection_carries_the_url_and_a_relative_path() {
     );
     assert!(
         shows(&runner, "acme_lake"),
-        "the row names the connection its path is written against: {:?}",
+        "the row names the data source its path is written against: {:?}",
         texts(&runner)
     );
 
@@ -235,9 +235,9 @@ fn a_table_saved_over_a_connection_carries_the_url_and_a_relative_path() {
         .find(|t| t.def.name == "events")
         .expect("the table was written")
         .def;
-    assert_eq!(def.connection.as_deref(), Some("acme_lake"));
+    assert_eq!(def.source.as_deref(), Some("acme_lake"));
     assert_eq!(
-        def.sources,
+        def.paths,
         ["events/2024/"],
         "stored as typed — relativizing it against the project folder would mangle it"
     );
@@ -253,7 +253,7 @@ fn a_table_saved_over_a_connection_carries_the_url_and_a_relative_path() {
 /// rather than going up — and the one nothing else drives.
 ///
 /// What it asserts is that the whole surface returns: the TYPE / CONNECTION pair is gone, the
-/// label is plural again, the bucket prefix is off the box, and the connection, the disk's paths
+/// label is plural again, the bucket prefix is off the box, and the data source, the disk's paths
 /// and the bucket's path are all *remembered* rather than discarded, which is what makes a flip
 /// back and forth free.
 #[test]
@@ -284,7 +284,7 @@ fn flipping_back_to_local_returns_the_multi_path_list_and_keeps_the_choice() {
         "with the bucket's path still there for the next flip"
     );
     assert_eq!(
-        ctx.draft.peek().connection.as_deref(),
+        ctx.draft.peek().source.as_deref(),
         Some("acme_lake"),
         "the choice is remembered, so coming back does not ask again"
     );
@@ -308,7 +308,7 @@ fn flipping_back_to_local_returns_the_multi_path_list_and_keeps_the_choice() {
     );
 }
 
-/// A def over a connection **this project no longer has** keeps naming it, and the footer says
+/// A def over a data source **this project no longer has** keeps naming it, and the footer says
 /// so rather than letting the reference be saved again — the treatment a format with no reader
 /// gets, for the same reason.
 ///
@@ -316,18 +316,18 @@ fn flipping_back_to_local_returns_the_multi_path_list_and_keeps_the_choice() {
 /// itself can answer: an empty box is "a table needs a source path", which is a different
 /// sentence about a different thing to fix.
 #[test]
-fn a_forgotten_connection_is_named_and_blocks_save() {
+fn a_forgotten_source_is_named_and_blocks_save() {
     let mut draft = draft_both("/data/events.parquet", "events/");
     draft.location = Where::Remote;
-    draft.provider = ProviderId::S3;
-    draft.connection = Some("s3://gone".into());
+    draft.kind = "s3".into();
+    draft.source = Some("s3://gone".into());
     let (mut runner, _) = runner("forgotten", true, draft);
     settle(&mut runner);
 
     assert!(
         shows(
             &runner,
-            "'s3://gone' is not a connection in this project. Choose one, or add it back."
+            "'s3://gone' is not a data source in this project. Choose one, or add it back."
         ),
         "{:?}",
         texts(&runner)

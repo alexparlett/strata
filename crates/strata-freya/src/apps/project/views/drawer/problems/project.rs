@@ -108,12 +108,12 @@ pub struct Project {
 
 impl Component for Project {
     fn render(&self) -> impl IntoElement {
-        let connections = use_radio::<ProjectState, ProjChan>(ProjChan::Connections);
+        let sources = use_radio::<ProjectState, ProjChan>(ProjChan::Sources);
         let tables = use_radio::<ProjectState, ProjChan>(ProjChan::Tables);
         let views = use_radio::<ProjectState, ProjChan>(ProjChan::Views);
         let faults = use_consume::<FaultsCtx>();
 
-        let _ = connections.read();
+        let _ = sources.read();
         let _ = views.read();
         let rows = project_problems(&tables.read(), &faults.read());
 
@@ -244,8 +244,8 @@ mod tests {
         TableDef {
             name: name.into(),
             format: SourceFormat::Parquet,
-            connection: None,
-            sources: vec![format!("{name}.parquet")],
+            source: None,
+            paths: vec![format!("{name}.parquet")],
             partition_cols: vec![],
             origin: TableOrigin::External,
         }

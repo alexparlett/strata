@@ -32,7 +32,7 @@ use crate::secret::SecretRef;
 /// **Cohere is deliberately absent**, though the pinned `genai` speaks to it and the design
 /// canvas lists it. Its adapter never reads a request's `tools` and answers a `Tool`-role
 /// message with `MessageRoleNotSupported` — so a Cohere entry could be enabled, could pass a
-/// connection test, and could then never call a tool: the assistant would answer about data it
+/// data source test, and could then never call a tool: the assistant would answer about data it
 /// had not read, and fail outright on the next send. A provider that cannot run the loop is not
 /// a provider this offers.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]

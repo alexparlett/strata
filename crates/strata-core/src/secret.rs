@@ -38,8 +38,7 @@
 use std::fmt;
 
 use keyring_core::{Entry, Error};
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+pub use strata_model::SecretRef;
 use zeroize::Zeroize;
 
 /// The app's identity, and the keystore *service* every Strata credential is filed under.
@@ -74,31 +73,6 @@ pub const APP_ID: &str = "com.alexparlett.strata";
 /// `TeamIdentifier`. Taking it from the wrong certificate is exactly the slip the build's
 /// cross-check exists to catch, and did.
 pub const TEAM_ID: &str = "397J3SJ3D4";
-
-/// A reference to a secret in the OS keystore: "there is a secret filed under this id", or
-/// absent.
-///
-/// This is what config carries and what a settings draft diffs — it is `Clone + PartialEq +
-/// Serialize + Deserialize` for exactly that reason, so it rides `settings_merge!` like any
-/// other field. It holds no part of the secret and never has: reading one is a keystore
-/// call, which is what keeps the two apart.
-///
-/// A consumer mints one per thing-that-has-a-key and keeps it for that thing's life, so an
-/// edit overwrites in place ([`SecretRef::put`]) rather than stranding the old entry under
-/// an id nobody remembers.
-///
-/// **Or derives one, for a secret whose def is shared** — see [`SecretRef::derived`].
-#[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct SecretRef(Uuid);
-
-/// The namespace every [derived](SecretRef::derived) reference is built in.
-///
-/// A fixed, arbitrary UUID, the way `new_v5` is meant to be used: it makes the derivation
-/// Strata's, so two applications deriving `"pg-password:postgres://…"` do not land on one id.
-/// It is not a secret and it is not a version — changing it orphans every derived entry
-/// already in a keystore, exactly as changing [`APP_ID`] does.
-const STRATA_SECRET_NS: Uuid = Uuid::from_u128(0x5734_7a1a_9c4f_5d2b_8e6a_0f1c_3b7d_9e42);
 
 /// A secret in memory: a pasted key on its way to the keystore, or one just read back.
 ///
@@ -160,54 +134,46 @@ pub fn open_keystore() -> Result<(), SecretError> {
     Ok(())
 }
 
-impl SecretRef {
-    /// Mint a reference for a secret that does not have one yet.
-    pub fn mint() -> Self {
-        Self(Uuid::new_v4())
-    }
-
-    /// The reference for a secret belonging to a thing that is **described in a shared file** —
-    /// derived from that description rather than minted, so the description carries no
-    /// machine-local id.
-    ///
-    /// `Uuid::new_v5` over `"{kind}:{name}"`: deterministic, so the same def addresses the same
-    /// keystore slot on every machine, while each machine's keystore holds its own entry (or
-    /// none). `kind` is the family of secret (`"postgres-password"`), `name` the thing's own
-    /// identity within it (a connection's name).
-    ///
-    /// **The contract, which is not optional.** A minted [`SecretRef`] in a *committed* file
-    /// would be rewritten by every colleague who entered their own password — two machines
-    /// ping-ponging one id through git forever. So a derived ref exists precisely because the
-    /// def must never store it: it stores the *expectation* that there is a secret, and the ref
-    /// is recomputed from the identity whenever one is
-    /// needed. Two consequences ride with it, and whoever moves the identity owes both:
-    /// migrate the entry ([`migrate_derived`]), and accept that a machine with no entry is a
-    /// normal state that must be reported rather than treated as a fault.
-    ///
-    /// `mint`'s consumers are untouched: an app-config secret is not shared, so nothing about
-    /// the assistant's provider keys changes.
-    pub fn derived(kind: &str, name: &str) -> Self {
-        Self(Uuid::new_v5(
-            &STRATA_SECRET_NS,
-            format!("{kind}:{name}").as_bytes(),
-        ))
-    }
-
+/// The keystore operations on a [`SecretRef`].
+///
+/// An extension trait because the reference itself is [`strata_model`]'s — a def records the slot
+/// its secret is filed in, and a def crate reaches no platform. What is here is everything that
+/// *touches* the OS keystore, which is this crate's job and nothing the model should link.
+pub trait Keystore {
     /// Store `secret` under this reference, replacing whatever was there.
     ///
-    /// There is no "put an empty secret": clearing a key is [`SecretRef::delete`], and
+    /// There is no "put an empty secret": clearing a key is [`delete`](Self::delete), and
     /// [`Secret::new`] is what makes the caller face that fork.
-    pub fn put(&self, secret: &Secret) -> Result<(), SecretError> {
-        self.entry()?
-            .set_password(secret.expose())
-            .map_err(classify)
+    ///
+    /// # Errors
+    ///
+    /// The keystore refused.
+    fn put(&self, secret: &Secret) -> Result<(), SecretError>;
+
+    /// Read the secret filed under this reference. `Ok(None)` means there is none — either it was
+    /// never written or it has been removed, which are the same answer to everyone who asks.
+    ///
+    /// # Errors
+    ///
+    /// The keystore refused. Absence is not a refusal.
+    fn get(&self) -> Result<Option<Secret>, SecretError>;
+
+    /// Remove the secret filed under this reference. Removing one that is not there succeeds: a
+    /// cleared field must not fail to clear because it was already clear.
+    ///
+    /// # Errors
+    ///
+    /// The keystore refused.
+    fn delete(&self) -> Result<(), SecretError>;
+}
+
+impl Keystore for SecretRef {
+    fn put(&self, secret: &Secret) -> Result<(), SecretError> {
+        entry(self)?.set_password(secret.expose()).map_err(classify)
     }
 
-    /// Read the secret filed under this reference. `Ok(None)` means there is none — either
-    /// it was never written or it has been removed, which are the same answer to everyone
-    /// who asks.
-    pub fn get(&self) -> Result<Option<Secret>, SecretError> {
-        match self.entry()?.get_password() {
+    fn get(&self) -> Result<Option<Secret>, SecretError> {
+        match entry(self)?.get_password() {
             Ok(mut value) => {
                 let secret = Secret::new(&value);
                 value.zeroize();
@@ -218,20 +184,18 @@ impl SecretRef {
         }
     }
 
-    /// Remove the secret filed under this reference. Removing one that is not there
-    /// succeeds: a cleared field must not fail to clear because it was already clear.
-    pub fn delete(&self) -> Result<(), SecretError> {
-        match self.entry()?.delete_credential() {
+    fn delete(&self) -> Result<(), SecretError> {
+        match entry(self)?.delete_credential() {
             Ok(()) | Err(Error::NoEntry) => Ok(()),
             Err(err) => Err(classify(err)),
         }
     }
+}
 
-    /// The keystore entry for this reference. Builds nothing in the store and reads
-    /// nothing from it — the platform call happens in the operation, not here.
-    fn entry(&self) -> Result<Entry, SecretError> {
-        Entry::new(APP_ID, &self.0.to_string()).map_err(classify)
-    }
+/// The keystore entry for `key`. Builds nothing in the store and reads nothing from it — the
+/// platform call happens in the operation, not here.
+fn entry(key: &SecretRef) -> Result<Entry, SecretError> {
+    Entry::new(APP_ID, &key.slot().to_string()).map_err(classify)
 }
 
 /// Move the secret filed under `old` to `new` — what an edit that changes a
@@ -246,7 +210,7 @@ impl SecretRef {
 /// old entry is still where it was.
 ///
 /// Beside the type rather than in whichever surface needed it first, so an identity move from
-/// the connection editor, a future palette gesture or a project merge all clean up the same way.
+/// the data source editor, a future palette gesture or a project merge all clean up the same way.
 pub fn migrate_derived(old: &SecretRef, new: &SecretRef) -> Result<(), SecretError> {
     if old == new {
         return Ok(());
@@ -379,7 +343,7 @@ mod tests {
         key.put(&Secret::new("value").unwrap()).unwrap();
 
         let refuse = |err| {
-            let entry = Entry::new(APP_ID, &key.0.to_string()).unwrap();
+            let entry = Entry::new(APP_ID, &key.slot().to_string()).unwrap();
             let cred: &mock::Cred = entry.as_any().downcast_ref().unwrap();
             cred.set_error(err);
         };
@@ -427,7 +391,7 @@ mod tests {
     fn the_marker_round_trips_through_serde() {
         let key = SecretRef::mint();
         let json = serde_json::to_string(&key).unwrap();
-        assert_eq!(json, format!("\"{}\"", key.0));
+        assert_eq!(json, format!("\"{}\"", key.slot()));
         assert_eq!(serde_json::from_str::<SecretRef>(&json).unwrap(), key);
         assert_ne!(key, SecretRef::mint());
     }
@@ -445,7 +409,7 @@ mod tests {
         let key = SecretRef::derived("pg-password", url);
         assert_eq!(key, SecretRef::derived("pg-password", url));
         assert_eq!(
-            key.0.to_string(),
+            key.slot().to_string(),
             "c9251ca2-1ae3-5c70-9612-712916f594c3",
             "the derivation is what makes one def address one slot everywhere"
         );
@@ -463,7 +427,7 @@ mod tests {
 
     /// An identity move carries the secret with it: the new ref reads what the old one held,
     /// and the old entry is gone. Absence is not a failure — a machine that never held this
-    /// connection's password must still be able to edit the connection.
+    /// data source's password must still be able to edit the source.
     #[test]
     fn migrating_a_derived_secret_moves_the_entry_and_tolerates_absence() {
         mocked();

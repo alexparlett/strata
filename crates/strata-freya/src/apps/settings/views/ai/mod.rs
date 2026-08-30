@@ -17,8 +17,8 @@
 //! A row carries what **addresses** the provider: whether it is on, its endpoint where the kind
 //! admits one, and its key. It carries **no model**. A model is what a provider is *asked*, and
 //! that is a conversation's — picked in the chat pane, seeded from [`ChatPane`]'s defaults. The
-//! same line `ConnectionDef` draws when a connection names a bucket and a *table* names the
-//! connection.
+//! same line `SourceDef` draws when a data source names a bucket and a *table* names the
+//! data source.
 //!
 //! ## The shared half
 //!

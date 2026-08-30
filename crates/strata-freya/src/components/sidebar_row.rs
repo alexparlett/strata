@@ -1,6 +1,6 @@
 //! One **sidebar row** — the launcher rail's row shell.
 //!
-//! It served the project sidebar's catalog and connections rows too until DB-05 turned that pane
+//! It served the project sidebar's catalog and data sources rows too until DB-05 turned that pane
 //! into a tree, whose rows are the fork's `TreeItem`: the same hover / selected / focus states
 //! plus the depth guides and disclosure slot a tree needs, which this preset has no notion of.
 //! What both shells share is where their states come from — a component theme in the fork rather
@@ -115,7 +115,7 @@ impl SidebarRow {
     /// Right-click the row (P3-06's catalog menus). Carried by a wrapper rather than by
     /// [`SideBarItem`] itself, which exposes only `on_press` — and a wrapper is where it
     /// belongs anyway: the row shell owns the affordance, so the catalog and (later)
-    /// connections can't each invent their own secondary-press handling.
+    /// data sources can't each invent their own secondary-press handling.
     pub fn on_context_menu(
         mut self,
         on_context_menu: impl Into<EventHandler<Event<PressEventData>>>,

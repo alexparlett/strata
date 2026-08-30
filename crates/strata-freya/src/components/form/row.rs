@@ -11,6 +11,7 @@
 use freya::animation::{use_animation_with_dependencies, AnimColor, AnimDirection, Ease, OnChange};
 use freya::prelude::*;
 
+use crate::components::divider::Divider;
 use crate::components::form::{
     form_theme, Reveal, RevealScroll, Variant, CONTROL_GAP, HINT_GAP, LABEL_GAP,
 };
@@ -262,5 +263,55 @@ impl Component for Note {
             .background(theme.note_background)
             .border(Border::new().width(1.).fill(theme.note_border_fill))
             .child(Prose::new(self.text.clone()).color(theme.note_color).wrap())
+    }
+}
+
+/// A **section heading** inside a fields form: a group's name, with a rule running out from it.
+///
+/// For a form long enough that its rows want sorting into subjects — a data source declaring a
+/// dozen settings, where "which of these are about SSL" is a question the reader should not have
+/// to answer by reading every label. Set in the eyebrow register like a row's own label, because
+/// it is the same kind of word about a bigger thing.
+#[derive(PartialEq)]
+pub struct Section {
+    label: String,
+    key: DiffKey,
+}
+
+impl Section {
+    pub fn new(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            key: DiffKey::None,
+        }
+    }
+}
+
+impl KeyExt for Section {
+    fn write_key(&mut self) -> &mut DiffKey {
+        &mut self.key
+    }
+}
+
+impl Component for Section {
+    fn render_key(&self) -> DiffKey {
+        self.key.clone().or(self.default_key())
+    }
+
+    fn render(&self) -> impl IntoElement {
+        let theme = form_theme();
+
+        rect()
+            .width(Size::fill())
+            .horizontal()
+            .content(Content::Flex)
+            .cross_align(Alignment::Center)
+            .spacing(LABEL_GAP)
+            .child(Eyebrow::new(self.label.clone()).color(theme.label_color))
+            .child(
+                rect()
+                    .width(Size::flex(1.))
+                    .child(Divider::horizontal().color(theme.divider_fill)),
+            )
     }
 }

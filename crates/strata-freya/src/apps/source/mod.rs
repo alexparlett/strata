@@ -1,30 +1,29 @@
-//! The **connection editor** (W7 · 03 / design `Connections.dc.html`) — add a remote source to
-//! this project, or edit one: its provider, its address, and where that provider's credentials
-//! are to be found. Four providers, three of them object stores and one a **database** (DB-04),
-//! which is a fourth segment on the same pill rather than a surface of its own.
+//! The **data source editor** (W7 · 03 / design `Data sources.dc.html`) — add a data source to this
+//! project, or edit one: which registered kind serves it, where it is, and how it signs in.
+//!
+//! **It names no source, and it has no second dress.** A registrant's rows are its own
+//! declaration ([`SourceInfo::keys`](strata_engine::SourceInfo)), carried onto the draft by the
+//! picker and rendered generically by [`views`], so registering a `DataSource` puts a working
+//! editor in front of it with nothing here to change — and a provider the registry does not serve
+//! has no form here at all.
 //!
 //! **A window, not a modal**, and the Configure window's shape throughout. The canvas is a
 //! 480 × 588 frame with traffic lights, a drag bar and its own footer, so this is a child window
-//! of the project window that asked, pinned above it ([`crate::platform::connection`]) and
+//! of the project window that asked, pinned above it ([`crate::platform::data source`]) and
 //! closing with the **project subtree** whose store, log, catalog and scan counter it borrows
 //! rather than with the window id ([`crate::platform::owner`]) — a re-root or an engine restart
 //! frees those while leaving that window open.
 //!
 //! **Single-instance per target**, for Configure's reason: this window carries a *def*, and two
-//! windows on one def would both `upsert_connection` and both persist, so the second would
+//! windows on one def would both `upsert_data source` and both persist, so the second would
 //! silently revert the first.
 //!
-//! **No secret reaches the def, and the object-store arms have no field that could.** Their auth
-//! controls choose between the host's own chain, a named `~/.aws` profile and a service-account
-//! key **file path** — [`strata_model::S3Auth`] and [`strata_model::GcsAuth`] have no variant
-//! carrying a key, so a form built from them cannot grow one by accident.
-//!
-//! **A database password is the one secret this window handles, and it never touches the draft.**
-//! A server has no host-side credential chain to defer to, so the box exists; it writes this
-//! machine's OS keystore under a reference derived from the connection's URL, while the def
+//! **A source's secrets are declared keys, and none of them touches the draft.** A server has no
+//! host-side credential chain to defer to, so the boxes exist; each writes this machine's OS
+//! keystore under a slot the engine derives from the data source's name and the key, while the def
 //! records only the expectation ([`strata_model::SourceDef::secrets`]). The typed text lives on
-//! [`ConnectionCtx::password`] for the window's lifetime, the settings window's rule for provider
-//! keys one surface along.
+//! [`SourceCtx::secret_values`] for the window's lifetime, the settings window's rule for
+//! provider keys one surface along.
 //!
 //! **No theme of its own** (Configure's rule): the chrome is `components::window`, everything
 //! form-shaped is the shared `form` theme, and the semantic tones come through `tones()`.
@@ -40,11 +39,11 @@
 //! keeps it open carrying the engine's own reason — worth staying open for here more than anywhere
 //! else, because that reason describes the very field the user still has in front of them.
 //!
-//! **An edit that moves the address, the provider or a database's user moves the connection's
-//! identity**, and what the old URL registered survives it: `engine::sources::store::connect` only ever
-//! sees the def it is given. Deregistering the old one is this window's ([`views::Footer`]) — the
-//! same `Sources::disconnect` call Forget makes — and for a database that move takes the keystore
-//! entry with it, since the reference is derived from the URL.
+//! **An edit that moves the name moves what every surface addresses this data source by**, and
+//! what the old name registered survives it: `engine::sources::store::connect` only ever sees the
+//! def it is given. Deregistering the old one is this window's ([`views::Footer`]) — the same
+//! `Sources::disconnect` call Forget makes — and for a source that move takes the keystore
+//! entries with it, since each slot is derived from the name.
 //!
 //! **Closing discards the draft, deliberately without asking** — nothing is written until Save,
 //! so a close costs a form rather than data (Configure settled this; a dirty-close confirm was
@@ -59,15 +58,16 @@ use freya::prelude::*;
 use freya::radio::{use_share_radio, RadioStation};
 use freya::winit::platform::macos::WindowAttributesExtMacOS;
 use freya::winit::window::WindowId;
+use std::collections::{BTreeMap, BTreeSet};
 use strata_core::config::Command;
-use strata_engine::sources::postgres::settings::PASSWORD;
+use strata_core::secret::Keystore;
 use strata_engine::sources::secret_slot;
-use strata_model::ProviderId;
+use strata_engine::Field;
 
-use crate::apps::connection::views::{use_watch_connection, ConnectionBody, Footer, TitleBar};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::ReportCtx;
 use crate::apps::project::{Catalog, CatalogRescan, ProjChan, ProjectState};
+use crate::apps::source::views::{use_watch_source, Footer, SourceBody, TitleBar};
 use crate::components::window::window_theme;
 use crate::keymap::on_commands;
 use crate::menu::MenuScope;
@@ -76,18 +76,18 @@ use crate::state::{use_share_config, AppCtx};
 use crate::task::offload;
 use crate::theme::{peek_selection, use_roles, use_strata_theme, window_background, Role};
 
-pub use model::{ConnectionDraft, ConnectionTarget, PasswordProbe, PasswordRow};
+pub use model::{SecretProbe, SourceDraft, SourceTarget};
 
-/// Everything a press of the pane's `+`, its empty-state CTA or a row's **Edit connection**
+/// Everything a press of the pane's `+`, its empty-state CTA or a row's **Edit data source**
 /// needs, resolved where the stores and the DI handles both live and carried to the trigger as a
 /// prop — [`ConfigureLaunch`](crate::apps::configure::ConfigureLaunch)'s field set exactly,
 /// because the two windows write to the same store through the same funnels.
 #[derive(Clone)]
-pub struct ConnectionLaunch {
-    pub target: ConnectionTarget,
+pub struct SourceLaunch {
+    pub target: SourceTarget,
     pub app: AppCtx,
     /// The project window's catalog store, shared into this window rather than forked, so what
-    /// this writes is what the Connections pane shows.
+    /// this writes is what the Data sources pane shows.
     pub project: RadioStation<ProjectState, ProjChan>,
     /// The **open project** every handle here belongs to — what ties this window's lifetime to
     /// that subtree rather than to the owner's window id.
@@ -110,7 +110,7 @@ pub struct ConnectionLaunch {
 
 /// Compares on the **target** alone, for `ConfigureLaunch`'s reason: everything else is fixed for
 /// the window's life, so none of it carries information a diff could act on.
-impl PartialEq for ConnectionLaunch {
+impl PartialEq for SourceLaunch {
     fn eq(&self, other: &Self) -> bool {
         self.target == other.target
     }
@@ -124,8 +124,8 @@ pub enum Status {
     /// A password is going into (or out of) this machine's keystore, before anything is written.
     ///
     /// Its own state rather than a flag beside [`Connecting`](Self::Connecting), which means "a
-    /// pass is out for this URL" and is what `use_watch_connection` acts on: set before the store
-    /// write it would read an edited connection's existing `Ready` row and close the window over
+    /// pass is out for this URL" and is what `use_watch_data source` acts on: set before the store
+    /// write it would read an edited data source's existing `Ready` row and close the window over
     /// a save that had not happened.
     Storing,
     /// The def is written and a registration pass is in flight for this URL. The window watches
@@ -138,42 +138,32 @@ pub enum Status {
 
 /// The window's shared state, provided at the root and consumed by every view.
 #[derive(Clone, Copy)]
-pub struct ConnectionCtx {
+pub struct SourceCtx {
     /// Every control's edits land here.
-    pub draft: State<ConnectionDraft>,
+    pub draft: State<SourceDraft>,
     /// What this window opened on. A `State` so the context stays `Copy`, and because Save
     /// re-points it at what it just wrote (see [`views::Footer`]).
-    pub target: State<ConnectionTarget>,
+    pub target: State<SourceTarget>,
     pub status: State<Status>,
-    /// The AWS profile names this machine defines — the **Named profile** picker's options,
-    /// read once at mount (`Sources::aws_profiles`). `None` until that read answers, which is
-    /// what lets the picker say "looking" rather than "you have none".
-    pub profiles: State<Option<Vec<String>>>,
-    /// Which client-option row the table's toolbar acts on.
-    ///
-    /// **Window state, not draft state** — `ConfigureCtx::selected_path`'s rule, and for its
-    /// reason: it is a way of looking rather than part of the def, and on the draft every click
-    /// on a row would count as an edit and clear the engine's failure message out from under a
-    /// user who was still reading it.
-    pub selected_option: State<Option<u64>>,
-    /// **The PASSWORD box's text** — window-lifetime, in memory, and nowhere near the draft
-    /// (`apps/settings/views/ai/keys.rs`'s rule: a secret has nowhere in a def to live). A
-    /// `String` because that is what the box binds; it is wrapped in a `Secret` at the moment it
-    /// is written.
-    pub password: State<String>,
-    /// **What the def expects with the box empty**, which is why `pg.password` cannot also be the
-    /// seed: clearing the box has to put back what the def said, and a value the box overwrites
-    /// has forgotten it. A stray keystroke would otherwise commit an expectation nothing holds.
-    pub password_expected: State<bool>,
-    /// A pending delete of this machine's entry, from either press that abandons it. Separate
-    /// from [`password_expected`](Self::password_expected) because that is where the two presses
+    /// **What is typed into each secret box** — window-lifetime, in memory, and nowhere near the
+    /// draft (`apps/settings/views/ai/keys.rs`'s rule: a secret has nowhere in a def to live).
+    /// Keyed by the declared key, because a source may take more than one credential; `String`
+    /// because that is what a box binds, wrapped in a `Secret` at the moment it is written.
+    pub secret_values: State<BTreeMap<String, String>>,
+    /// **What the def expects with every box empty**, which is why the draft's own expectation set
+    /// cannot also be the seed: clearing a box has to put back what the def said, and a value the
+    /// box overwrites has forgotten it. A stray keystroke would otherwise commit an expectation
+    /// nothing holds.
+    pub secret_expected: State<BTreeSet<String>>,
+    /// Pending deletes of this machine's entries, from either press that abandons one. Separate
+    /// from [`secret_expected`](Self::secret_expected) because that is where the two presses
     /// part: a removal leaves the expectation standing, so other machines keep their own.
-    pub password_removed: State<bool>,
-    /// What this machine's keystore said about the entry the def expects.
-    pub password_probe: State<PasswordProbe>,
+    pub secret_removed: State<BTreeSet<String>>,
+    /// What this machine's keystore said about each entry the def expects.
+    pub secret_probes: State<BTreeMap<String, SecretProbe>>,
 }
 
-impl ConnectionCtx {
+impl SourceCtx {
     /// Mutate the draft — **the one write path**, used by every control here.
     ///
     /// Idempotent, and it clears a failure: a message describes the draft that produced it, so
@@ -182,7 +172,7 @@ impl ConnectionCtx {
     /// (`ConfigureCtx::edit`'s contract, down to why the comparison lives in here rather than in
     /// each control: `use_side_effect` builds its closure once, so a captured comparison value
     /// freezes at the first render and reverting a field silently does nothing.)
-    pub fn edit(mut self, f: impl FnOnce(&mut ConnectionDraft)) {
+    pub fn edit(mut self, f: impl FnOnce(&mut SourceDraft)) {
         if matches!(*self.status.peek(), Status::Storing | Status::Connecting(_)) {
             return;
         }
@@ -198,19 +188,49 @@ impl ConnectionCtx {
             self.status.set(Status::Idle);
         }
     }
+
+    /// Type into `key`'s secret box. Idempotent, so the box and this map settle rather than ring.
+    pub fn set_secret(mut self, key: &str, value: String) {
+        if self.secret_values.peek().get(key) == Some(&value) {
+            return;
+        }
+        let mut next = self.secret_values.peek().clone();
+        next.insert(key.to_string(), value);
+        self.secret_values.set(next);
+    }
+
+    /// Cancel a pending removal of `key`'s entry — what typing a new value means.
+    pub fn keep_secret(mut self, key: &str) {
+        if !self.secret_removed.peek().contains(key) {
+            return;
+        }
+        let mut next = self.secret_removed.peek().clone();
+        next.remove(key);
+        self.secret_removed.set(next);
+    }
+
+    /// **Remove from this machine**: drop this machine's entry at Save and leave the expectation
+    /// standing, so a colleague keeps their own.
+    pub fn forget_secret_here(self, key: &str) {
+        self.set_secret(key, String::new());
+        let mut removed = self.secret_removed;
+        let mut next = removed.peek().clone();
+        next.insert(key.to_string());
+        removed.set(next);
+    }
 }
 
-/// The connection editor window: the canvas's 480 × 588 frame, with the title bar drawn by
+/// The data source editor window: the canvas's 480 × 588 frame, with the title bar drawn by
 /// [`TitleBar`] rather than AppKit — the same transparent-titlebar treatment as every other
 /// window here.
-pub struct ConnectionApp {
+pub struct SourceApp {
     pub app: AppCtx,
     pub project: RadioStation<ProjectState, ProjChan>,
     pub subtree: Subtree,
     pub rescan: CatalogRescan,
     pub catalog: Catalog,
     pub engine: EngineCtx,
-    pub target: ConnectionTarget,
+    pub target: SourceTarget,
     pub report: ReportCtx,
     /// The window this one belongs to. Carried rather than looked up, because the root's own
     /// `use_register_window` re-reports its kind and an entry that forgot its owner would stop
@@ -218,7 +238,7 @@ pub struct ConnectionApp {
     pub owner: WindowId,
 }
 
-impl ConnectionApp {
+impl SourceApp {
     #[allow(clippy::too_many_arguments)]
     pub fn window(
         app: AppCtx,
@@ -227,7 +247,7 @@ impl ConnectionApp {
         rescan: CatalogRescan,
         catalog: Catalog,
         engine: EngineCtx,
-        target: ConnectionTarget,
+        target: SourceTarget,
         report: ReportCtx,
         owner: WindowId,
     ) -> WindowConfig {
@@ -236,7 +256,7 @@ impl ConnectionApp {
             let id = sel.effective(strata_core::theme::os_is_dark());
             window_background(app.themes.get_or_default(&id))
         };
-        WindowConfig::new_app(ConnectionApp {
+        WindowConfig::new_app(SourceApp {
             app,
             project,
             subtree,
@@ -247,7 +267,7 @@ impl ConnectionApp {
             report,
             owner,
         })
-        .with_title("Connection")
+        .with_title("Data Source")
         .with_size(480., 588.)
         .with_min_size(420., 400.)
         .with_background(background)
@@ -261,7 +281,7 @@ impl ConnectionApp {
     }
 }
 
-impl App for ConnectionApp {
+impl App for SourceApp {
     fn render(&self) -> impl IntoElement {
         use_strata_theme(self.app.themes.clone(), self.app.config, self.app.preview);
         use_share_config(self.app.config);
@@ -288,7 +308,7 @@ impl App for ConnectionApp {
         use_register_window(
             &self.app,
             {
-                move || WindowKind::Connection {
+                move || WindowKind::Source {
                     owner,
                     target: target.clone(),
                 }
@@ -300,71 +320,35 @@ impl App for ConnectionApp {
         let ctx = use_provide_context({
             let target = self.target.clone();
             let project = self.project;
+            let registrants = self.engine.sources().registrants();
             move || {
                 let draft = match target.editing() {
-                    None => ConnectionDraft::default(),
-                    Some(url) => project
+                    None => SourceDraft::new(&registrants),
+                    Some(name) => project
                         .peek()
-                        .connections
+                        .sources
                         .iter()
-                        .find(|c| c.def.named() == url)
-                        .map(|row| ConnectionDraft::of(&row.def))
+                        .find(|c| c.def.named() == name)
+                        .map(|row| SourceDraft::of(&row.def, &registrants))
                         .unwrap_or_else(|| {
-                            panic!("edit '{url}': no such connection in this project")
+                            panic!("edit '{name}': no such data source in this project")
                         }),
                 };
-                ConnectionCtx {
-                    password_expected: State::create(draft.pg.password),
+                SourceCtx {
+                    secret_expected: State::create(draft.secrets.keys().cloned().collect()),
                     draft: State::create(draft),
                     target: State::create(target),
                     status: State::create(Status::Idle),
-                    profiles: State::create(None),
-                    selected_option: State::create(None),
-                    password: State::create(String::new()),
-                    password_removed: State::create(false),
-                    password_probe: State::create(PasswordProbe::Asking),
+                    secret_values: State::create(BTreeMap::new()),
+                    secret_removed: State::create(BTreeSet::new()),
+                    secret_probes: State::create(BTreeMap::new()),
                 }
             }
         });
 
-        use_hook({
-            let engine = self.engine.clone();
-            move || {
-                let mut profiles = ctx.profiles;
-                spawn(async move {
-                    let found = engine.sources().aws_profiles().await;
-                    profiles.set(Some(found));
-                });
-            }
-        });
+        use_hook(move || probe_secrets(ctx));
 
-        use_hook(move || {
-            let expects = {
-                let draft = ctx.draft.peek();
-                (draft.provider == ProviderId::Source && draft.pg.password)
-                    .then(|| secret_slot(&draft.def(), PASSWORD, &[]))
-                    .flatten()
-            };
-            let Some(slot) = expects else { return };
-            let mut probe = ctx.password_probe;
-            spawn(async move {
-                let read = offload(move || slot.key().get()).await;
-                probe.set(match read {
-                    Some(Ok(Some(_))) => PasswordProbe::Stored,
-                    Some(Ok(None)) => PasswordProbe::Absent,
-                    Some(Err(why)) => PasswordProbe::Refused(format!(
-                        "This machine's keystore could not be read, so whether a password is \
-                         stored here is unknown. {why}"
-                    )),
-                    None => PasswordProbe::Refused(
-                        "This machine's keystore could not be read: a worker did not answer."
-                            .into(),
-                    ),
-                });
-            });
-        });
-
-        use_watch_connection(ctx);
+        use_watch_source(ctx);
 
         let win = window_theme();
         let text = use_roles().get(Role::Text);
@@ -378,7 +362,7 @@ impl App for ConnectionApp {
             .background(win.background)
             .color(text)
             .child(TitleBar)
-            .child(ConnectionBody)
+            .child(SourceBody)
             .child(Footer)
             .child(rect().on_global_key_down(on_commands(config, {
                 move |cmd| match cmd {
@@ -393,5 +377,57 @@ impl App for ConnectionApp {
                     _ => false,
                 }
             })))
+    }
+}
+
+/// Ask this machine's keystore about every secret the def **expects**, one read per declared key.
+///
+/// "Expected" is a fact about the shared def and "stored" is a fact about this machine; only the
+/// keystore knows the second, which is why the row cannot simply echo the def. A key nothing
+/// expects is not asked about — the answer would be [`SecretProbe::Absent`], which is what an
+/// unprobed key already reads as.
+fn probe_secrets(ctx: SourceCtx) {
+    let asking: Vec<&'static str> = {
+        let draft = ctx.draft.peek();
+        draft
+            .settings
+            .iter()
+            .filter(|declared| declared.field == Field::Secret)
+            .filter(|declared| draft.secrets.contains_key(declared.key))
+            .map(|declared| declared.key)
+            .collect()
+    };
+    if asking.is_empty() {
+        return;
+    }
+    let def = ctx.draft.peek().def();
+    let mut probes = ctx.secret_probes;
+    probes.set(
+        asking
+            .iter()
+            .map(|key| ((*key).to_string(), SecretProbe::Asking))
+            .collect(),
+    );
+    for key in asking {
+        let Some(slot) = secret_slot(&def, key, &[]) else {
+            continue;
+        };
+        spawn(async move {
+            let read = offload(move || slot.key().get()).await;
+            let answer = match read {
+                Some(Ok(Some(_))) => SecretProbe::Stored,
+                Some(Ok(None)) => SecretProbe::Absent,
+                Some(Err(why)) => SecretProbe::Refused(format!(
+                    "This machine's keystore could not be read, so whether a value is stored \
+                     here is unknown. {why}"
+                )),
+                None => SecretProbe::Refused(
+                    "This machine's keystore could not be read: a worker did not answer.".into(),
+                ),
+            };
+            let mut next = probes.peek().clone();
+            next.insert(key.to_string(), answer);
+            probes.set(next);
+        });
     }
 }

@@ -8,7 +8,7 @@
 //! it. Picking files is multi-select — a table *is* many paths, and five files one dialog at a
 //! time is the same five rows with four more dialogs.
 //!
-//! **An object-store table is one path, in the same list.** On a connection the section is singular
+//! **An object-store table is one path, in the same list.** On a data source the section is singular
 //! throughout — `SOURCE PATH`, no toolbar —
 //! because an object store has no file dialog and its paths are text. Still this list one row long
 //! rather than a second control: the row is where the two-way sync with the draft lives, and what
@@ -52,7 +52,7 @@ const RESOLUTION_HINT: &str = "Each path resolves to one or more data files in t
 /// for a folder it picked, and nothing browses a bucket. Without it `events/2024` is a request
 /// for one object of that exact name, and the table registers empty.
 const STORE_HINT: &str = "The path resolves to one or more data files in the format chosen \
-                          above, relative to the connection's bucket. A folder ends with / and \
+                          above, relative to the source's bucket. A folder ends with / and \
                           is every file in it; a glob such as **/*.csv matches recursively.";
 
 #[derive(PartialEq)]
@@ -312,7 +312,7 @@ struct PathRow {
     index: usize,
     selected: bool,
     /// The bucket this row's path is written against, or `None` on the local disk *and* while no
-    /// connection is chosen — the list's answer, carried as a prop rather than read here (see
+    /// data source is chosen — the list's answer, carried as a prop rather than read here (see
     /// [`PathList`]).
     /// Whether LOCATION is on Remote — the row that has no Browse button behind it.
     remote: bool,

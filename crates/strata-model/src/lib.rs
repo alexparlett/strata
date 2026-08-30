@@ -7,14 +7,15 @@
 
 mod catalog;
 mod chart;
-mod connection;
 mod diagnostics;
 mod history;
 mod profile;
 mod query_error;
 mod results;
 mod schema;
+mod secret;
 mod session;
+mod source;
 
 pub use catalog::{
     CatalogKind, ColOwner, ColRef, CsvRead, FileCompression, JsonRead, JsonShape, RemoteRef,
@@ -24,17 +25,15 @@ pub use chart::{
     Axis, CapUnit, ChartBin, ChartConfig, ChartData, ChartMark, ChartPoint, ChartQuery,
     ChartSeries, ChartSort, ChartX, Trend,
 };
-pub use connection::{
-    check_catalog, check_catalog_name, mint_free_name, mint_name, ConnectionDef, GcsAuth, GcsStore,
-    Provider, ProviderId, S3Auth, S3Store, SourceDef, WORKSPACE_CATALOG,
-};
 pub use diagnostics::{Diagnostic, Severity};
 pub use history::HistoryEntry;
 pub use profile::CatalogProfile;
 pub use query_error::QueryError;
 pub use results::{Cell, PageQuery, QueryOutput, SnapshotId};
 pub use schema::{ChartRole, ColumnInfo, Kind, Stat, StatKey};
+pub use secret::SecretRef;
 pub use session::{
     expanded_drawer_h, DrawerTab, Layout, Origin, ProblemsTab, ResultsView, RightPane,
     SessionSnapshot, SidebarPane, TabId, TabSnapshot, WindowGeom,
 };
+pub use source::{check_catalog, check_catalog_name, Secrets, SourceDef, WORKSPACE_CATALOG};

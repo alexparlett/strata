@@ -23,7 +23,7 @@
 //! ## The target says where the request is kept
 //!
 //! [`ProfileTarget`] has two arms and every action here takes one, because a relation inside a
-//! database connection's catalog has no `ProjectState` row to record a request on — a database
+//! data source's catalog has no `ProjectState` row to record a request on — a database
 //! answers for itself, so there are no defs under it (DB-02). The rule that the store holds the
 //! request generalizes rather than being excepted: *whoever owns the surface holds it*, which for
 //! a remote relation is the window (`state::catalog`'s `RemoteScans`). Nothing is minted into the
@@ -93,7 +93,7 @@ impl ProfileWording for ProfileTarget {
                 "Runs one statement on the database that reads every row, to compute distinct \
                  counts, minimums, maximums and means. Distinct counts cannot be merged, so \
                  there is no cheaper form, and the server does the work. The result is cached \
-                 until the connection is refreshed."
+                 until the source is refreshed."
             }
         }
     }
@@ -404,8 +404,8 @@ mod tests {
             tables: vec![TableDef {
                 name: "events".into(),
                 format: SourceFormat::Parquet,
-                connection: None,
-                sources: vec!["events.parquet".into()],
+                source: None,
+                paths: vec!["events.parquet".into()],
                 partition_cols: Vec::new(),
                 origin: TableOrigin::External,
             }],
@@ -483,7 +483,7 @@ mod tests {
         ProfileTarget::Remote {
             kind,
             relation: RemoteRef {
-                connection: "pg".into(),
+                source: "pg".into(),
                 schema: "public".into(),
                 relation: relation.into(),
             },

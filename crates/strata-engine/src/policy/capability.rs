@@ -104,19 +104,19 @@ impl Grants {
     }
 }
 
-/// Which database connections a capability's remote grants reach.
+/// Which data sources a capability's remote grants reach.
 ///
 /// Applied by [`PolicyProvider::permit`] to the grants carrying [`Locality::Remote`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RemoteScope {
-    /// Every connection.
+    /// Every data source.
     All,
     /// Only these.
     Only(BTreeSet<RemoteSel>),
 }
 
 impl RemoteScope {
-    /// Whether this scope reaches the connection `facts` names.
+    /// Whether this scope reaches the data source `facts` names.
     ///
     /// A target carrying neither a kind nor a url matches nothing but [`All`](RemoteScope::All).
     fn reaches(&self, facts: &TargetFacts) -> bool {
@@ -124,19 +124,19 @@ impl RemoteScope {
             RemoteScope::All => true,
             RemoteScope::Only(selectors) => selectors.iter().any(|sel| match sel {
                 RemoteSel::Kind(kind) => facts.kind.as_deref() == Some(kind.as_str()),
-                RemoteSel::Connection(url) => facts.connection.as_deref() == Some(url.as_str()),
+                RemoteSel::Source(url) => facts.source.as_deref() == Some(url.as_str()),
             }),
         }
     }
 }
 
-/// One way of naming database connections in a [`RemoteScope`].
+/// One way of naming data sources in a [`RemoteScope`].
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RemoteSel {
-    /// Every connection of one backend kind (`"postgres"`, `"mysql"`).
+    /// Every data source of one backend kind (`"postgres"`, `"mysql"`).
     Kind(String),
-    /// One connection, by the exact url it is keyed under.
-    Connection(String),
+    /// One data source, by the exact url it is keyed under.
+    Source(String),
 }
 
 /// What a caller may do.
@@ -147,7 +147,7 @@ pub enum RemoteSel {
 ///
 /// # Example
 ///
-/// A client that may read anything and write only the sqlite connections:
+/// A client that may read anything and write only the sqlite data sources:
 ///
 /// ```
 /// use strata_engine::{Capability, Grant, Locality, RemoteSel};
@@ -163,7 +163,7 @@ pub struct Capability {
 }
 
 impl Capability {
-    /// Every grant, over every connection.
+    /// Every grant, over every data source.
     pub fn full() -> Self {
         Capability {
             grants: Grants::all(),
@@ -411,7 +411,7 @@ mod tests {
     /// The remote scope refines the remote grants and leaves reading alone — the RDS scenario,
     /// checked from both sides.
     #[test]
-    fn a_remote_scope_names_the_connections_a_write_may_reach() {
+    fn a_remote_scope_names_the_sources_a_write_may_reach() {
         let capability = Capability::read_only()
             .with(Grant::Write(Locality::Remote))
             .remote_only([RemoteSel::Kind("sqlite".into())]);
@@ -440,11 +440,11 @@ mod tests {
         );
     }
 
-    /// A connection selector names one url; the kind selector names a backend.
+    /// A data source selector names one url; the kind selector names a backend.
     #[test]
-    fn a_connection_selector_names_one_connection() {
-        let capability = Capability::full()
-            .remote_only([RemoteSel::Connection("postgres://acme/orders".into())]);
+    fn a_source_selector_names_one_source() {
+        let capability =
+            Capability::full().remote_only([RemoteSel::Source("postgres://acme/orders".into())]);
         let provider = CapabilityPolicyProvider::new(Capability::full());
         let who = Principal::new(capability);
         assert_eq!(
@@ -499,18 +499,17 @@ mod tests {
         }
     }
 
-    /// **Two selectors can name the same connection**, so the ceiling and the caller are asked
+    /// **Two selectors can name the same data source**, so the ceiling and the caller are asked
     /// separately rather than merged. A `RemoteScope` has no lossless intersection: merging
-    /// `Kind("postgres")` with `Connection("postgres://acme/orders")` by selector equality yields
-    /// the empty set, and would refuse the one connection both operands reach.
+    /// `Kind("postgres")` with `Data source("postgres://acme/orders")` by selector equality yields
+    /// the empty set, and would refuse the one data source both operands reach.
     #[test]
-    fn a_kind_ceiling_and_a_connection_ask_still_reach_the_connection_both_allow() {
+    fn a_kind_ceiling_and_a_source_ask_still_reach_the_source_both_allow() {
         let provider = CapabilityPolicyProvider::new(
             Capability::full().remote_only([RemoteSel::Kind("postgres".into())]),
         );
         let who = Principal::new(
-            Capability::full()
-                .remote_only([RemoteSel::Connection("postgres://acme/orders".into())]),
+            Capability::full().remote_only([RemoteSel::Source("postgres://acme/orders".into())]),
         );
         assert_eq!(
             block_on(provider.permit(
@@ -541,7 +540,7 @@ mod tests {
         );
     }
 
-    /// A remote view is the server's schema changing, so it needs the connection's DDL grant and
+    /// A remote view is the server's schema changing, so it needs the data source's DDL grant and
     /// not the workspace's view grant.
     #[test]
     fn a_remote_view_needs_the_remote_ddl_grant() {

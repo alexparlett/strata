@@ -1,21 +1,22 @@
 //! The workspace catalog: what is registered in it, and what a scan says about it.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use strata_core::project::resolve_source;
+use strata_core::project::ProjectDefs;
+use strata_model::TableDef;
 use strata_model::ViewDef;
 
-use crate::catalog::{self, TableMeta, TableSpec, ViewMeta};
+use crate::catalog::{self, deregister_anywhere, TableMeta, TableSpec, ViewMeta};
 use crate::register::{self, CatalogSpec, PassReport, RegOutcome};
-use crate::sources::store;
 use crate::statements::arms::{self, stamped};
 use crate::statements::report::StatementOutcome;
 use crate::statements::{StatementReport, StmtKind, StoreEffect};
 use crate::{
     fold_ident, profile, BackgroundGuard, CatalogGen, Engine, EngineError, ProfileRun, Scans,
-    StopReason,
+    SourceDefs, StopReason,
 };
 
 /// This engine's workspace catalog, from [`Engine::catalog`].
@@ -66,7 +67,7 @@ impl Catalog<'_> {
         let formats = self.engine.formats.clone();
         let tables = self.engine.tables.clone();
         let (name, internal) = (spec.name.clone(), spec.internal);
-        let connection = spec.connection.clone();
+        let source = spec.source.clone();
         let meta = self
             .engine
             .rt()
@@ -74,8 +75,7 @@ impl Catalog<'_> {
             .await
             .map_err(|e| EngineError::task("register", e))?;
         self.engine.note_origin(&name, internal && meta.is_ok());
-        self.engine
-            .note_scans(&name, Some(Scans::Table(connection)));
+        self.engine.note_scans(&name, Some(Scans::Table(source)));
         self.engine.generation.bump();
         meta.map_err(EngineError::from)
     }
@@ -86,7 +86,7 @@ impl Catalog<'_> {
     /// Moves the [`generation`](Self::generation) whether or not `table` was registered.
     pub fn deregister(self, table: &str) {
         self.cancel_profile(table);
-        let _ = self.engine.ctx.deregister_table(table);
+        deregister_anywhere(&self.engine.ctx, table);
         self.engine.note_origin(table, false);
         self.engine.note_scans(table, None);
         self.engine.generation.bump();
@@ -119,20 +119,38 @@ impl Catalog<'_> {
     /// Hive section offers. Listed through the session's object store, so it answers for a bucket
     /// as readily as for a local folder.
     ///
-    /// `paths` are as a table def stores them: relative to `connection` where one is named, and to
+    /// `paths` are as a table def stores them: relative to `data source` where one is named, and to
     /// `root` otherwise. **Composing the address is this side's**, because the scheme a store is
     /// registered under is the registry's answer and a caller that composed one would be keeping a
     /// second copy of it.
+    /// One table's registration spec, with its sources resolved against `root`.
+    ///
+    /// Composed by the engine for [`spec`](Self::spec)'s reason: turning a table's source into
+    /// the `scheme://authority` its files hang off is a **registry** question — the scheme
+    /// belongs to the kind — and the registry is the engine's.
+    pub fn table_spec(self, root: &Path, def: &TableDef, sources: &SourceDefs) -> TableSpec {
+        register::table_spec(root, def, sources, self.engine.registry())
+    }
+
+    /// The whole catalog `defs` describe, with every table's sources resolved against `root`.
+    ///
+    /// Composed by the engine rather than by the spec itself: a host with defs in hand and no
+    /// engine cannot turn a kind into a scheme, and every host that syncs has one.
+    pub fn spec(self, root: &Path, defs: &ProjectDefs) -> CatalogSpec {
+        CatalogSpec::of_project(root, defs, self.engine.registry())
+    }
+
     pub async fn detect_partitions(
         self,
-        connection: Option<String>,
+        source: Option<String>,
         root: Option<PathBuf>,
         paths: Vec<String>,
     ) -> Vec<String> {
-        let prefix = connection
-            .as_deref()
-            .and_then(|named| self.engine.connections.identity(named))
-            .and_then(|identity| store::store_prefix(&identity));
+        let prefix = source.as_deref().and_then(|named| {
+            self.engine
+                .source_defs
+                .prefix(&self.engine.registrants, named)
+        });
         let root = root.unwrap_or_default();
         let resolved: Vec<String> = paths
             .iter()

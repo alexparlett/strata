@@ -13,11 +13,11 @@ A virtual Cargo workspace, eight member crates plus a vendored fork:
 
 | Crate | Role |
 |---|---|
-| `strata-freya` | The app — Freya (Skia, native) frontend. One module per OS window under `apps/`: launcher, project, settings, export, configure, connection. The default build target. |
+| `strata-freya` | The app — Freya (Skia, native) frontend. One module per OS window under `apps/`: launcher, project, settings, export, configure, source. The default build target. |
 | `strata-core` | App services, DataFusion-free: config, keymap, themes, `.strata/` project persistence, the OS-keystore secret store, the model-listings satellite, the updater mechanism, shared `util`. |
 | `strata-arrow` | The Arrow-level vocabulary, DataFusion-free: the `ColumnInfo` row an Arrow field becomes, the value tree, the Copy/record-view serializers, the EXPLAIN plan model, and the two written-down catalogues (DataFusion's config keys, `object_store`'s client options). Sits on `strata-core`. |
 | `strata-engine` | The only place DataFusion is touched: query execution, the statement pipeline, snapshots, export, profiling, the SQL language service, the registration pass. Sits on `strata-arrow`. |
-| `strata-model` | The leaf data vocabulary — schema, results, catalog, session, history, connections. Serde only, no logic, so every other crate can speak it without dragging dependencies. |
+| `strata-model` | The leaf data vocabulary — schema, results, catalog, session, history, data sources. Serde only, no logic, so every other crate can speak it without dragging dependencies. |
 | `strata-code-editor` | The vendored Skia code editor (Rope buffer, tree-sitter highlighting, completion popup, diagnostic squiggles) the SQL surface is built on. |
 | `strata-agent` | Agent access: the read-only MCP tool vocabulary, the HTTP server, and the headless stdio host. Deliberately Freya-free — one implementation serves the in-app server and `strata mcp` alike. |
 | `strata-command-macro` | One proc macro: `#[command_router]` / `#[command]`, the command palette's registration mechanism. Knows nothing of Strata's types. |
@@ -138,7 +138,7 @@ flowchart LR
   the app's editor (`full()`) and its agent (`read_only()`). A caller's capability narrows the
   engine's and never widens it, which is what lets one engine serve both. It is asked twice:
   coarsely at classification, and again at the arm once `resolve_target` has said whether the name
-  is the workspace's, a live connection's or nowhere — the second derived from that answer, so an
+  is the workspace's, a live data source's or nowhere — the second derived from that answer, so an
   arm names neither the grant nor the locality.
 - **Dispatch is one axis and one contract.** `Target` says where a managed name points, `Mechanism`
   says how a kind reaches one that is not the workspace's (planned into the source's sink,
@@ -152,17 +152,22 @@ flowchart LR
   the def it produces is a plain `TableDef` flagged `origin: Internal`, so persist, replay and the
   headless host need no new code. A typed `CREATE EXTERNAL TABLE` is that same funnel with the def
   read off the statement instead, which is what makes it and Table Config two gestures at one
-  registration — and is why its `LOCATION` names a **connection** the project already has rather
+  registration — and is why its `LOCATION` names a **data source** the project already has rather
   than describing a bucket of its own.
 - A statement's outcome is a value the app folds — a `StatementReport` carrying a `StoreEffect` —
   never something read back out of DataFusion. Strata owns the catalog list, catalog and schema
   providers for identity and visibility only; lifecycle is intercepted in front of `ctx.sql`,
   because a sync `register_table` with no caller identity can neither spool a CTAS nor authorize a
-  `DROP`. The **workspace** catalog is one catalog with one flat, bare-name schema; a database
-  connection registers a sibling catalog beside it, with as many schemas as the server has. A name
-  qualified into one of those is read like any other and **managed by nothing** — v1 is read-only
-  against a database — and one predicate (`providers::in_workspace`) draws that line for both the
-  statement gate and the `__snap_` reserved namespace.
+  `DROP`. The **workspace** catalog is one catalog with one flat, bare-name schema, and **every data
+  source registers a sibling catalog beside it**: a database's has as many schemas as the server
+  has, an object store's has one and is fed by the project's own table defs, which is what makes
+  forgetting a bucket take its tables with it. A name qualified into a database's is read like any
+  other and managed by nothing it does not opt into; one qualified into a store catalog is one of
+  the project's own rows reached the long way, so `Target::Store` answers for it and every arm
+  behaves as it did when the tables lived in the workspace. Two predicates draw two different
+  lines: `providers::in_workspace` is the `__snap_` reserved namespace and is deliberately
+  unmoved, while `providers::def_backed` is *checkability* — whether a name has a project row
+  behind it — which is what a view's recorded dependencies split on.
 
 The statement surface and its policy tables are [STATEMENTS_SPEC.md](STATEMENTS_SPEC.md).
 
@@ -217,13 +222,13 @@ Every OS window is its own Freya tree with its own state; nothing reactive is sh
 windows except the app-global config store and the theme registry.
 
 - The **project window** is the workspace: two 48px rails, a sidebar (the data-sources
-  tree — the project's own catalog and its connections in one tree), the tabbed workbench, a right pane (column inspector *or* the assistant's chat — the
+  tree — the project's own catalog and its data sources in one tree), the tabbed workbench, a right pane (column inspector *or* the assistant's chat — the
   right rail picks one) and the drawer. One project per window; opening a project that is already
   windowed focuses it — that decision lives in one pure function.
 - The **launcher** shows when no project is open and closes when one does.
 - **Settings** is app-wide, one instance, pinned above the window that asked for it. Its edits
   are a draft; Apply commits a per-field diff against the seed.
-- **Export**, **Configure** and **Connection** are child windows owned by a project window —
+- **Export**, **Configure** and **Data source** are child windows owned by a project window —
   closing the owner closes them, and their lifetime is tied to the project subtree they were
   opened from. Export pins the snapshot it was opened on.
 
@@ -242,8 +247,8 @@ Connecting a client is [MCP_CLIENTS.md](MCP_CLIENTS.md).
 ## Data in and out
 
 - **Registration** — a table def names its sources (files, directories, globs; local or
-  bucket-relative through a named connection) and its per-format read options; the registration
-  pass connects connections first, then tables, then views to a fixed point. Failures land on
+  bucket-relative through a named data source) and its per-format read options; the registration
+  pass connects data sources first, then tables, then views to a fixed point. Failures land on
   the def's row, visible with their reason. [CONNECTIONS_SPEC.md](CONNECTIONS_SPEC.md),
   [IMPORT_OPTIONS.md](IMPORT_OPTIONS.md).
 
@@ -260,8 +265,8 @@ Connecting a client is [MCP_CLIENTS.md](MCP_CLIENTS.md).
   engine mints on every registry write and on nothing else. The window adopts it rather than
   counting its own: it is what a tab's diagnostics are stamped against and what the remote-columns
   cache is keyed by, so a gesture that changed nothing re-derives nothing.
-- **Databases** — a PostgreSQL connection registers a DataFusion **catalog** instead of an object
-  store, so the whole database is queryable as `pg.public.orders` with no per-table declaration,
+- **Databases** — a PostgreSQL source registers a DataFusion **catalog** of relations the server
+  enumerates, so the whole database is queryable as `pg.public.orders` with no per-table declaration,
   and a same-source subplan is pushed back to the server as one statement
   (`datafusion-federation`). Discovery gets catalogs; declaration gets defs.
   [CONNECTIONS_SPEC.md](CONNECTIONS_SPEC.md).

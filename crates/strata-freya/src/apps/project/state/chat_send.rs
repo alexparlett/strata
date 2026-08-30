@@ -33,6 +33,7 @@ use strata_agent::wire::{DescribeTableParams, SeverityWire, ValidateParams};
 use strata_agent::StrataTools;
 use strata_core::ai::Ai;
 use strata_core::project::clear_chats;
+use strata_core::secret::Keystore;
 use strata_core::secret::SecretRef;
 use strata_model::CatalogKind;
 use uuid::Uuid;

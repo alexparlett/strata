@@ -63,6 +63,15 @@ impl EngineCtx {
     }
 }
 
+#[cfg(test)]
+impl EngineCtx {
+    /// Wrap an engine a **test** built itself — one carrying a registrant no window would have,
+    /// so the editor can be driven against a source that exists nowhere in the app.
+    pub(crate) fn of(eng: Arc<Engine>) -> Self {
+        Self { eng }
+    }
+}
+
 impl Deref for EngineCtx {
     type Target = Engine;
 

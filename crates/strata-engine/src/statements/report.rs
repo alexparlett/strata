@@ -77,7 +77,7 @@ pub enum StoreEffect {
     /// and did not a moment ago, so both the language service's snapshot and every tab's
     /// diagnostics have to be re-derived against the session the engine now holds.
     PreparedChanged,
-    /// A database connection holds a relation it did not a moment ago — a remote CTAS.
+    /// A data source holds a relation it did not a moment ago — a remote CTAS.
     /// The store has no row for a remote relation and never will (*discovery gets catalogs*), so
     /// there is nothing to upsert; what has to move is the catalog epoch, which the tree,
     /// completion and every tab's diagnostics already key on. The `FunctionsChanged` shape, for

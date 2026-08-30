@@ -1,10 +1,10 @@
-//! **A database connection, against a real `PostgreSQL`** (DB-02) — the half no unit test can
+//! **A source, against a real `PostgreSQL`** (DB-02) — the half no unit test can
 //! reach.
 //!
 //! Everything the Postgres arm does is a round trip: the pool's construction *is* the probe, the
 //! catalog is built from an introspection query, a provider is built from a second one, and the
 //! point of the whole workstream — a same-source subplan leaving as one SQL statement — only
-//! exists once a server has parsed and answered it. A unit test can prove a `ConnectionDef`
+//! exists once a server has parsed and answered it. A unit test can prove a `SourceDef`
 //! yields a well-formed parameter map, and nothing beyond that.
 //!
 //! **A real server rather than a mock**, the same argument as `object_store_minio.rs`: the
@@ -13,7 +13,7 @@
 //! factory under test.
 //!
 //! **It drives `Sources::connect`, the real entry point, password and all**, because the keystore
-//! bridge (`SecretRef::derived` → `KeystorePassword` → one read per pool connection) is the
+//! bridge (`SecretRef::derived` → `KeystorePassword` → one read per pool data source) is the
 //! genuinely new machinery. What it substitutes is the *keystore*, not the bridge:
 //! `keyring_core::mock` is this binary's store, so no real Keychain is touched — that round trip
 //! stays `tests/secret_keystore.rs`'s, a separate binary because a process has one default store.
@@ -32,7 +32,7 @@
 //! built without it has no `PostgreSQL` in its tree, and neither does this.
 #![cfg(feature = "postgres")]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::path::Path;
 use std::sync::Once;
@@ -46,18 +46,16 @@ use strata_arrow::profile::Profiled;
 use strata_core::project::ProjectDefs;
 
 use strata_engine::profile::{aggregates, profile_sql};
-use strata_engine::register::{table_spec, CatalogSpec, RegOutcome};
+use strata_engine::register::RegOutcome;
 use strata_engine::sources::postgres::settings::PASSWORD as PASSWORD_KEY;
-use strata_engine::sources::{
-    migrate_secrets, put_secret, SchemaListingView, SchemaVisibility, SourceDetail,
-};
+use strata_engine::sources::{put_secret, SchemaListingView, SchemaVisibility, SourceDetail};
 use strata_engine::{
-    sql, Connections, Engine, EngineError, RunOutcome, RunTag, StopReason, StoreEffect, ViewMeta,
+    sql, Engine, EngineError, RunOutcome, RunTag, SourceDefs, StopReason, StoreEffect, ViewMeta,
     WsId,
 };
 use strata_model::{
-    Cell, ConnectionDef, CsvRead, Provider, SourceDef, SourceFormat, StatKey, TableDef,
-    TableOrigin, ViewDef,
+    Cell, CsvRead, SecretRef, Secrets, SourceDef, SourceFormat, StatKey, TableDef, TableOrigin,
+    ViewDef,
 };
 use testcontainers::runners::AsyncRunner;
 use testcontainers::ContainerAsync;
@@ -67,7 +65,7 @@ use testcontainers_modules::postgres::Postgres;
 const USER: &str = "postgres";
 const PASSWORD: &str = "postgres";
 const DATABASE: &str = "postgres";
-/// How queries address the connection — the catalog half of `catalog.schema.table`.
+/// How queries address the data source — the catalog half of `catalog.schema.table`.
 const CATALOG: &str = "pg";
 
 /// The fixture. Two tables in `public` that can be joined, one in a schema of its own (so the
@@ -134,51 +132,52 @@ async fn postgres() -> (ContainerAsync<Postgres>, u16) {
 /// Seed the database over the raw driver — deliberately a different layer from the pool and
 /// factory under test.
 async fn seed(port: u16) {
-    let (client, connection) = tokio_postgres::connect(
+    let (client, source) = tokio_postgres::connect(
         &format!("host=127.0.0.1 port={port} user={USER} password={PASSWORD} dbname={DATABASE}"),
         tokio_postgres::NoTls,
     )
     .await
     .expect("connect to seed");
     tokio::spawn(async move {
-        if let Err(e) = connection.await {
+        if let Err(e) = source.await {
             eprintln!("seed connection ended: {e}");
         }
     });
     client.batch_execute(SEED).await.expect("seed the database");
 }
 
-/// The connection under test. `sslmode=disable` because the container serves plain TCP; the two
+/// The data source under test. `sslmode=disable` because the container serves plain TCP; the two
 /// verifying modes are the provider crate's emulation and would need a certificate this fixture
 /// has no way to produce.
 ///
 /// **Read-only**, which is the shipped default — [`writable`] is what the write phases connect
-/// with, so every phase before them is driven through exactly the connection a user gets.
-fn connection(port: u16, catalog: &str, schemas: &[&str]) -> ConnectionDef {
-    ConnectionDef {
-        address: format!("127.0.0.1:{port}/{DATABASE}"),
+/// with, so every phase before them is driven through exactly the data source a user gets.
+fn source(port: u16, catalog: &str, schemas: &[&str]) -> SourceDef {
+    SourceDef {
+        kind: "postgres".into(),
         name: catalog.into(),
-        provider: Provider::Source(SourceDef {
-            kind: "postgres".into(),
-            config: BTreeMap::from([
-                ("user".to_string(), USER.to_string()),
-                ("sslmode".to_string(), "disable".to_string()),
-            ]),
-            secrets: BTreeSet::from([PASSWORD_KEY.to_string()]),
-            schemas: schemas.iter().map(|s| (*s).to_string()).collect(),
-            read_only: true,
-        }),
-        client_config: BTreeMap::new(),
+        config: BTreeMap::from([
+            (
+                "address".to_string(),
+                format!("127.0.0.1:{port}/{DATABASE}"),
+            ),
+            ("user".to_string(), USER.to_string()),
+            ("sslmode".to_string(), "disable".to_string()),
+        ]),
+        secrets: Secrets::Filed(BTreeMap::from([(
+            PASSWORD_KEY.to_string(),
+            SecretRef::derived("test-password", catalog),
+        )])),
+        schemas: schemas.iter().map(|s| (*s).to_string()).collect(),
+        read_only: true,
     }
 }
 
-/// The same connection opted in to writes (DB-10) — the one setting that separates them, so a
+/// The same data source opted in to writes (DB-10) — the one setting that separates them, so a
 /// re-connect with this is exactly the user turning the toggle off.
-fn writable(port: u16, catalog: &str, schemas: &[&str]) -> ConnectionDef {
-    let mut def = connection(port, catalog, schemas);
-    if let Provider::Source(source) = &mut def.provider {
-        source.read_only = false;
-    }
+fn writable(port: u16, catalog: &str, schemas: &[&str]) -> SourceDef {
+    let mut def = source(port, catalog, schemas);
+    def.read_only = false;
     def
 }
 
@@ -191,9 +190,9 @@ fn mocked_keystore() {
     });
 }
 
-/// File `value` under the slot `conn` derives, exactly as the connection editor will — the
+/// File `value` under the slot `conn` derives, exactly as the data source editor will — the
 /// def stores no reference, so this is the only place the id exists.
-fn store_password(conn: &ConnectionDef, value: &str) {
+fn store_password(conn: &SourceDef, value: &str) {
     put_secret(conn, PASSWORD_KEY, value).expect("this machine's keystore answers");
 }
 
@@ -227,16 +226,16 @@ async fn explain(engine: &Engine, tag: u128, sql: &str) -> String {
 }
 
 #[tokio::test]
-async fn a_database_connection_registers_a_federated_catalog() {
+async fn a_database_source_registers_a_federated_catalog() {
     mocked_keystore();
     let (_pg, port) = postgres().await;
     seed(port).await;
 
     let engine = Engine::builder().build();
-    let conn = connection(port, CATALOG, &["public"]);
+    let conn = source(port, CATALOG, &["public"]);
     store_password(&conn, PASSWORD);
 
-    let missing = connection(port, "no_password", &["public"]);
+    let missing = source(port, "no_password", &["public"]);
     store_password(&missing, "");
     let why = engine
         .sources()
@@ -246,7 +245,7 @@ async fn a_database_connection_registers_a_federated_catalog() {
         .to_string();
     assert!(
         why.contains("No password is stored on this machine") && why.contains(&missing.named()),
-        "the refusal names the machine and the connection: {why}"
+        "the refusal names the machine and the data source: {why}"
     );
 
     let closed = {
@@ -255,7 +254,7 @@ async fn a_database_connection_registers_a_federated_catalog() {
         drop(taken);
         port
     };
-    let elsewhere = connection(closed, "elsewhere", &["public"]);
+    let elsewhere = source(closed, "elsewhere", &["public"]);
     store_password(&elsewhere, PASSWORD);
     let why = engine
         .sources()
@@ -268,7 +267,7 @@ async fn a_database_connection_registers_a_federated_catalog() {
         "the refusal names the address to fix: {why}"
     );
 
-    let wrong_password = connection(port, "wrong_password", &["public"]);
+    let wrong_password = source(port, "wrong_password", &["public"]);
     store_password(&wrong_password, "not-it");
     let why = engine
         .sources()
@@ -278,7 +277,7 @@ async fn a_database_connection_registers_a_federated_catalog() {
         .to_string();
     assert!(why.contains(USER), "the refusal names the user: {why}");
 
-    let reserved = connection(port, "strata", &["public"]);
+    let reserved = source(port, "strata", &["public"]);
     store_password(&reserved, PASSWORD);
     let why = engine
         .sources()
@@ -290,14 +289,14 @@ async fn a_database_connection_registers_a_federated_catalog() {
 
     assert!(
         !live(&engine, &conn),
-        "a refused connection registers nothing"
+        "a refused data source registers nothing"
     );
 
     engine
         .sources()
         .connect(conn.clone())
         .await
-        .expect("the connection registers its catalog");
+        .expect("the data source registers its catalog");
 
     enumeration(&engine).await;
     qualified_offer(&engine).await;
@@ -322,7 +321,7 @@ async fn a_database_connection_registers_a_federated_catalog() {
 /// (a second `#[tokio::test]` would race this one for the single container worker).
 ///
 /// The tagging half asks for a schema the server does not have, which is a change to what the
-/// connection **shows** rather than a def handed to a read — the listing is the session's now, so
+/// data source **shows** rather than a def handed to a read — the listing is the session's now, so
 /// the phase puts the shown set back before the phases after it run.
 async fn enumeration(engine: &Engine) {
     let names = rows(
@@ -394,8 +393,8 @@ async fn enumeration(engine: &Engine) {
     );
 }
 
-/// Is `conn` a connection this engine holds live right now? — the snapshot's own answer.
-fn live(engine: &Engine, conn: &ConnectionDef) -> bool {
+/// Is `conn` a data source this engine holds live right now? — the snapshot's own answer.
+fn live(engine: &Engine, conn: &SourceDef) -> bool {
     engine
         .sources()
         .listing()
@@ -403,9 +402,9 @@ fn live(engine: &Engine, conn: &ConnectionDef) -> bool {
         .is_some_and(|source| source.live)
 }
 
-/// What the connection called `name` shows, scoped and tagged — the one read every surface makes.
+/// What the data source called `name` shows, scoped and tagged — the one read every surface makes.
 ///
-/// Panics if this engine holds no catalog connection under that name, which every caller here has
+/// Panics if this engine holds no catalog data source under that name, which every caller here has
 /// just registered.
 fn schemas_of(engine: &Engine, name: &str) -> Vec<SchemaListingView> {
     match engine
@@ -419,7 +418,7 @@ fn schemas_of(engine: &Engine, name: &str) -> Vec<SchemaListingView> {
     }
 }
 
-/// **What completion offers for this connection, and that the name it hands over runs** (DB-06)
+/// **What completion offers for this data source, and that the name it hands over runs** (DB-06)
 /// — a phase of the test above.
 ///
 /// The offer is unit-tested against a hand-built listing next door; what only a server can settle
@@ -729,17 +728,17 @@ async fn mixed_plan(engine: &Engine, dir: &Path) {
     fs::write(dir.join("tiers.csv"), "customer,tier\n10,gold\n20,silver\n").expect("the fixture");
     engine
         .catalog()
-        .register(table_spec(
+        .register(engine.catalog().table_spec(
             dir,
             &TableDef {
                 name: "tiers".into(),
                 format: SourceFormat::Csv(CsvRead::default()),
-                connection: None,
-                sources: vec!["tiers.csv".into()],
+                source: None,
+                paths: vec!["tiers.csv".into()],
                 partition_cols: Vec::new(),
                 origin: TableOrigin::External,
             },
-            &Connections::default(),
+            &SourceDefs::default(),
         ))
         .await
         .expect("a local file table");
@@ -853,11 +852,11 @@ async fn exotic_types_and_refusals(engine: &Engine) {
 /// **JSON accessors over a remote column** (DB-08) — a phase of the test above.
 ///
 /// The rewrite is judged by the *server*, which is the whole reason this lives here: a unit test
-/// can pin the operator syntax the connection's dialect produces (and does, beside it in
+/// can pin the operator syntax the data source's dialect produces (and does, beside it in
 /// `sources::postgres::dialect`), but only `PostgreSQL` can say that `->>` over a `jsonb` column
 /// means what `json_as_text` means over the text that column arrives as.
 ///
-/// **The rewrite is the connection's unparser dialect**, so the statement is *written* with the
+/// **The rewrite is the data source's unparser dialect**, so the statement is *written* with the
 /// operator rather than rewritten into one afterwards. Two things that reads differently in a plan
 /// and are pinned below: a federated node carries no `rewritten_executor_sql=`, and a refused
 /// statement carries no `base_sql=` either — federation prints that field only when the plan
@@ -943,7 +942,7 @@ async fn json_pushdown(engine: &Engine, dir: &Path) {
         why.contains("'json_get'")
             && why.contains("'->>'")
             && why.contains(&format!("'{CATALOG}'")),
-        "the refusal names the function, the spelling that works and the connection: {why}"
+        "the refusal names the function, the spelling that works and the data source: {why}"
     );
 
     let Err(why) = engine
@@ -991,17 +990,17 @@ async fn json_pushdown(engine: &Engine, dir: &Path) {
     .expect("the fixture");
     engine
         .catalog()
-        .register(table_spec(
+        .register(engine.catalog().table_spec(
             dir,
             &TableDef {
                 name: "local_events".into(),
                 format: SourceFormat::Csv(CsvRead::default()),
-                connection: None,
-                sources: vec!["local_events.csv".into()],
+                source: None,
+                paths: vec!["local_events.csv".into()],
                 partition_cols: Vec::new(),
                 origin: TableOrigin::External,
             },
-            &Connections::default(),
+            &SourceDefs::default(),
         ))
         .await
         .expect("a local table with a JSON text column");
@@ -1026,26 +1025,28 @@ async fn json_pushdown(engine: &Engine, dir: &Path) {
 /// **A reconnect replaces, a rename does not, and a disconnect stops resolving** — a phase of the
 /// test above.
 ///
-/// The middle one is the one worth pinning. `Live` is keyed by the connection's **name**, so a
-/// rename is a new key rather than a displacement, and it cannot be otherwise: two connections
+/// The middle one is the one worth pinning. `Live` is keyed by the data source's **name**, so a
+/// rename is a new key rather than a displacement, and it cannot be otherwise: two data sources
 /// may share an identity and differ only by name, so nothing the engine can see tells a renamed
-/// connection from a second one to the same server. Retiring the old catalog is therefore the
-/// renaming gesture's own `Sources::disconnect`, which is what the connection editor's Save makes.
+/// data source from a second one to the same server. Retiring the old catalog is therefore the
+/// renaming gesture's own `Sources::disconnect`, which is what the data source editor's Save makes.
 ///
-/// The rename goes through [`migrate_secrets`] rather than storing a second password, because
-/// that is what a rename *is* now: the keystore slot is derived from the connection's name, so
-/// moving the name moves the entry, and a rename that skipped this funnel would leave the
-/// connection unable to log in. Last phase of the test, so the old name's empty slot is nobody's
-/// problem afterwards.
+/// **The rename owes the keystore nothing**, which is what recording the slot bought: the ref
+/// travels in the def, so a renamed data source logs in with the password it already had and no
+/// migration runs. A slot derived from the name moved on every machine while only the renaming
+/// one could move its own entry, leaving every colleague unable to log in. Last phase of the
+/// test, so the rename is nobody's problem afterwards.
 async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
-    let was = connection(port, CATALOG, &["public"]);
-    let renamed = connection(port, "warehouse", &["public"]);
-    migrate_secrets(&was, &renamed).expect("this machine's keystore answers");
+    let was = source(port, CATALOG, &["public"]);
+    let renamed = SourceDef {
+        name: "warehouse".into(),
+        ..was.clone()
+    };
     engine
         .sources()
         .connect(renamed.clone())
         .await
-        .expect("the same connection under a new catalog name");
+        .expect("the same data source under a new catalog name");
     assert_eq!(
         rows(engine, 14, "SELECT count(*) FROM warehouse.public.orders").await,
         vec![vec!["3".to_string()]]
@@ -1060,8 +1061,8 @@ async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
             )
             .await
             .is_ok(),
-        "the old name is still registered until something retires it: two connections may share \
-         an identity, so nothing the engine sees tells a rename from a second connection"
+        "the old name is still registered until something retires it: two data sources may share \
+         an identity, so nothing the engine sees tells a rename from a second source"
     );
 
     engine.sources().disconnect(&was.named());
@@ -1089,7 +1090,7 @@ async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
             )
             .await
             .is_err(),
-        "a forgotten connection's catalog must stop resolving"
+        "a forgotten data source's catalog must stop resolving"
     );
     assert!(
         !live(engine, &renamed),
@@ -1123,8 +1124,8 @@ async fn statement_policy(engine: &Engine, dir: &Path) {
         };
         assert!(
             why.to_string()
-                .contains(&format!("database connection '{CATALOG}'")),
-            "'{sql}' must name the connection: {why}"
+                .contains(&format!("data source '{CATALOG}'")),
+            "'{sql}' must name the data source: {why}"
         );
     }
 
@@ -1199,7 +1200,7 @@ async fn unqualified_names(engine: &Engine, port: u16) {
             .run(RunTag(42), "SELECT * FROM sessions".to_string(), 200)
             .await
             .is_err(),
-        "a schema the connection does not show must not capture a bare name"
+        "a schema the data source does not show must not capture a bare name"
     );
     assert_eq!(
         rows(
@@ -1245,7 +1246,7 @@ async fn unqualified_names(engine: &Engine, port: u16) {
     };
     assert!(
         why.to_string()
-            .contains(&format!("database connection '{CATALOG}'")),
+            .contains(&format!("data source '{CATALOG}'")),
         "a write target is refused as remote, not as missing: {why}"
     );
 
@@ -1321,7 +1322,7 @@ async fn ambiguous_names(engine: &Engine, port: u16) {
             eprintln!("fixture connection ended: {e}");
         }
     });
-    let conn = connection(port, CATALOG, &["public", "analytics"]);
+    let conn = source(port, CATALOG, &["public", "analytics"]);
 
     client
         .batch_execute("CREATE TABLE analytics.orders (id INT PRIMARY KEY);")
@@ -1373,7 +1374,7 @@ async fn ambiguous_names(engine: &Engine, port: u16) {
         .expect("put the fixture back");
     engine
         .sources()
-        .connect(connection(port, CATALOG, &["public"]))
+        .connect(source(port, CATALOG, &["public"]))
         .await
         .expect("re-enumerates");
 }
@@ -1381,7 +1382,7 @@ async fn ambiguous_names(engine: &Engine, port: u16) {
 /// **Writing into a database** (DB-10) — a phase of the test above, and the one no fake catalog
 /// can stand in for: an insert is only real once a server has taken it.
 ///
-/// Opting in is a **re-connect with the toggle off**, which is exactly what the connection editor's
+/// Opting in is a **re-connect with the toggle off**, which is exactly what the data source editor's
 /// Save does, so nothing here reaches past the def to arrange it.
 async fn remote_writes(engine: &Engine, port: u16) {
     let conn = writable(port, CATALOG, &["public"]);
@@ -1389,7 +1390,7 @@ async fn remote_writes(engine: &Engine, port: u16) {
         .sources()
         .connect(conn.clone())
         .await
-        .expect("the same connection, opted in to writes");
+        .expect("the same data source, opted in to writes");
 
     engine
         .ws(WsId(1))
@@ -1454,9 +1455,9 @@ async fn remote_writes(engine: &Engine, port: u16) {
         .expect("put the workspace back");
     engine
         .sources()
-        .connect(connection(port, CATALOG, &["public"]))
+        .connect(source(port, CATALOG, &["public"]))
         .await
-        .expect("and the connection back to read-only");
+        .expect("and the data source back to read-only");
     let Err(why) = engine
         .ws(WsId(1))
         .run(
@@ -1530,14 +1531,14 @@ async fn remote_statements(engine: &Engine, port: u16) {
     remote_dml_reports_the_servers_count(engine).await;
     workspace_dml_says_where_it_works(engine).await;
     a_remote_drop_names_its_readers(engine, port).await;
-    remote_bodies_stay_inside_the_connection(engine).await;
+    remote_bodies_stay_inside_the_source(engine).await;
     remote_statements_stay_refused_to_an_agent(engine).await;
 
     engine
         .sources()
-        .connect(connection(port, CATALOG, &["public"]))
+        .connect(source(port, CATALOG, &["public"]))
         .await
-        .expect("the connection back to read-only");
+        .expect("the data source back to read-only");
     let Err(why) = engine
         .ws(WsId(1))
         .run(
@@ -1574,7 +1575,7 @@ async fn clause_fidelity_survives_dispatch(port: u16) {
 
 /// **A column list in the server's own type vocabulary**, which is the half DataFusion cannot
 /// plan: `jsonb` has no Arrow mapping, so a statement asking to be planned would be refused before
-/// anything reached the connection.
+/// anything reached the data source.
 async fn server_typed_columns(engine: &Engine) {
     let RunOutcome::Statement(report) = engine
         .ws(WsId(1))
@@ -1696,7 +1697,7 @@ async fn workspace_dml_says_where_it_works(engine: &Engine) {
         };
         let why = why.to_string();
         assert!(
-            why.contains("database connection") && why.contains("CREATE TABLE AS"),
+            why.contains("data source") && why.contains("CREATE TABLE AS"),
             "'{sql}': {why}"
         );
     }
@@ -1767,8 +1768,8 @@ async fn a_remote_drop_names_its_readers(engine: &Engine, port: u16) {
 }
 
 /// A statement that runs on the server may only name that server's relations, refused **by name**
-/// otherwise — a workspace table, and a name left bare because nothing in the connection has it.
-async fn remote_bodies_stay_inside_the_connection(engine: &Engine) {
+/// otherwise — a workspace table, and a name left bare because nothing in the data source has it.
+async fn remote_bodies_stay_inside_the_source(engine: &Engine) {
     for (sql, named) in [
         (
             format!(
@@ -1783,7 +1784,7 @@ async fn remote_bodies_stay_inside_the_connection(engine: &Engine) {
         ),
     ] {
         let Err(why) = engine.ws(WsId(1)).run(RunTag(105), sql.clone(), 200).await else {
-            panic!("'{sql}' reaches outside the connection");
+            panic!("'{sql}' reaches outside the data source");
         };
         assert!(why.to_string().contains(named), "'{sql}': {why}");
     }
@@ -1806,7 +1807,7 @@ async fn remote_statements_stay_refused_to_an_agent(engine: &Engine) {
     }
 }
 
-/// A raw driver connection to the fixture, held by the caller's task for as long as it is used.
+/// A raw driver data source to the fixture, held by the caller's task for as long as it is used.
 async fn raw_client(port: u16, why: &str) -> tokio_postgres::Client {
     let (client, driver) = tokio_postgres::connect(
         &format!("host=127.0.0.1 port={port} user={USER} password={PASSWORD} dbname={DATABASE}"),
@@ -1823,7 +1824,7 @@ async fn raw_client(port: u16, why: &str) -> tokio_postgres::Client {
 }
 
 /// **Every shape of `INSERT` a remote target can take**: literal rows, a local source, a remote
-/// one, and a **bare** name that only the connection has — which is DB-10's other half, the write
+/// one, and a **bare** name that only the data source has — which is DB-10's other half, the write
 /// target resolving exactly as a read does.
 ///
 /// One loop rather than four blocks, because what is under test is that they answer identically:
@@ -1967,7 +1968,7 @@ async fn ctas_name_semantics(engine: &Engine) {
 /// The failure is a cast the *values* refuse: the plan's schema is `Int32`, so the server table is
 /// created with an `INTEGER` column, and 'acme' only fails once rows are actually moving. A
 /// literal would have been folded away at planning, before anything was created.
-async fn failed_ctas_leaves_nothing(engine: &Engine, conn: &ConnectionDef) {
+async fn failed_ctas_leaves_nothing(engine: &Engine, conn: &SourceDef) {
     let Err(why) = engine
         .ws(WsId(1))
         .run(
@@ -2074,7 +2075,7 @@ async fn cancelled_ctas_leaves_nothing(engine: &Engine, port: u16) {
 /// **Loading a remote relation into a workspace table** (DB-12) — the fourth direction, and a
 /// phase of the test above.
 ///
-/// Only a server can reach the fault: the plan's every scan belongs to the connection, so
+/// Only a server can reach the fault: the plan's every scan belongs to the data source, so
 /// `datafusion-federation` swept the whole plan up including the node that *writes*, and the
 /// unparser was then asked for SQL a write has no spelling in. A fake catalog federates nothing and
 /// would pass either way.
@@ -2084,7 +2085,7 @@ async fn cancelled_ctas_leaves_nothing(engine: &Engine, port: u16) {
 /// failed the same way — the task's premise that a CTAS was "the working spelling" was wrong, and
 /// this phase is what says so.
 ///
-/// The connection is **read-only** here — [`remote_writes`] put it back — because pulling rows in
+/// The data source is **read-only** here — [`remote_writes`] put it back — because pulling rows in
 /// is a read of the database and must need no opt-in.
 ///
 /// The target's columns are deliberately named apart from the source's, which is what makes the
@@ -2179,7 +2180,7 @@ async fn remote_source_into_a_workspace_table(engine: &Engine, dir: &Path) {
             200,
         )
         .await
-        .expect("a CTAS reads the connection and spools the result")
+        .expect("a CTAS reads the data source and spools the result")
     else {
         panic!("CREATE TABLE AS ran as a query");
     };
@@ -2225,7 +2226,7 @@ async fn relation_exists(client: &tokio_postgres::Client, name: &str) -> bool {
         .get(0)
 }
 
-/// **The agent is still read-only**, with a writable connection registered and the two write
+/// **The agent is still read-only**, with a writable data source registered and the two write
 /// statements otherwise working. The parity matrix in `sql::validate` pins the classification;
 /// what this pins is that no part of DB-10 reached past it.
 async fn agent_stays_read_only(engine: &Engine) {
@@ -2249,8 +2250,8 @@ async fn agent_stays_read_only(engine: &Engine) {
 /// things under test are about replay: dropping the local table names the view as a dependent; its
 /// recorded dependencies carry the remote name qualified and the workspace half bare, where
 /// recording by bare component would make both read as this project's tables; it re-registers
-/// *after* the connection, which is why connections are the pass's first phase; and with the remote
-/// half taken away server-side it settles `Failed` naming the connection. Nothing observes that
+/// *after* the source, which is why data sources are the pass's first phase; and with the remote
+/// half taken away server-side it settles `Failed` naming the data source. Nothing observes that
 /// removal, so the reconciliation is the next pass.
 async fn cross_source_views(port: u16, dir: &Path) {
     let (client, driver) = tokio_postgres::connect(
@@ -2270,12 +2271,12 @@ async fn cross_source_views(port: u16, dir: &Path) {
         .expect("a relation to take away");
 
     let defs = ProjectDefs {
-        connections: vec![connection(port, CATALOG, &["public"])],
+        sources: vec![source(port, CATALOG, &["public"])],
         tables: vec![TableDef {
             name: "tiers".into(),
             format: SourceFormat::Csv(CsvRead::default()),
-            connection: None,
-            sources: vec!["tiers.csv".into()],
+            source: None,
+            paths: vec!["tiers.csv".into()],
             partition_cols: Vec::new(),
             origin: TableOrigin::External,
         }],
@@ -2331,9 +2332,9 @@ async fn cross_source_views(port: u16, dir: &Path) {
     let why = view_error(&outcomes, "over_transient").expect("the view can no longer plan");
     assert!(
         why.contains(&format!("{CATALOG}.public.transient"))
-            && why.contains(&format!("database connection '{CATALOG}'"))
+            && why.contains(&format!("data source '{CATALOG}'"))
             && why.contains("Refresh the catalog"),
-        "the row names the relation, the connection and the fix: {why}"
+        "the row names the relation, the data source and the fix: {why}"
     );
 }
 
@@ -2342,7 +2343,7 @@ async fn replay(engine: &Engine, root: &Path, defs: &ProjectDefs) -> Vec<RegOutc
     let mut out = Vec::new();
     engine
         .catalog()
-        .sync(CatalogSpec::of_project(root, defs), |o| out.push(o))
+        .sync(engine.catalog().spec(root, defs), |o| out.push(o))
         .await;
     out
 }

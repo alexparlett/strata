@@ -1054,7 +1054,7 @@ mod tests {
     }
 
     /// **The prefix is a namespace, and the namespace is the workspace catalog's.** A `__snap_`
-    /// name qualified into a database connection's catalog is a relation somebody else named, so
+    /// name qualified into a data source's catalog is a relation somebody else named, so
     /// reading it is ordinary and writing to it is refused for being remote rather than reserved.
     ///
     /// Deliberately **syntactic**: nothing asks whether `pg` is registered, because [`classify`] is

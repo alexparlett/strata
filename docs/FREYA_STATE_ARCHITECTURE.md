@@ -87,7 +87,7 @@ editor buffer lives in the store, inside the tab.
 |-------|------|-----------|-------|
 | **`AppConfig`** (`state/config.rs`) | Radio (**global**, `RadioStation::create_global`) | yes (`config.prefs.json`) | the machine-global config: user `Settings`, the recent-projects list, and the set of projects with a window open. Channels = audiences (`ConfigChan::{Settings, Recents, Open}`), so opening a project doesn't wake theme readers. Created once in `main`, shared into every window root (`use_share_config`). **One** write path — `write_config` mutates, notifies, and persists; disk is a startup input, never re-read to answer a question. The persisted open-set is *taken* at startup (it is last run's ledger, not live truth) and rebuilt by each window's `use_claim_open`. |
 | **`SessionState`** (`apps/project/state/session.rs`) | Radio (per-window) | yes (snapshot, §5) | the open tabs (each a `QueryTab` owning its `CodeEditorData`, request, view mode, chart encoding, diagnostics), strip order, active, the reopen stack, the panel **layout**, and a throwaway `scratch` buffer (§3) |
-| **`ProjectState`** (`apps/project/state/project.rs`) | Radio (per-window) | yes (`project.json`) | catalog rows: pure defs (`TableDef`/`ViewDef`/`SavedQuery`/`ConnectionDef`) each wrapped with registration state (`Reg<T>`: Loading/Ready/Failed) — the *save targets*, plus each row's profile **request** (§6b). Identity: views/tables by **name** (their SQL identity, one shared namespace, compared case-insensitively); saved queries by stable **`id: Uuid`**; connections by **`url()`**. Defs persist; `Reg` never does. Channels = `ProjChan`, one per catalog section. |
+| **`ProjectState`** (`apps/project/state/project.rs`) | Radio (per-window) | yes (`project.json`) | catalog rows: pure defs (`TableDef`/`ViewDef`/`SavedQuery`/`SourceDef`) each wrapped with registration state (`Reg<T>`: Loading/Ready/Failed) — the *save targets*, plus each row's profile **request** (§6b). Identity: views/tables by **name** (their SQL identity, one shared namespace, compared case-insensitively); saved queries by stable **`id: Uuid`**; data sources by **name**, which is their identity and nothing derives it. Defs persist; `Reg` never does. Channels = `ProjChan`, one per catalog section. |
 | **`History`** (`state/history.rs`) | context `State<History>` | yes (`.strata/history.jsonl`) | the query-history satellite (§8) |
 | **`Log`** (`state/log.rs`) | context `State<Log>` | no | the window's event record (§8) |
 | **`Agents`** (`state/agents.rs`) | context `State<Agents>` | no | what each connected agent is doing (§8) |
@@ -472,11 +472,11 @@ use_profile(engine, &target, scan) -> UseQuery<ProfileEntry>   // the ONE place 
   are `Option<ScanId>`; the facts live only in the cache entry that id keys. So invalidation is
   a `None` — `table_registered` / `table_failed` drop the table's and every reader view's,
   `view_registered` / `view_failed` drop the view's own.
-- **A relation inside a database connection's catalog has no row, so the *window* holds its
+- **A relation inside a database source's catalog has no row, so the *window* holds its
   request** (DB-07): `state/catalog.rs`'s `RemoteScans`, a `BTreeMap<RemoteRef, ScanId>` on a
   context `State`. The rule generalizes rather than being excepted — whoever owns the surface
   holds the request — and nothing is minted into the store for it. Invalidation is a
-  reconciliation: entries whose connection is no longer `Reg::Ready` are dropped, which covers a
+  reconciliation: entries whose source is no longer `Reg::Ready` are dropped, which covers a
   Forget and a whole-catalog ↻ without either being noticed specially. `ProfileTarget` is what
   says which storage backs a given ask, and every `ProfileActions` method takes one.
 - **`stale_time(MAX)` + `clean_time(MAX)`.** A settled scan must never re-execute itself, and
@@ -613,7 +613,7 @@ root's scan driver).
 ## 9. Errors — logged always, some also shown in context
 
 Almost every engine error originates from **registration** (project load, or the
-configure/connections window) or **query execution**. Every one is appended to the log (§8) —
+configure/data-source window) or **query execution**. Every one is appended to the log (§8) —
 the complete record — and the request-correlated ones are *also* surfaced where they
 originated, so the user sees them in place. Both happen; not either/or.
 
@@ -733,7 +733,7 @@ crates/strata-freya/src/
       run_query.rs    RunQuery + QuerySpec · FetchSnapshotPage + PageSpec (§6)
       profile.rs      ProfileEntry + ProfileSpec + ProfileTarget + use_profile (§6b)
       relation.rs     RemoteColumns + ColumnsSpec + use_remote_columns — a remote relation's
-                      columns, the one read under a database connection that is not free
+                      columns, the one read under a database source that is not free
       chart.rs        FetchChart + ChartSpec (§6 step 4)
     contexts/
       engine_ctx.rs   EngineCtx — Arc<Engine> (Deref) + captured() + cleanup(tab); TabId→WsId

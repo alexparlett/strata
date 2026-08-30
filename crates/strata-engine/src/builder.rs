@@ -16,12 +16,12 @@ use crate::generation::GenClock;
 use crate::policy::{Capability, CapabilityPolicyProvider, PolicyProvider};
 use crate::secrets::{KeystoreSecrets, SecretProvider};
 use crate::snapshots::{LocalIpcSnapshotStore, SnapshotStore};
-use crate::sources::source::{DataSource, SourceKind, Sources};
+use crate::sources::source::{DataSource, Registrants, SourceKind};
 use crate::sources::Live;
 use crate::tables::{InternalTableStore, LocalIpcTableStore};
 use crate::udf_package::UdfPackage;
 use crate::{
-    build_context, runtime_subset, Connections, Dependencies, Engine, InternalTables, SessionScope,
+    build_context, runtime_subset, Dependencies, Engine, InternalTables, SessionScope, SourceDefs,
 };
 
 /// The engine-id allocator — see [`Engine::id`].
@@ -54,7 +54,7 @@ pub struct EngineBuilder {
     udfs: Vec<Arc<dyn UdfPackage>>,
     memory_pool: Option<Arc<dyn MemoryPool>>,
     policy: Arc<dyn PolicyProvider>,
-    sources: Sources,
+    sources: Registrants,
     formats: Formats,
     snapshots: Option<Arc<dyn SnapshotStore>>,
     tables: Option<Arc<dyn InternalTableStore>>,
@@ -72,11 +72,15 @@ impl Default for EngineBuilder {
             udfs: vec![Arc::new(crate::udfs::StrataFunctions)],
             memory_pool: None,
             policy: Arc::new(CapabilityPolicyProvider::new(Capability::full())),
-            sources: Sources::default(),
+            sources: Registrants::default(),
             formats: Formats::shipped(),
             snapshots: None,
             tables: None,
         };
+        let builder = builder
+            .with_source(crate::sources::store::s3::S3)
+            .with_source(crate::sources::store::gcs::Gcs)
+            .with_source(crate::sources::store::http::Http);
         #[cfg(feature = "postgres")]
         let builder = builder.with_source(crate::sources::postgres::Pg);
         builder
@@ -144,7 +148,7 @@ impl EngineBuilder {
     ///
     /// May be called more than once, and a source registered under a name another already holds
     /// replaces it — which is how an embedder substitutes their own for a shipped one. A
-    /// connection def reaches its source by [`SourceKind::NAME`], so what is registered here is
+    /// data source def reaches its source by [`SourceKind::NAME`], so what is registered here is
     /// what a def's kind may say; a kind nothing answers to settles as a failed row naming the
     /// fix rather than a fault.
     pub fn with_source<S: DataSource + SourceKind>(mut self, source: S) -> Self {
@@ -164,7 +168,7 @@ impl EngineBuilder {
     /// # Panics
     ///
     /// If that name is already registered, including by one of the shipped formats. Unlike a
-    /// data source, a format is not replaceable: the session's writer map is what DataFusion
+    /// source, a format is not replaceable: the session's writer map is what DataFusion
     /// resolves `COPY … STORED AS` against, so registering over `parquet` / `csv` / `json` /
     /// `arrow` would change what every other `COPY` in the session writes.
     pub fn with_format<F: FormatProvider + FileFormatKind>(mut self, format: F) -> Self {
@@ -247,10 +251,10 @@ impl EngineBuilder {
             tables,
             internal: InternalTables::default(),
             dependencies: Dependencies::default(),
-            connections: Connections::default(),
+            source_defs: SourceDefs::default(),
             generation: GenClock::default(),
             live: Live::default(),
-            sources: self.sources,
+            registrants: self.sources,
             formats: self.formats,
             session: SessionScope::default(),
             secrets: self.secrets,
@@ -329,7 +333,8 @@ mod tests {
     fn ask() -> SecretRequest {
         SecretRequest {
             family: "postgres-password".into(),
-            connection: "orders".into(),
+            source: "orders".into(),
+            slot: strata_model::SecretRef::derived("postgres-password", "orders"),
             env: &[],
         }
     }
@@ -377,7 +382,7 @@ mod tests {
     }
 
     /// The provider the builder was given is the one the engine reads through — the slug
-    /// a source resolves a connection's password with.
+    /// a source resolves a data source's password with.
     #[test]
     fn secrets_given_to_the_builder_are_the_ones_the_engine_reads() {
         let engine = Engine::builder()

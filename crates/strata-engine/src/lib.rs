@@ -36,7 +36,7 @@ mod boundaries;
 pub mod builder;
 mod catalog;
 mod chart;
-/// The all-or-nothing contract a connection registers under, shared by [`store`] and [`sources`].
+/// The all-or-nothing contract a data source registers under, shared by [`store`] and [`sources`].
 mod connect;
 mod error;
 mod explain;
@@ -75,8 +75,8 @@ pub use snapshots::{
     LocalIpcSnapshotStore, MemSnapshotStore, SnapshotSink, SnapshotStats, SnapshotStore,
 };
 pub use sources::source::{
-    ConnectionKey, DataSource, Field, Located, SourceCatalog, SourceInfo, SourceKind, SourceMode,
-    Sourced,
+    DataSource, Field, Located, SourceCatalog, SourceInfo, SourceKind, SourceMode, SourceSetting,
+    Sourced, When,
 };
 pub use sources::RemoteRelation;
 pub use statements::arms::{drop_intent, duplicate_column, SessionScope};
@@ -120,10 +120,10 @@ use generation::GenClock;
 use providers::{StrataCatalogList, StrataCatalogProvider};
 use query::{run_and_snapshot, CellFormat};
 use snapshots::snapshot_name;
-use sources::source::Sources as SourceRegistry;
+use sources::source::Registrants as SourceRegistry;
 use sources::Live;
 use statements::arms::StrataFunctionFactory;
-use strata_model::{Cell, ConnectionDef, QueryOutput, SnapshotId, TabId};
+use strata_model::{Cell, QueryOutput, SnapshotId, SourceDef, TabId};
 
 /// A workspace's stable identity — the query tab that owns a run and its current
 /// snapshot (`docs/SNAPSHOT_SPEC.md` §4). Wide enough that a frontend passes its
@@ -257,7 +257,7 @@ struct Classifying {
 /// A dispatch publishes its [`InFlight`] entry *before* awaiting the spawned work, so until
 /// the settle path runs the workspace looks busy. That was safe while every caller was
 /// freya-query, which by design never cancels an execution — but an agent's run is
-/// awaited inside an MCP request future, and a client cancellation, a dropped connection or
+/// awaited inside an MCP request future, and a client cancellation, a dropped data source or
 /// the agent server shutting down all drop it mid-await. Without this the entry is never
 /// removed: [`publish_inflight`](Engine::publish_inflight) latches the window's in-flight flag
 /// on for the engine's life, so every later close, re-root and restart asks the T2 confirm
@@ -404,7 +404,7 @@ struct Lifecycle {
 /// | [`ws(id)`](Self::ws) | one workspace's runs |
 /// | [`snapshot(id)`](Self::snapshot) | one immutable result |
 /// | [`catalog()`](Self::catalog) | the tables and views this engine holds |
-/// | [`sources()`](Self::sources) | the connections behind them |
+/// | [`sources()`](Self::sources) | the data sources behind them |
 /// | [`lang()`](Self::lang) | what a buffer means to this session |
 /// | [`work()`](Self::work) | what is in flight |
 ///
@@ -508,18 +508,18 @@ pub struct Engine {
     internal: InternalTables,
     /// What each registered name reads — see [`Dependencies`].
     dependencies: Dependencies,
-    /// Which connections this engine has been told about — see [`Connections`].
-    connections: Connections,
+    /// Which data sources this engine has been told about — see [`SourceDefs`].
+    source_defs: SourceDefs,
     /// What generation of the catalog this engine is at — see [`CatalogGen`].
     generation: GenClock,
-    /// The source connections that are **live**: their handles and the catalogs they registered
+    /// The data sources that are **live**: their handles and the catalogs they registered
     /// — see [`Live`]. A field on the engine rather than something a task holds, because a pool
     /// owns its driver tasks and the engine's `Drop` has to be what ends them.
     live: Live,
-    /// Which data sources this engine can serve a connection with
+    /// Which kinds of data source this engine can serve
     /// ([`EngineBuilder::with_source`]) — a def's kind is looked up here, and a kind nothing
     /// answers to is a failed row naming the fix.
-    sources: SourceRegistry,
+    registrants: SourceRegistry,
     /// Which file formats this engine can read ([`EngineBuilder::with_format`]) — a def's format
     /// is looked up here, and a format nothing answers to is a failed row naming the fix.
     formats: Formats,
@@ -570,7 +570,7 @@ impl InternalTables {
     }
 }
 
-/// What each registered name reads: a table's connection, or a view's scans.
+/// What each registered name reads: a table's data source, or a view's scans.
 ///
 /// The [`InternalTables`] shape, with the same limits, and it answers one question —
 /// [`Sources::dependents`]. It is not a second catalog: what a host's row says about a name is
@@ -587,14 +587,14 @@ impl InternalTables {
 #[derive(Clone, Debug, Default)]
 pub struct Dependencies(Arc<Mutex<BTreeMap<String, Scanned>>>);
 
-/// What a connection is holding up — [`Sources::dependents`]'s answer.
+/// What a data source is holding up — [`Sources::dependents`]'s answer.
 ///
 /// Two lists, because a caller counting them counts two different things. Both are alphabetical
 /// and name each thing once.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Dependents {
-    /// Workspace tables whose def reads its files through this connection. Always empty for a
-    /// connection that registers a **catalog**: no def can name one.
+    /// Workspace tables whose def reads its files through this data source. Always empty for a
+    /// data source that registers a **catalog**: no def can name one.
     pub tables: Vec<String>,
     /// The views left invalid — those over [`tables`](Self::tables) for an object store, and
     /// those scanning its catalog for a source.
@@ -614,7 +614,7 @@ struct Scanned {
 /// What one name reads. Two arms and no third: a saved query registers nothing.
 #[derive(Clone, Debug)]
 enum Scans {
-    /// A table, and the connection its files are read through — `None` over local files.
+    /// A table, and the data source its files are read through — `None` over local files.
     Table(Option<String>),
     /// A view, and the two lists [`ViewMeta`] records: workspace scans bare, everything else
     /// qualified whole.
@@ -625,10 +625,10 @@ enum Scans {
 }
 
 impl Dependencies {
-    /// The tables read through the connection called `name`, alphabetically.
+    /// The tables read through the data source called `name`, alphabetically.
     ///
-    /// Case-insensitive, because a connection's name is a SQL identifier and
-    /// [`Connections::resolve`] answers that way — which is also what decides, one level down,
+    /// Case-insensitive, because a data source's name is a SQL identifier and
+    /// [`Sources::resolve`] answers that way — which is also what decides, one level down,
     /// whether the table registered over that store at all.
     fn over(&self, name: &str) -> Vec<String> {
         self.named(|scans| match scans {
@@ -702,40 +702,51 @@ impl Dependencies {
     }
 }
 
-/// The connections this engine has been told about: the last def handed to
+/// The data sources this engine has been told about: the last def handed to
 /// [`Sources::connect`] for each name, keyed by that name.
 ///
 /// It answers two questions from the one map — may a typed `CREATE EXTERNAL TABLE` name this
-/// bucket, and what does this engine hold a connection for ([`Sources::listing`]). The def rather
+/// bucket, and what does this engine hold a data source for ([`Sources::listing`]). The def rather
 /// than the identity alone is what makes the second answerable without asking the host: an engine
-/// told about a connection can say what kind serves it and what it registers, live or not.
+/// told about a data source can say what kind serves it and what it registers, live or not.
 ///
-/// It is not a second copy of the catalog. What a host's row says about a connection — whether it
+/// It is not a second copy of the catalog. What a host's row says about a data source — whether it
 /// is waiting, the sentence a failure left — is the host's, and nothing here records it.
 ///
 /// **Membership, not connectivity.** [`Sources::connect`] notes the def whether what it describes
-/// went in or not, because a connection that cannot resolve a credential today is still a
-/// connection this project has: the def a statement writes is durable and the fix (`aws sso
+/// went in or not, because a data source that cannot resolve a credential today is still a
+/// data source this project has: the def a statement writes is durable and the fix (`aws sso
 /// login`, a region typed into the editor, ↻) happens afterwards. Asking DataFusion's object-store
-/// registry instead would have answered *no* for exactly those, in a sentence — "not a connection
+/// registry instead would have answered *no* for exactly those, in a sentence — "not a data source
 /// in this project" — that would then be false. (What the *session* holds right now is a different
 /// question, and [`Sources::listing`] answers it as `live`.)
 ///
 /// Rebuilt by the pass, like the origin set: the registration pass's first phase calls `connect` for
 /// every def, and [`Sources::disconnect`] — the Forget gesture and the edit that moves a
-/// connection's identity — is the one removal.
+/// data source's identity — is the one removal.
 #[derive(Clone, Debug, Default)]
-pub struct Connections(Arc<Mutex<BTreeMap<String, ConnectionDef>>>);
+pub struct SourceDefs(Arc<Mutex<BTreeMap<String, SourceDef>>>);
 
-impl Connections {
-    /// The connection `name` addresses, **in the connection's own spelling** — `None` when this
+/// What a data source is *registered* as, for the one question `sync` asks of it: has this def
+/// moved where it went on the session?
+///
+/// `{kind}:{address}` — both halves, because the registration URL is composed from both
+/// ([`SourceKind::SCHEME`](crate::SourceKind::SCHEME) plus the address). It is **not** an
+/// identity in any other sense: what a data source *is* is its name, which the user writes and
+/// nothing derives (`SourceDef::named`).
+fn source_identity(def: &SourceDef) -> String {
+    format!("{}:{}", def.kind.trim(), def.setting("address"))
+}
+
+impl SourceDefs {
+    /// The data source `name` addresses, **in the data source's own spelling** — `None` when this
     /// project has none.
     ///
-    /// Answering with the stored string rather than a bool is what keeps a def's `connection`
+    /// Answering with the stored string rather than a bool is what keeps a def's `data source`
     /// field equal to the name everything else addresses it by: the store's picker, the table
     /// spec's path composition and the Forget confirm all match on that exact string.
     ///
-    /// The fallback compares **case-insensitively**, because a connection's name is a SQL
+    /// The fallback compares **case-insensitively**, because a data source's name is a SQL
     /// identifier and queries fold one. The exact hit is tried first so the ordinary case costs
     /// one lookup.
     pub fn resolve(&self, name: &str) -> Option<String> {
@@ -748,15 +759,9 @@ impl Connections {
             .cloned()
     }
 
-    /// What the connection called `name` **is** — the `(kind, address)` pair, for the one thing
-    /// that still needs it: composing the URL its object store is registered under.
-    fn identity(&self, name: &str) -> Option<String> {
-        self.def(name).map(|def| def.identity())
-    }
-
-    /// The def this engine was last handed for the connection called `name`, matched the way
+    /// The def this engine was last handed for the data source called `name`, matched the way
     /// [`resolve`](Self::resolve) matches.
-    fn def(&self, name: &str) -> Option<ConnectionDef> {
+    fn def(&self, name: &str) -> Option<SourceDef> {
         let held = self.0.lock().unwrap();
         held.get(name).cloned().or_else(|| {
             held.iter()
@@ -765,17 +770,17 @@ impl Connections {
         })
     }
 
-    /// Every connection this engine has been told about, in name order — what
+    /// Every data source this engine has been told about, in name order — what
     /// [`Sources::listing`] walks.
     ///
-    /// **Membership, not liveness**, exactly as the rest of this type is: a connection whose
+    /// **Membership, not liveness**, exactly as the rest of this type is: a data source whose
     /// credentials this machine cannot resolve today is still one the project has, and the
     /// listing says so by answering `live: false` rather than by leaving it out.
-    fn all(&self) -> Vec<ConnectionDef> {
+    fn all(&self) -> Vec<SourceDef> {
         self.0.lock().unwrap().values().cloned().collect()
     }
 
-    /// The connection whose `(kind, address)` is `identity` — for the one caller that arrives
+    /// The data source whose `(kind, address)` is `identity` — for the one caller that arrives
     /// with a written location rather than with a name: a typed `CREATE EXTERNAL TABLE … LOCATION
     /// 's3://acme-lake/events/'`, which has to be matched against what the project holds.
     pub fn named(&self, identity: &str) -> Option<String> {
@@ -783,19 +788,49 @@ impl Connections {
             .lock()
             .unwrap()
             .iter()
-            .find(|(_, held)| held.identity().eq_ignore_ascii_case(identity))
+            .find(|(_, held)| held.named().eq_ignore_ascii_case(identity))
             .map(|(name, _)| name.clone())
     }
 
-    /// The connections a set of defs describes, for a caller that holds defs rather than a live
+    /// The data sources a set of defs describes, for a caller that holds defs rather than a live
     /// engine.
     ///
     /// The registration pass composes its table specs **before** its first phase registers
-    /// anything, so at that moment no engine can answer what a table's connection is; the defs in
+    /// anything, so at that moment no engine can answer what a table's data source is; the defs in
     /// hand are the only thing that can. Building the same type from them rather than reading the
     /// defs directly is what keeps one lookup rule — including the case-insensitive fallback,
     /// which a hand-rolled `find` over the defs would quietly drop.
-    pub fn of(defs: &[ConnectionDef]) -> Self {
+    /// The `scheme://authority` the data source called `name` hangs its remote paths off, or
+    /// `None` for one that reads no files.
+    ///
+    /// The registry answers the scheme, because it is the *kind's*; this holds the def that names
+    /// the kind. Both halves are needed and neither has the other, which is why the composition
+    /// lives here rather than on either.
+    pub fn prefix(&self, registrants: &sources::source::Registrants, name: &str) -> Option<String> {
+        registrants.prefix(&self.def(name)?)
+    }
+
+    /// The data source a written `scheme://authority/…` reads through, by name.
+    ///
+    /// [`prefix`](Self::prefix) backwards, for the one caller that arrives with a URL rather than
+    /// with a data source — a typed `CREATE EXTERNAL TABLE … LOCATION 's3://acme-lake/events/'`,
+    /// which has to be matched against the project's own data sources. Matched by **prefix**
+    /// rather than by parsing the URL into a kind, because two kinds can share a scheme and only
+    /// the project's own defs say which bucket is which.
+    pub fn by_prefix(
+        &self,
+        registrants: &sources::source::Registrants,
+        url: &str,
+    ) -> Option<String> {
+        let url = url.trim_end_matches('/');
+        self.all().into_iter().find_map(|def| {
+            let prefix = registrants.prefix(&def)?;
+            let prefix = prefix.trim_end_matches('/');
+            url.eq_ignore_ascii_case(prefix).then(|| def.named())
+        })
+    }
+
+    pub fn of(defs: &[SourceDef]) -> Self {
         let held = Self::default();
         for def in defs {
             held.note(def);
@@ -803,27 +838,57 @@ impl Connections {
         held
     }
 
-    /// Every connection this engine has been told about, as `(name, identity)` — what
+    /// Every data source this engine has been told about, as `(name, identity)` — what
     /// [`sync`](crate::register::sync) diffs a desired set against.
     ///
-    /// Both halves, because a def whose bucket or provider was edited keeps its name and changes
+    /// Both halves, because a def whose bucket or **kind** was edited keeps its name and changes
     /// the URL its object store went in under: a diff by name alone leaves that URL registered
     /// with nothing addressing it.
+    ///
+    /// The identity is [`source_identity`] — the pair, not the address alone, because the URL is
+    /// composed from both and an `s3` bucket re-pointed at `gcs` keeps its address while moving
+    /// where it registered.
     pub(crate) fn held(&self) -> Vec<(String, String)> {
         self.0
             .lock()
             .unwrap()
             .iter()
-            .map(|(name, def)| (name.clone(), def.identity()))
+            .map(|(name, def)| (name.clone(), source_identity(def)))
             .collect()
     }
 
-    fn note(&self, def: &ConnectionDef) {
-        self.0.lock().unwrap().insert(def.named(), def.clone());
+    /// Whether `def` would register somewhere other than where this engine currently holds it —
+    /// the one question [`sync`](crate::register::sync)'s diff asks about a name it is keeping.
+    ///
+    /// Both sides are computed here, and looked up through [`def`](Self::def) so the match folds
+    /// case: a name is a SQL identifier, and comparing the two halves any other way answers
+    /// "moved" for a source that has not, which costs every live source a teardown per pass.
+    ///
+    /// A name this engine holds nothing for has not moved: there is nothing to take back.
+    pub(crate) fn moved(&self, def: &SourceDef) -> bool {
+        self.def(&def.named())
+            .is_some_and(|held| source_identity(&held) != source_identity(def))
     }
 
+    /// Hold `def` under its own spelling, replacing whatever this engine held for that name.
+    ///
+    /// Case-folded on the way in, so a source renamed `Lake` to `lake` replaces its entry rather
+    /// than sitting beside it: two entries for one source are what [`held`](Self::held) reports,
+    /// so the diff would carry a phantom name and a forget of one would leave the other
+    /// answering.
+    fn note(&self, def: &SourceDef) {
+        let name = def.named();
+        let mut held = self.0.lock().unwrap();
+        held.retain(|key, _| !key.eq_ignore_ascii_case(&name));
+        held.insert(name, def.clone());
+    }
+
+    /// Stop holding the data source called `name`, matched the way [`def`](Self::def) matches it.
     fn forget(&self, name: &str) {
-        self.0.lock().unwrap().remove(name);
+        self.0
+            .lock()
+            .unwrap()
+            .retain(|key, _| !key.eq_ignore_ascii_case(name));
     }
 }
 
@@ -981,6 +1046,32 @@ impl Engine {
     /// The one assembly site, read by every surface that writes a result to a caller-named path —
     /// the typed `COPY` (through `StmtCtx::owned`), the Export window and the agent's
     /// `export_result` — so the three cannot fence different places.
+    /// The catalog the data source called `name` registers, or `None` for one that registers an
+    /// object store instead.
+    ///
+    /// A source's relations are addressed through a catalog, and that catalog is the data source's
+    /// own name — one field, so no surface can spell it differently. **Whether** a data source has
+    /// one is the *kind's* answer ([`SourceMode`]), which is why this is asked of the engine and
+    /// not of the def: the def carries what a registry-less reader needs, and this reader has a
+    /// registry.
+    /// The catalog `defs` describe, with every table's sources resolved against `root`.
+    ///
+    /// Composed by the **engine** rather than by the spec itself, because turning a table's
+    /// data source into the `scheme://authority` its files hang off is a registry question now: the
+    /// scheme belongs to the kind. A host with defs in hand and no engine cannot answer it, and
+    /// every host that syncs has one.
+    pub(crate) fn registry(&self) -> &sources::source::Registrants {
+        &self.registrants
+    }
+
+    pub(crate) fn catalog_of(&self, name: &str) -> Option<String> {
+        let def = self.source_defs.def(name)?;
+        match self.registrants.mode(&def.kind)? {
+            SourceMode::Catalog => Some(def.named()),
+            SourceMode::Store => None,
+        }
+    }
+
     pub(crate) fn owned_storage(&self) -> Vec<export::Owned> {
         let root = self.data_root.lock().unwrap().clone();
         export::owned_roots(
@@ -1026,7 +1117,7 @@ impl Engine {
         match effect {
             StoreEffect::TableUpserted { def, .. } => {
                 self.note_origin(&def.name, def.origin.is_internal());
-                self.note_scans(&def.name, Some(Scans::Table(def.connection.clone())));
+                self.note_scans(&def.name, Some(Scans::Table(def.source.clone())));
                 self.generation.bump();
             }
             StoreEffect::TableRemoved { name, .. } => {
@@ -1615,7 +1706,7 @@ fn registered_function(ctx: &SessionContext, name: &str) -> bool {
 
 /// The catalog + schema **we own** — see [`build_context`].
 ///
-/// The catalog's name is `strata-model`'s, because a connection's own catalog name may not be it
+/// The catalog's name is `strata-model`'s, because a data source's own catalog name may not be it
 /// ([`strata_model::check_catalog`]) and a name written down twice is a name that can disagree.
 const CATALOG: &str = strata_model::WORKSPACE_CATALOG;
 const SCHEMA: &str = "public";
@@ -1807,7 +1898,7 @@ mod tests {
     /// Every caller used to be freya-query, which never cancels an execution, so `query`
     /// could publish its in-flight entry and rely on its own settle path to clear it. An
     /// agent's run is awaited inside an MCP request future instead, and a client
-    /// cancellation, a dropped connection or the agent server shutting down all drop it
+    /// cancellation, a dropped data source or the agent server shutting down all drop it
     /// mid-await. Without `DispatchGuard` the entry survives forever: the window's in-flight
     /// flag latches on, so every later close, re-root and engine restart raises the
     /// close-while-running confirm for a query that finished long ago.
@@ -2444,7 +2535,7 @@ mod tests {
                 )],
                 format: SourceFormat::from_name("csv"),
                 partitions: Vec::new(),
-                connection: None,
+                source: None,
                 internal: false,
             })
             .await
@@ -2965,7 +3056,7 @@ mod read_options_tests {
             paths,
             format,
             partitions: Vec::new(),
-            connection: None,
+            source: None,
             internal: false,
         }
     }
@@ -3561,7 +3652,7 @@ mod read_options_tests {
     }
 }
 
-/// **What the engine can say about a database connection's catalog** — the two reads
+/// **What the engine can say about a data source's catalog** — the two reads
 /// the agent vocabulary needs so it stops answering "not found" about relations it can query.
 #[cfg(test)]
 mod remote_catalog_tests {
@@ -3570,7 +3661,7 @@ mod remote_catalog_tests {
     use crate::sources::fake::{fake_def, TestDoc};
 
     /// **The workspace is not a database, by construction.** The catalogs an agent is told about
-    /// are the *connections* this engine holds, so the project's own catalog cannot appear among
+    /// are the *data sources* this engine holds, so the project's own catalog cannot appear among
     /// them however it is registered — and neither can a bucket, which holds files.
     #[tokio::test]
     async fn the_workspace_catalog_is_not_a_database() {
@@ -3579,7 +3670,7 @@ mod remote_catalog_tests {
             .build();
         assert!(
             engine.sources().listing().catalog_names().is_empty(),
-            "a project with no connection has no database catalogs"
+            "a project with no data source has no database catalogs"
         );
 
         engine
@@ -3600,13 +3691,13 @@ mod remote_catalog_tests {
     /// def is not this method's business.
     ///
     /// The split that matters is absence against fault: every name below is an `Ok`, because
-    /// none of them is a failure. `Err` is reserved for a relation the connection lists whose
+    /// none of them is a failure. `Err` is reserved for a relation the data source lists whose
     /// introspection then fails, which no fake catalog can produce — that arm is the real
     /// server's (`tests/postgres_federation.rs`).
     ///
-    /// Names are folded like every other in the session, and the answer carries the connection's
+    /// Names are folded like every other in the session, and the answer carries the data source's
     /// and the server's own spellings rather than the caller's. The absent set covers the four
-    /// ways a name is not this method's business: not in the connection, not a database catalog
+    /// ways a name is not this method's business: not in the data source, not a database catalog
     /// (`strata`, and `STRATA`, which the catalog list resolves by folding), and not qualified
     /// into one at all, which is a def's name for the store to answer.
     #[tokio::test]
@@ -3619,8 +3710,8 @@ mod remote_catalog_tests {
             .describe_remote("pg.public.orders".into())
             .await
             .expect("no fault")
-            .expect("a relation the connection has");
-        assert_eq!(described.connection, "pg");
+            .expect("a relation the data source has");
+        assert_eq!(described.source, "pg");
         assert_eq!(described.relation, "public.orders");
         assert!(!described.view);
         assert_eq!(
@@ -3638,7 +3729,7 @@ mod remote_catalog_tests {
             .await
             .expect("no fault")
             .expect("folded");
-        assert_eq!(folded.connection, "pg");
+        assert_eq!(folded.source, "pg");
         assert_eq!(folded.relation, "public.orders");
 
         for name in [

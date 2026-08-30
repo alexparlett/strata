@@ -31,15 +31,13 @@ use strata_core::config::Command;
 use strata_model::{DrawerTab, SidebarPane, TabId};
 
 use crate::apps::configure::ConfigureTarget;
-use crate::apps::connection::ConnectionTarget;
 use crate::apps::project::close::{close_project, CloseGuard, CloseTarget};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
     use_catalog_selection, use_settle, CatalogSelection, Chan, SessionState, Settle,
 };
-use crate::apps::project::views::{
-    actions, use_catalog_actions, CatalogActions, ConnectionRequest,
-};
+use crate::apps::project::views::{actions, use_catalog_actions, CatalogActions, SourceRequest};
+use crate::apps::source::SourceTarget;
 use crate::components::icon::IconName;
 use crate::platform::{open_settings, OpenCtx};
 use crate::state::AppCtx;
@@ -85,10 +83,10 @@ pub struct PaletteCtx {
     pub settle: Settle,
     /// Where a COLUMNS row lands: the inspected column (P3-08).
     pub selection: CatalogSelection,
-    /// The connection editor's request slot. The pane's `+` folds under panel pressure and has
-    /// no second entry point once there is one connection, so this row is what makes that fold
+    /// The data source editor's request slot. The pane's `+` folds under panel pressure and has
+    /// no second entry point once there is one source, so this row is what makes that fold
     /// cost nothing.
-    pub connection: ConnectionRequest,
+    pub source: SourceRequest,
     /// The window's open path — Switch project… is ⌘O by another name.
     pub open: OpenCtx,
     /// The close-while-running gate's two halves, for Close project.
@@ -106,7 +104,7 @@ pub fn use_palette_ctx() -> PaletteCtx {
         engine: use_consume::<EngineCtx>(),
         settle: use_settle(),
         selection: use_catalog_selection(),
-        connection: use_consume::<ConnectionRequest>(),
+        source: use_consume::<SourceRequest>(),
         open: use_consume::<OpenCtx>(),
         guard: use_consume::<Arc<CloseGuard>>(),
         confirm: use_consume::<State<Option<CloseTarget>>>(),
@@ -161,11 +159,11 @@ impl PaletteCommands {
     }
 
     /// Read tables from S3, GCS or an HTTP(S) endpoint
-    #[command(label = "New connection…", icon = IconName::Connections,
+    #[command(label = "New data source…", icon = IconName::Sources,
               keywords = "add object store bucket s3 gcs http remote")]
-    fn new_connection(ctx: &PaletteCtx) {
-        let mut slot = ctx.connection;
-        slot.set(Some(ConnectionTarget::New));
+    fn new_source(ctx: &PaletteCtx) {
+        let mut slot = ctx.source;
+        slot.set(Some(SourceTarget::New));
     }
 
     /// Browse and re-run past queries

@@ -51,11 +51,11 @@ pub enum FormatBadge {
     Json,
     Arrow,
     View,
-    /// A relation inside a database connection's catalog — no reader of ours at all: the server
+    /// A relation inside a database source's catalog — no reader of ours at all: the server
     /// holds the bytes and answers about them, which is the same reason its free tier is the
-    /// schema and nothing else. Badged with the **connection** rather than with a format, because
-    /// which connection a relation came through is the fact worth carrying in the title.
-    Connection(String),
+    /// schema and nothing else. Badged with the **data source** rather than with a format, because
+    /// which data source a relation came through is the fact worth carrying in the title.
+    Source(String),
     /// A format the app has no reader for — shown as written, in the recessive tone.
     Other(String),
 }
@@ -81,7 +81,7 @@ impl FormatBadge {
             FormatBadge::Json => "JSON".into(),
             FormatBadge::Arrow => "ARROW".into(),
             FormatBadge::View => "VIEW".into(),
-            FormatBadge::Connection(name) => name.to_uppercase(),
+            FormatBadge::Source(name) => name.to_uppercase(),
             FormatBadge::Other(f) => f.to_uppercase(),
         }
     }
@@ -190,7 +190,7 @@ pub fn inspect(
     }
 }
 
-/// Resolve a **remote** selection against what the connection answered about it.
+/// Resolve a **remote** selection against what the data source answered about it.
 ///
 /// The two tiers collapse to one here, and that is the honest shape rather than a gap: a database
 /// reports its schema and nothing else for free. There is no footer to read, no file listing to
@@ -219,7 +219,7 @@ pub fn inspect_remote(
             relation: relation.clone(),
         },
         &found.columns,
-        FormatBadge::Connection(relation.connection.clone()),
+        FormatBadge::Source(relation.source.clone()),
         None,
         true,
         scan,
@@ -583,8 +583,8 @@ mod tests {
         TableDef {
             name: name.into(),
             format: SourceFormat::from_name(format),
-            connection: None,
-            sources: vec![format!("{name}.{format}")],
+            source: None,
+            paths: vec![format!("{name}.{format}")],
             partition_cols: Vec::new(),
             origin: TableOrigin::External,
         }
@@ -1179,11 +1179,11 @@ mod tests {
         assert_eq!(fill_label(0.5), "50%");
     }
 
-    /// A relation as the connection answered for it — the shape `Sources::describe_remote` hands
+    /// A relation as the data source answered for it — the shape `Sources::describe_remote` hands
     /// back, built here so the remote arm is tested with no network and no server.
     fn described(relation: &RemoteRef, view: bool, columns: Vec<ColumnInfo>) -> RemoteRelation {
         RemoteRelation {
-            connection: relation.connection.clone(),
+            source: relation.source.clone(),
             relation: format!("{}.{}", relation.schema, relation.relation),
             view,
             columns,
@@ -1192,7 +1192,7 @@ mod tests {
 
     fn orders() -> RemoteRef {
         RemoteRef {
-            connection: "pg".into(),
+            source: "pg".into(),
             schema: "public".into(),
             relation: "orders".into(),
         }
@@ -1207,7 +1207,7 @@ mod tests {
 
     /// **The remote arm end to end.** Until the one introspection lands there is nothing to
     /// describe and the panel says so; afterwards the column is described on exactly the terms a
-    /// database can honestly offer — its type, badged with the connection it came through, and no
+    /// database can honestly offer — its type, badged with the data source it came through, and no
     /// free row count or completeness bar, because a server reports neither for free.
     #[test]
     fn a_remote_column_is_loading_once_and_then_carries_only_what_the_server_said() {
@@ -1238,7 +1238,7 @@ mod tests {
             "pg.public.orders",
             "named as SQL addresses it"
         );
-        assert_eq!(facts.format, FormatBadge::Connection("pg".into()));
+        assert_eq!(facts.format, FormatBadge::Source("pg".into()));
         assert_eq!(facts.format.label(), "PG");
         assert!(
             facts.derived,
@@ -1311,7 +1311,7 @@ mod tests {
     }
 
     /// A refused introspection is reported as the fault it is, rather than as an absent relation:
-    /// the connection lists it, and the server would not describe it.
+    /// the data source lists it, and the server would not describe it.
     #[test]
     fn a_refused_introspection_says_why() {
         let relation = orders();

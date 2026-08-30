@@ -67,10 +67,10 @@ pub const HEADER_CONTROL: f32 = 24.;
 /// height.
 pub const ROW_ACTION: f32 = 22.;
 
-/// A **row's status glyph** — the catalog's and the connections pane's registration marker.
+/// A **row's status glyph** — the catalog's and the data sources pane's registration marker.
 pub const STATUS_DOT: f32 = 12.;
 
-/// A **status block's** glyph — the ⓘ / ✓ / ✕ mark a Configure or Connection status line leads
+/// A **status block's** glyph — the ⓘ / ✓ / ✕ mark a Configure or Data source status line leads
 /// with.
 pub const STATUS_GLYPH: f32 = 14.;
 
@@ -80,7 +80,7 @@ pub const STATUS_GLYPH: f32 = 14.;
 /// Not themeable: a taller button would break the action strip's 58px and every layout built on it.
 pub const ACTION_HEIGHT: f32 = 34.;
 
-/// A **child window's title bar** — Settings, Configure, Export and the connection editor. The
+/// A **child window's title bar** — Settings, Configure, Export and the data source editor. The
 /// launcher's is its own, shorter bar and says so where it is declared.
 pub const TITLE_BAR_HEIGHT: f32 = 50.;
 
@@ -125,7 +125,7 @@ pub const MENU_ICON: f32 = 15.;
 pub const MENU_ROW_CHROME: f32 = 32.;
 
 /// A **settings-style option table's** header row — the engine and keymap tables, and the
-/// connection editor's options table.
+/// data source editor's options table.
 pub const TABLE_HEAD_HEIGHT: f32 = 32.;
 
 /// The same table's **body row**, one step taller because a body row holds a control.

@@ -61,10 +61,10 @@ const CHECK_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// How long a download waits for the *next* bytes. A total timeout would be wrong here: the
 /// archive is a third of a gigabyte, and how long that legitimately takes is the user's
-/// connection rather than anything this code can bound. A stall is what we can recognise.
+/// data source rather than anything this code can bound. A stall is what we can recognise.
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// How long either request waits to get a connection at all.
+/// How long either request waits to get a data source at all.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The most redirects either request follows. GitHub's asset URLs take exactly one hop, to

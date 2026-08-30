@@ -42,10 +42,10 @@ use std::time::Instant;
 use datafusion::catalog::TableProvider;
 use datafusion::logical_expr::TableType;
 use datafusion::prelude::SessionContext;
-use datafusion::sql::TableReference;
 
 use crate::fold_ident;
 use crate::policy::Principal;
+use crate::providers::def_ref;
 use crate::statements::ctx::StmtCtx;
 use crate::statements::pipeline::Qualified;
 use crate::statements::report::{StatementOutcome, StatementReport};
@@ -128,7 +128,7 @@ pub(crate) fn stamped(
 /// parse, so it would be looked up under a name nothing ever registered.
 pub(crate) async fn existing(ctx: &SessionContext, name: &str) -> Option<TableType> {
     let provider: Arc<dyn TableProvider> = ctx
-        .table_provider(TableReference::bare(fold_ident(name)))
+        .table_provider(def_ref(ctx, &fold_ident(name)))
         .await
         .ok()?;
     Some(provider.table_type())
@@ -155,13 +155,13 @@ pub(super) fn left_invalid(dependents: &[String]) -> String {
     )
 }
 
-/// **The statement policy over a database connection's catalog** — one test module for
+/// **The statement policy over a data source's catalog** — one test module for
 /// one rule, because the rule is cross-arm: [`resolve_target`](crate::statements::resolve_target)
 /// is the single choke point in front of every intercepted statement that manages a target, so
 /// what is under test is that *no arm gets there another way*.
 ///
 /// The sixteen [`StmtKind`]s divide into five answers and each is pinned below: `INSERT` and
-/// CTAS **write** a remote relation once the connection is opted in and are refused by the
+/// CTAS **write** a remote relation once the data source is opted in and are refused by the
 /// read-only sentence until it is, the other five kinds that name a target are refused by
 /// [`in_database`](crate::statements::target::in_database), a **read** of one is never refused (`COPY`'s source, `PREPARE`'s body, and
 /// every plain query), a function name cannot be qualified at all (DataFusion refuses it while
@@ -170,10 +170,11 @@ pub(super) fn left_invalid(dependents: &[String]) -> String {
 ///
 /// Against a fake catalog rather than a server: see `sources::fake::fake_source` for what that does
 /// and does not stand in for. It is registered on the session and held by no `Live`, which is
-/// exactly a connection that is not opted in — so the write half is pinned here at its refusal and
+/// exactly a data source that is not opted in — so the write half is pinned here at its refusal and
 /// the landing is `tests/postgres_federation.rs`'s, where a real server can take an insert.
 #[cfg(test)]
 mod tests {
+    use datafusion::sql::TableReference;
     use std::fs;
     use std::path::PathBuf;
     use std::{env, process};
@@ -186,7 +187,7 @@ mod tests {
 
     use super::*;
 
-    /// An engine with a project folder, a workspace table, and a live database connection's
+    /// An engine with a project folder, a workspace table, and a live data source's
     /// catalog called `pg` holding `pg.public.orders`.
     ///
     /// The workspace table is called `orders` **too**, on purpose: every refusal below has to
@@ -223,7 +224,7 @@ mod tests {
         }
     }
 
-    /// The one statement left that will not touch a relation inside a database connection —
+    /// The one statement left that will not touch a relation inside a data source —
     /// registering a table externally, which declares files and a format for something the server
     /// already describes.
     #[tokio::test]
@@ -239,21 +240,21 @@ mod tests {
         );
     }
 
-    /// **A write against a connection nobody opted in names the toggle**, whichever statement it
+    /// **A write against a data source nobody opted in names the toggle**, whichever statement it
     /// is — one sentence, minted once, because the fix is one setting.
     ///
     /// The `INSERT` takes its source from the target's own columns, so the target's *schema*
-    /// cannot be what refuses it: this is about the connection and nothing else. And the refusal
+    /// cannot be what refuses it: this is about the data source and nothing else. And the refusal
     /// is reached **before** `Catalog::is_internal`, which is not a question to ask about a
     /// relation whose data Strata could never own.
     ///
     /// The last five are the statements the **server** would have run, so the gate is the same one
     /// standing in front of a different mechanism.
     #[tokio::test]
-    async fn a_write_into_a_read_only_connection_names_the_toggle() {
+    async fn a_write_into_a_read_only_source_names_the_toggle() {
         let (_root, eng) = engine("read_only").await;
         let expected = read_only(&Remote {
-            connection: "pg".into(),
+            source: "pg".into(),
             reference: TableReference::full("pg", "public", "orders"),
         });
         for sql in [
@@ -274,7 +275,7 @@ mod tests {
     }
 
     /// **A bare write target resolves like a bare read**. Before it, `sql::qualify`
-    /// refused one that only a connection had, because "not found" was the wrong answer about a
+    /// refused one that only a data source had, because "not found" was the wrong answer about a
     /// relation the same session would happily read. Now it rewrites, and the refusal that lands
     /// is the arm's own — which is the point: one funnel, whether or not the qualifier was typed.
     #[tokio::test]
@@ -283,7 +284,7 @@ mod tests {
         fake_source(&eng.ctx, "warehouse", &["shipments"]);
 
         let expected = read_only(&Remote {
-            connection: "warehouse".into(),
+            source: "warehouse".into(),
             reference: TableReference::full("warehouse", "public", "shipments"),
         });
         assert_eq!(
@@ -306,7 +307,7 @@ mod tests {
     }
 
     /// A qualifier that names **nothing** keeps the older wording, which is a different fact
-    /// and has to stay a different sentence: there is no connection to name.
+    /// and has to stay a different sentence: there is no data source to name.
     #[tokio::test]
     async fn an_unknown_catalog_is_still_nowhere() {
         let (_root, eng) = engine("unknown").await;
@@ -320,20 +321,20 @@ mod tests {
         );
     }
 
-    /// **The workspace catalog is never a database connection**, however it is spelled.
+    /// **The workspace catalog is never a data source**, however it is spelled.
     ///
     /// `source_catalog` folds before it compares, and this is what says so: the catalog list
     /// resolves by `fold_ident`, so a quoted `"STRATA"` names the workspace — and an unfolded
     /// guard let that spelling past, whereupon the search *matched the workspace's own entry*
-    /// and told the user their project's catalog was a connection. No real connection can
+    /// and told the user their project's catalog was a source. No real data source can
     /// produce that sentence: `check_catalog` refuses the name `strata` case-insensitively, so it
-    /// would have named a connection that cannot exist.
+    /// would have named a data source that cannot exist.
     ///
     /// And what it answers instead is the *right* thing: the name resolves to the workspace
     /// catalog, so the statement simply acts on the workspace table, exactly as the unquoted
     /// `strata.public.orders` does.
     #[tokio::test]
-    async fn the_workspace_catalog_is_never_named_as_a_connection() {
+    async fn the_workspace_catalog_is_never_named_as_a_source() {
         let (_root, eng) = engine("workspace_spelling").await;
         let RunOutcome::Statement(report) =
             run(&eng, "CREATE VIEW \"STRATA\".public.v AS SELECT 1")
@@ -361,14 +362,14 @@ mod tests {
 
     /// **Reading is not managing.** The three ways a statement the router touches can read a
     /// remote relation all work: a query, a `COPY`'s source, and a `PREPARE`d body — which is
-    /// the whole point of the connection and the thing an over-broad gate would break.
+    /// the whole point of the data source and the thing an over-broad gate would break.
     #[tokio::test]
     async fn reading_a_remote_relation_is_never_refused() {
         let (root, eng) = engine("reads").await;
         let out = root.join("out.parquet");
         run(&eng, "SELECT id FROM pg.public.orders")
             .await
-            .expect("a plain query reads the connection");
+            .expect("a plain query reads the data source");
         run(
             &eng,
             &format!(
@@ -431,13 +432,13 @@ mod tests {
         run(&eng, "DEALLOCATE q").await.expect("DEALLOCATE");
     }
 
-    /// A `postgres://` URL typed into a `LOCATION` is **not** a way into a connection: it splits
-    /// like any other remote location and lands on the membership refusal, naming a connection
+    /// A `postgres://` URL typed into a `LOCATION` is **not** a way into a data source: it splits
+    /// like any other remote location and lands on the membership refusal, naming a data source
     /// the project does not have. Pinned because the alternative — a bare planner error, or a
     /// panic on a URL whose path is a database name — is what `url()`-carries-a-path makes
     /// possible.
     #[tokio::test]
-    async fn a_database_url_in_a_location_is_refused_as_a_connection() {
+    async fn a_database_url_in_a_location_is_refused_as_a_source() {
         let (_root, eng) = engine("location").await;
         let why = refusal(
             &eng,
@@ -445,7 +446,7 @@ mod tests {
         )
         .await;
         assert!(
-            why.contains("postgres://host:5432") && why.contains("connection"),
+            why.contains("postgres://host:5432") && why.contains("data source"),
             "{why}"
         );
     }

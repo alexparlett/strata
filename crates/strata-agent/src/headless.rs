@@ -35,7 +35,7 @@ use rmcp::ServiceExt;
 use strata_arrow::plan::as_explain;
 use strata_core::config::Settings;
 use strata_core::project::{exists_at, load_defs, ProjectDefs};
-use strata_engine::register::{CatalogSpec, RegOutcome};
+use strata_engine::register::RegOutcome;
 use strata_engine::{Capability, CapabilityPolicyProvider, Engine, RunRows, RunTag, WsId};
 use tokio::runtime::Builder as RuntimeBuilder;
 
@@ -120,7 +120,7 @@ impl HeadlessHost {
         let mut outcomes = Vec::new();
         engine
             .catalog()
-            .sync(CatalogSpec::of_project(&root, &defs), |o| outcomes.push(o))
+            .sync(engine.catalog().spec(&root, &defs), |o| outcomes.push(o))
             .await;
         Ok(HeadlessHost::settled(root, defs, engine, outcomes))
     }
@@ -148,14 +148,14 @@ impl HeadlessHost {
             catalog.push(CatalogEntry::Table {
                 name: def.name.clone(),
                 format: def.format.name().to_string(),
-                sources: def.sources.clone(),
+                sources: def.paths.clone(),
                 reg: reg_state(result),
             });
             described.push(match result {
                 Some(Ok(meta)) => Described::Table {
                     name: def.name.clone(),
                     format: def.format.name().to_string(),
-                    sources: def.sources.clone(),
+                    sources: def.paths.clone(),
                     partitions: def.partition_cols.clone(),
                     rows: meta.rows,
                     columns: meta.columns.clone(),
@@ -453,12 +453,12 @@ mod tests {
     use strata_core::project::save_defs;
     use strata_model::{SourceFormat, TableDef, TableOrigin, ViewDef};
 
-    use strata_engine::register::{table_spec, CatalogSpec, RegKind};
-    use strata_engine::Connections;
+    use strata_engine::register::{CatalogSpec, RegKind};
 
     use crate::host::AgentIdentity;
 
     use super::*;
+    use strata_engine::SourceDefs;
 
     /// A scratch project folder of our own, per test — `tag` is load-bearing for the reason
     /// `strata-engine`'s own helper says: these run concurrently in one process and DataFusion
@@ -474,8 +474,8 @@ mod tests {
         TableDef {
             name: name.into(),
             format: SourceFormat::from_name("csv"),
-            connection: None,
-            sources: vec![source.into()],
+            source: None,
+            paths: vec![source.into()],
             partition_cols: Vec::new(),
             origin: TableOrigin::External,
         }
@@ -490,7 +490,7 @@ mod tests {
             &root,
             &ProjectDefs {
                 name: "sales".into(),
-                connections: Vec::new(),
+                sources: Vec::new(),
                 tables: vec![table("people", "people.csv"), table("gone", "missing.csv")],
                 views: vec![ViewDef {
                     name: "adults".into(),
@@ -603,14 +603,14 @@ mod tests {
     async fn a_replay_registers_what_the_spec_still_names() {
         let (root, host) = project("replay").await;
         let defs = load_defs(&root).expect("defs");
-        let known = Connections::of(&defs.connections);
+        let known = SourceDefs::of(&defs.sources);
         let desired = CatalogSpec {
-            connections: defs.connections.clone(),
+            sources: defs.sources.clone(),
             tables: defs
                 .tables
                 .iter()
                 .filter(|def| def.name == "people")
-                .map(|def| table_spec(&root, def, &known))
+                .map(|def| host.engine.catalog().table_spec(&root, def, &known))
                 .collect(),
             views: Vec::new(),
         };
