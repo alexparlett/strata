@@ -113,8 +113,8 @@ the whole chain (the shape the `SET` dotted-key rule already reads), and the cha
 **head** picks the namespace, because only one of the two can be addressed by a
 catalog name at all:
 
-- a head naming a **database connection** (DB-06) makes the chain remote: one segment
-  offers that connection's enabled schemas, two offers the relations in a schema,
+- a head naming a **database source** (DB-06) makes the chain remote: one segment
+  offers that source's enabled schemas, two offers the relations in a schema,
   three offers nothing (§10);
 - anything else is the workspace, where the **last** segment names the relation
   (`strata.public.t.` is `t` — the single-namespace rule §4 states for column lists)
@@ -182,8 +182,8 @@ the rank pipeline, `tests.rs` = the suite):
 |---|---|
 | `Start` operand | `QUERY_LEADS` then `STATEMENT_LEADS` (curated ord continues across the two), then gated keywords |
 | `Restart` operand | `QUERY_LEADS` only, then gated keywords |
-| `From`/`Describe`/`Copy` operand | relations only — CTEs, tables, views (projection-boosted, §5; for `COPY` the boost is a no-op), then the **database connections' catalog names** at the secondary tier |
-| `Dot(catalog)` | that connection's enabled schemas, detail `<catalog> · schema` |
+| `From`/`Describe`/`Copy` operand | relations only — CTEs, tables, views (projection-boosted, §5; for `COPY` the boost is a no-op), then the **database sources' catalog names** at the secondary tier |
+| `Dot(catalog)` | that source's enabled schemas, detail `<catalog> · schema` |
 | `Dot(catalog, schema)` | that schema's relations, `table` / `view` in the detail |
 | `Dot(catalog, schema, relation)` | **nothing** — a remote column list is a round trip (§10) |
 | `SetOption` operand, key | `ENGINE_KEYS` filtered by `refuse_reserved_key(k).is_ok()` — verbatim insert, detail = the key's `default`, `ENGINE_KEYS` order, kind `Column` (a glyph, not a taxonomy) |
@@ -217,10 +217,10 @@ filter, exactly as a SELECT list demotes what it already projects. (A CET's
 registration, so there is no relation to resolve while typing — see §10.)
 
 **The qualified offer** (DB-06) — the three remote segments above come off
-`Catalog::databases`, one `DatabaseSym` per database connection, built by
+`Catalog::databases`, one `DatabaseSym` per database source, built by
 `Sources::database_syms` and carried on the snapshot like everything else. Its two
-halves come from two places on purpose: the **catalog name** is the connection's own
-def, so a connection that has never answered still offers the name a query has to say,
+halves come from two places on purpose: the **catalog name** is the source's own
+def, so a source that has never answered still offers the name a query has to say,
 while the **schemas and relations** are `Sources::listing`'s scoped-and-tagged
 answer — the one visibility source the tree and the schema picker read, so a
 non-enabled schema is absent from the offer without anything here re-deriving what
@@ -250,7 +250,7 @@ The offer is format-aware (`STORED AS <word>` scanned from the statement): each
 registered format offers its own `reader_options`, and Parquet / Arrow / a format
 offering none / a word nothing is registered for / unwritten → empty. Value offers ride the same carve-out with the preceding key looked
 up in the table (`Bool`/`Enum` only). Store-namespace keys and `CLIENT_KEYS` are
-never offered — the arm refuses them toward Connections, and absence from the offer
+never offered — the arm refuses them toward Sources, and absence from the offer
 is the same policy stated once.
 
 **Match tiers** (fuzzy.rs, case-insensitive): exact (0) → prefix (1) → word-boundary
@@ -344,7 +344,7 @@ gate — an explicit ask deserves the full vocabulary; nothing else widens.
 Performance model, sized against a 100-tables × 1000-columns catalog:
 
 - **The Catalog snapshot is memoized** (tab.rs): rebuilt only when the catalog generation
-  moves (registration lands, view saved, a connection forgotten) — never per keystroke.
+  moves (registration lands, view saved, a data source forgotten) — never per keystroke.
   The provider peeks it. The remote listings ride it too (§4), so a database's names
   cost one clone per generation and nothing per keystroke.
 - **A candidate is matched before it is built** (`ranking::Pool`). Every pool used to be

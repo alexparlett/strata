@@ -17,7 +17,7 @@ everything below.
 | [EXPLAIN_PLAN_SPEC.md](EXPLAIN_PLAN_SPEC.md) | The EXPLAIN plan view: the typed `QueryPlan` the engine hands over, self-time attribution, the three metric tiers, and the rendered tree. |
 | [CHART_SPEC.md](CHART_SPEC.md) | The chart view: six marks over the result snapshot, encoders, sort, refusals — and why the chart computes nothing SQL can say. |
 | [CHART_FUNCTIONS.md](CHART_FUNCTIONS.md) | Shaping a result for the chart in SQL: what the engine's aggregate, window and scalar families buy you. |
-| [CONNECTIONS_SPEC.md](CONNECTIONS_SPEC.md) | Remote data: S3 / GCS / HTTP / PostgreSQL connections, the credential model (host chains for buckets, an OS-keystore password for a database), address rules, tables over buckets, and the federated database catalog. |
+| [CONNECTIONS_SPEC.md](CONNECTIONS_SPEC.md) | Remote data: S3 / GCS / HTTP / PostgreSQL **data sources**, the credential model (host chains for buckets, an OS-keystore secret whose slot the def records), address rules, tables over buckets, the catalog every source registers, and the federated database catalog. |
 | [IMPORT_OPTIONS.md](IMPORT_OPTIONS.md) | Table Config's per-format read options (CSV, JSON, parquet/Arrow) and Hive partition detection. |
 | [EXPORT_OPTIONS.md](EXPORT_OPTIONS.md) | The export window: formats, per-format options, partitioning, the preview, and the `COPY … TO` it produces. |
 | [MCP_CLIENTS.md](MCP_CLIENTS.md) | Connecting MCP clients to the agent access server: per-client configuration (Claude Code, Claude Desktop, VS Code, Cursor, Gemini CLI, Codex CLI) and the headless stdio server. |

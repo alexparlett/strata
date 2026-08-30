@@ -100,10 +100,10 @@ silently dropped option is a def that lies about how the table reads.
 
 The typed form has one refusal the window has no equivalent for, because the window has no box it
 could go in. `datafusion-cli` writes an object store's credentials, region, endpoint and client
-timeouts into this same `OPTIONS` list; in Strata every one of those belongs to a **connection**
+timeouts into this same `OPTIONS` list; in Strata every one of those belongs to a **data source**
 (`CONNECTIONS_SPEC.md`), which holds a reference to credentials and never a credential. So a key in
 a store namespace (`aws.`, `s3.`, `gcp.`, `google.`, `azure.`) or one of `engine::sources::store`'s client
-options is refused toward Connections — **on the key alone**, with the value never read and never
+options is refused toward Sources — **on the key alone**, with the value never read and never
 echoed back in the message.
 
 ---

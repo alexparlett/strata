@@ -36,16 +36,16 @@ reason, because the catalog shows what your project says, not just what happened
 
 ### Remote data
 
-Connections read the same formats straight out of S3, GCS, any S3-compatible store (Cloudflare
+Data sources read the same formats straight out of S3, GCS, any S3-compatible store (Cloudflare
 R2, MinIO, a custom endpoint), or plain HTTPS for a single public file. Strata never stores or
-prompts for a bucket secret: a connection records a provider and an auth mode (ambient
+prompts for a bucket secret: a data source records a kind and an auth mode (ambient
 credentials, a named `~/.aws` profile, a key file path) and credentials resolve at query time
 from your machine's own chains. Running `aws sso login` in another terminal just works.
 
-A **PostgreSQL** connection goes further: the whole database joins your project as a catalog of
+A **PostgreSQL** data source goes further: the whole database joins your project as a catalog of
 its own, so `SELECT … FROM pg.public.orders JOIN local_events USING (id)` federates live server
 data against your files, with filters and whole subplans pushed down to the server. Turn **Read
-only** off on the connection and it becomes a load path too: `INSERT INTO pg.public.events SELECT
+only** off on the data source and it becomes a load path too: `INSERT INTO pg.public.events SELECT
 … FROM local_parquet`, and `CREATE TABLE pg.public.report AS SELECT …` to materialize any result —
 a cross-source join included — as a real server table. It stays on until you say otherwise.
 
@@ -167,7 +167,7 @@ no password to enter:
 docker build -t strata-sample-pg sample/postgres && docker run -d --name strata-sample-pg -p 127.0.0.1:55432:5432 -e POSTGRES_USER=strata -e POSTGRES_DB=strata_sample -e POSTGRES_HOST_AUTH_METHOD=trust strata-sample-pg
 ```
 
-The sample project already carries the connection, so `SELECT * FROM orders` joins the parquet
+The sample project already carries the data source, so `SELECT * FROM orders` joins the parquet
 users straight onto live PostgreSQL. [sample/postgres/README.md](sample/postgres/README.md)
 tours what's in it and what to try, including the deliberate name clashes that show which
 source a bare name means.
@@ -210,7 +210,7 @@ Strata stands on excellent work by other people:
   and **[datafusion-federation](https://github.com/datafusion-contrib/datafusion-federation)**
   make the PostgreSQL federation possible.
 - **[tree-sitter](https://tree-sitter.github.io/)** powers the editor's highlighting, and
-  **[object_store](https://crates.io/crates/object_store)** the bucket connections.
+  **[object_store](https://crates.io/crates/object_store)** the bucket data sources.
 
 ## License
 
