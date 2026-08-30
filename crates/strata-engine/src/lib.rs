@@ -867,20 +867,36 @@ impl SourceDefs {
     /// anyway.
     ///
     /// A name this engine holds nothing for has not moved: there is nothing to take back.
+    ///
+    /// Looked up through [`def`](Self::def), which is the type's one lookup rule and folds case —
+    /// a name is a SQL identifier and `check_catalog_name` lets a source be renamed to one
+    /// differing only in case. An exact `get` here would miss a held `Lake` for a desired `lake`,
+    /// answer "not moved" for an edit that moved both the case and the address, and leave the old
+    /// registration standing.
     pub(crate) fn moved(&self, def: &SourceDef) -> bool {
+        self.def(&def.named())
+            .is_some_and(|held| source_identity(&held) != source_identity(def))
+    }
+
+    /// Hold `def` under its own spelling, replacing whatever this engine held for that name.
+    ///
+    /// **Case-folded on the way in**, so a source renamed `Lake` → `lake` replaces its entry
+    /// rather than sitting beside it. Two entries for one source is not a cosmetic problem: they
+    /// are what [`held`](Self::held) reports, so the diff would carry a phantom name forever, and
+    /// a forget of one would leave the other answering.
+    fn note(&self, def: &SourceDef) {
+        let name = def.named();
+        let mut held = self.0.lock().unwrap();
+        held.retain(|key, _| !key.eq_ignore_ascii_case(&name));
+        held.insert(name, def.clone());
+    }
+
+    /// Stop holding the data source called `name`, matched the way [`def`](Self::def) matches it.
+    fn forget(&self, name: &str) {
         self.0
             .lock()
             .unwrap()
-            .get(&def.named())
-            .is_some_and(|held| source_identity(held) != source_identity(def))
-    }
-
-    fn note(&self, def: &SourceDef) {
-        self.0.lock().unwrap().insert(def.named(), def.clone());
-    }
-
-    fn forget(&self, name: &str) {
-        self.0.lock().unwrap().remove(name);
+            .retain(|key, _| !key.eq_ignore_ascii_case(name));
     }
 }
 

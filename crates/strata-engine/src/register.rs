@@ -1011,6 +1011,57 @@ mod tests {
         );
     }
 
+    /// **A name is a SQL identifier, so the diff folds case on both sides.**
+    ///
+    /// `check_catalog_name` lets a source be renamed to a name differing only in case — the
+    /// candidate is excluded from its own uniqueness check — and `remove_absent` matches the
+    /// desired def to a held name with `eq_ignore_ascii_case`. So the move test has to fold too,
+    /// or an edit that changed the case *and* the address reads as unmoved: the old registration
+    /// is never taken back and the engine ends up holding both spellings, one of them a phantom
+    /// nothing will ever match away.
+    #[tokio::test]
+    async fn the_move_test_folds_case_like_every_other_lookup() {
+        let engine = Engine::builder().build();
+        let at = |name: &str, address: &str| SourceDef {
+            kind: "s3".into(),
+            name: name.into(),
+            config: [("address", address), ("auth", "anonymous")]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            ..Default::default()
+        };
+        let spec = |def: SourceDef| CatalogSpec {
+            sources: vec![def],
+            ..Default::default()
+        };
+
+        engine
+            .catalog()
+            .sync(spec(at("Lake", "acme-lake")), |_| {})
+            .await;
+
+        assert!(
+            engine.source_defs.moved(&at("lake", "other-bucket")),
+            "a re-cased name whose address moved is a move, and the old registration owes a \
+             take-back"
+        );
+        assert!(
+            !engine.source_defs.moved(&at("lake", "acme-lake")),
+            "and a re-cased name that moved nothing else has not moved"
+        );
+
+        engine
+            .catalog()
+            .sync(spec(at("lake", "acme-lake")), |_| {})
+            .await;
+        assert_eq!(
+            engine.source_defs.held(),
+            vec![("lake".to_string(), "s3:acme-lake".to_string())],
+            "one entry per source, under the spelling it was last given"
+        );
+    }
+
     /// A live result snapshot is out of a reconciliation's reach: no def can name one, and a
     /// sweep that took it would retire whatever another tab is paging through.
     #[tokio::test]
