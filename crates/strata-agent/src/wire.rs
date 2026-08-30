@@ -564,7 +564,8 @@ pub struct DescribeResult {
     /// fewer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub columns_total: Option<usize>,
-    /// Base tables a view scans.
+    /// Base relations a view scans: workspace tables by name, a database connection's
+    /// relations by their qualified name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reads: Vec<String>,
     /// Fields 'matching' found, each addressed by a path this tool accepts back.

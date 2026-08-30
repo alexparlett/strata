@@ -36,9 +36,7 @@ use strata_arrow::plan::as_explain;
 use strata_core::config::Settings;
 use strata_core::project::{exists_at, load_defs, ProjectDefs};
 use strata_engine::register::RegOutcome;
-use strata_engine::{
-    Capability, CapabilityPolicyProvider, Engine, RegStatus, RunRows, RunTag, WsId,
-};
+use strata_engine::{Answers, Capability, CapabilityPolicyProvider, Engine, RunRows, RunTag, WsId};
 use tokio::runtime::Builder as RuntimeBuilder;
 
 use crate::error::AgentError;
@@ -127,89 +125,18 @@ impl HeadlessHost {
         Ok(HeadlessHost::settled(root, defs, engine, outcomes))
     }
 
-    /// Fold the defs, what the engine answered for each, and what each registration *learned*
-    /// into the two listings a host serves.
-    ///
-    /// Driven by the **defs**, not by the outcomes: the catalog is the set of things the user
-    /// wrote down, in the order `load_defs` sorted them. A saved query has no outcome at all — it
-    /// is text the user parked, not an object the engine holds — so it is a `list_tables` row and
-    /// never a `describe_table` answer.
-    ///
-    /// **Whether a def registered comes from the engine's ledger**, not from the outcomes this
-    /// pass happened to see: it is the engine's own record, and reading it here is the same join
-    /// a window's rows make. The outcomes are still what carry the payloads — a table's columns
-    /// and free row count, a view's schema and what it reads — which are facts about the answer
-    /// rather than the answer itself.
+    /// Build the host around what the pass answered.
     fn settled(
         root: PathBuf,
         defs: ProjectDefs,
         engine: Arc<Engine>,
         outcomes: Vec<RegOutcome>,
     ) -> HeadlessHost {
-        let registrations = engine.catalog().registrations();
-        let answers = registrations.workspace;
-        let mut catalog = Vec::new();
-        let mut described = Vec::new();
-        for def in &defs.tables {
-            let result = outcomes.iter().find_map(|o| match o {
-                RegOutcome::Table { name, result } if name == &def.name => Some(result),
-                _ => None,
-            });
-            catalog.push(CatalogEntry::Table {
-                name: def.name.clone(),
-                format: def.format.name().to_string(),
-                sources: def.paths.clone(),
-                reg: reg_state(answers.status(&def.name)),
-            });
-            described.push(match (answers.problem(&def.name), result) {
-                (None, Some(Ok(meta))) => Described::Table {
-                    name: def.name.clone(),
-                    format: def.format.name().to_string(),
-                    sources: def.paths.clone(),
-                    partitions: def.partition_cols.clone(),
-                    rows: meta.rows,
-                    columns: meta.columns.clone(),
-                },
-                (Some(error), _) => Described::Failed {
-                    name: def.name.clone(),
-                    error: error.to_string(),
-                },
-                _ => Described::Pending {
-                    name: def.name.clone(),
-                },
-            });
-        }
-        for def in &defs.views {
-            let result = outcomes.iter().find_map(|o| match o {
-                RegOutcome::View { name, result } if name == &def.name => Some(result),
-                _ => None,
-            });
-            catalog.push(CatalogEntry::View {
-                name: def.name.clone(),
-                sql: def.sql.clone(),
-                reg: reg_state(answers.status(&def.name)),
-            });
-            described.push(match (answers.problem(&def.name), result) {
-                (None, Some(Ok(meta))) => Described::View {
-                    name: def.name.clone(),
-                    sql: def.sql.clone(),
-                    columns: meta.columns.clone(),
-                    reads: meta.tables.clone(),
-                },
-                (Some(error), _) => Described::Failed {
-                    name: def.name.clone(),
-                    error: error.to_string(),
-                },
-                _ => Described::Pending {
-                    name: def.name.clone(),
-                },
-            });
-        }
-        catalog.extend(defs.saved_queries.iter().map(|q| CatalogEntry::Query {
-            id: q.id,
-            name: q.name.clone(),
-            sql: q.sql.clone(),
-        }));
+        let (catalog, described) = listings(
+            &defs,
+            &engine.catalog().registrations().workspace,
+            &outcomes,
+        );
         HeadlessHost {
             project: Project {
                 name: defs.name,
@@ -248,16 +175,44 @@ impl HeadlessHost {
     }
 }
 
-/// [`RegState`] from what the engine last answered for a def — the ledger's answer without its
-/// stamp, which is what a *listing* row carries; what registration **learned** is
-/// [`Host::describe`]'s. `None` is a def no pass reached, which cannot happen here (see
-/// [`HeadlessHost::settled`]) and is exactly what `Pending` means.
-fn reg_state(status: Option<&RegStatus>) -> RegState {
-    match status {
-        None => RegState::Pending,
-        Some(RegStatus::Ready) => RegState::Ready,
-        Some(RegStatus::Failed { reason }) => RegState::Failed(reason.clone()),
+/// Fold a project's defs, the engine's ledger and a registration pass's outcomes into the two
+/// listings a [`Host`] serves: one catalog row per def, and what registration learned about each
+/// table and view.
+///
+/// Driven by the **defs** — the catalog is the set of things the user wrote down, in the order
+/// they are given. A saved query is a catalog row and never a `describe` answer: it is text the
+/// user parked, not an object the engine holds.
+///
+/// Whether a def registered comes from `answers`, the engine's own record, and not from the
+/// outcomes this pass happened to see. The outcomes carry only the payloads — a table's columns
+/// and free row count, a view's schema and what it reads.
+pub fn listings(
+    defs: &ProjectDefs,
+    answers: &Answers,
+    outcomes: &[RegOutcome],
+) -> (Vec<CatalogEntry>, Vec<Described>) {
+    let mut catalog = Vec::new();
+    let mut described = Vec::new();
+    for def in &defs.tables {
+        let learned = outcomes.iter().find_map(|o| match o {
+            RegOutcome::Table { name, result } if name == &def.name => result.as_ref().ok(),
+            _ => None,
+        });
+        let status = answers.status(&def.name);
+        catalog.push(CatalogEntry::table(def, RegState::of(status)));
+        described.push(Described::from_table(def, status, learned));
     }
+    for def in &defs.views {
+        let learned = outcomes.iter().find_map(|o| match o {
+            RegOutcome::View { name, result } if name == &def.name => result.as_ref().ok(),
+            _ => None,
+        });
+        let status = answers.status(&def.name);
+        catalog.push(CatalogEntry::view(def, RegState::of(status)));
+        described.push(Described::from_view(def, status, learned));
+    }
+    catalog.extend(defs.saved_queries.iter().map(CatalogEntry::query));
+    (catalog, described)
 }
 
 impl Host for HeadlessHost {

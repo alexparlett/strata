@@ -477,7 +477,7 @@ async fn register_defs(
 /// **Whether the def registered is not written here.** That is the engine's own answer, and this
 /// re-reads it ([`registrations_settled`]) rather than copying it onto the row: a row is the def
 /// joined with the ledger, and per outcome is exactly as often as it moves. What lands on the row
-/// is only the payload — a table's `TableMeta`, a view's `ViewInfo` — dropped on a refusal, which
+/// is only the payload — a table's `TableMeta`, a view's `ViewMeta` — dropped on a refusal, which
 /// learned nothing.
 ///
 /// [`RegOutcome::Removed`] arrives only from `Catalog::sync`, and only for something the *engine*

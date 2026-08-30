@@ -37,7 +37,7 @@ use strata_agent::{
     AgentError, AgentId, CatalogEntry, Described, QuerySessionId, QuerySessionInfo,
     QuerySessionState, RegState,
 };
-use strata_engine::{Engine, RegStatus, Registrations};
+use strata_engine::{Engine, Registrations};
 use tokio::sync::mpsc;
 
 use crate::agent::ask::{AgentAsk, AgentNotice};
@@ -205,36 +205,32 @@ fn apply(notice: AgentNotice, engine: &Engine, agents: &mut AgentsCtx, log: LogC
 
 /// The catalog as the sidebar shows it: tables, then views, then saved queries — the project's
 /// defs joined with what the engine answered for each, which is the same join the rows draw.
+///
+/// Every row is minted by [`CatalogEntry`]'s own constructors, so this and the headless host's
+/// `listings` are one answer rather than two folds that agree.
 fn catalog(project: &ProjectState, registrations: &Registrations) -> Vec<CatalogEntry> {
-    let tables = project.tables.iter().map(|row| CatalogEntry::Table {
-        name: row.def.name.clone(),
-        format: row.def.format.name().to_string(),
-        sources: row.def.paths.clone(),
-        reg: reg_state(registrations.workspace.status(&row.def.name)),
-    });
-    let views = project.views.iter().map(|row| CatalogEntry::View {
-        name: row.def.name.clone(),
-        sql: row.def.sql.clone(),
-        reg: reg_state(registrations.workspace.status(&row.def.name)),
-    });
-    let queries = project.saved_queries.iter().map(|q| CatalogEntry::Query {
-        id: q.id,
-        name: q.name.clone(),
-        sql: q.sql.clone(),
-    });
+    let answers = &registrations.workspace;
+    let tables = project
+        .tables
+        .iter()
+        .map(|row| CatalogEntry::table(&row.def, RegState::of(answers.status(&row.def.name))));
+    let views = project
+        .views
+        .iter()
+        .map(|row| CatalogEntry::view(&row.def, RegState::of(answers.status(&row.def.name))));
+    let queries = project.saved_queries.iter().map(CatalogEntry::query);
     tables.chain(views).chain(queries).collect()
 }
 
 /// One table or view in full — only what registration actually read (P3-08).
 ///
+/// The row is found here; **which state it is in is [`Described`]'s own decision**, taken from
+/// the ledger's answer and the payload that came with it, so a window and the headless host
+/// cannot report one def two ways.
+///
 /// A **saved query is not describable**, and falls through to the same not-found as a name
 /// nothing owns: it is a string the user parked, not an object the engine holds, so it has no
 /// schema to report and no registration state to be in. `list_tables` is where it appears.
-///
-/// A view's `reads` carries **both** halves of its dependencies. The store keeps `deps` and
-/// `remote_deps` apart because the questions *it* asks differ — only one is checkable against
-/// the project's rows — but a cross-source view reads a remote relation as truly as a workspace
-/// table, and an agent asking what a view reads is owed the whole answer, qualified names and all.
 fn describe(
     project: &ProjectState,
     registrations: &Registrations,
@@ -246,42 +242,22 @@ fn describe(
         .iter()
         .find(|r| ProjectState::same_name(&r.def.name, name))
     {
-        let named = row.def.name.clone();
-        return Ok(match (answers.status(&named), &row.meta) {
-            (Some(RegStatus::Ready), Some(meta)) => Described::Table {
-                format: row.def.format.name().to_string(),
-                sources: row.def.paths.clone(),
-                partitions: row.def.partition_cols.clone(),
-                rows: meta.rows,
-                columns: meta.columns.clone(),
-                name: named,
-            },
-            (Some(RegStatus::Failed { reason }), _) => Described::Failed {
-                name: named,
-                error: reason.clone(),
-            },
-            _ => Described::Pending { name: named },
-        });
+        return Ok(Described::from_table(
+            &row.def,
+            answers.status(&row.def.name),
+            row.meta.as_ref(),
+        ));
     }
     if let Some(row) = project
         .views
         .iter()
         .find(|r| ProjectState::same_name(&r.def.name, name))
     {
-        let named = row.def.name.clone();
-        return Ok(match (answers.status(&named), &row.info) {
-            (Some(RegStatus::Ready), Some(info)) => Described::View {
-                sql: row.def.sql.clone(),
-                columns: info.columns.clone(),
-                reads: info.deps.iter().chain(&info.remote_deps).cloned().collect(),
-                name: named,
-            },
-            (Some(RegStatus::Failed { reason }), _) => Described::Failed {
-                name: named,
-                error: reason.clone(),
-            },
-            _ => Described::Pending { name: named },
-        });
+        return Ok(Described::from_view(
+            &row.def,
+            answers.status(&row.def.name),
+            row.info.as_ref(),
+        ));
     }
     Err(AgentError::NotFound(format!(
         "Table or view '{name}' not found."
@@ -314,27 +290,18 @@ fn sessions(agents: &Agents, agent: AgentId, engine: &Engine) -> Vec<QuerySessio
         .collect()
 }
 
-/// The engine's answer as a *listing* row carries it — what registration **learned** is
-/// [`describe`]'s. A def the engine has not answered for is [`Pending`](RegState::Pending),
-/// which is what the ledger's absence means.
-fn reg_state(status: Option<&RegStatus>) -> RegState {
-    match status {
-        None => RegState::Pending,
-        Some(RegStatus::Ready) => RegState::Ready,
-        Some(RegStatus::Failed { reason }) => RegState::Failed(reason.clone()),
-    }
-}
-
 /// A `State<Agents>` is not constructible outside a renderer, so the satellite's own tests
 /// live beside it (`state::agents`) and these cover the two store projections plus the
 /// session listing, which is the part that reaches the engine.
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field};
+    use strata_agent::headless::listings;
     use strata_agent::{Agent, AgentIdentity};
     use strata_arrow::column_info;
     use strata_core::project::ProjectDefs;
-    use strata_engine::{Answers, CatalogGen, TableMeta, ViewMeta};
+    use strata_engine::register::RegOutcome;
+    use strata_engine::{Answers, CatalogGen, RegStatus, TableMeta, ViewMeta};
     use strata_model::{ColumnInfo, SavedQuery, SourceFormat, TableDef, TableOrigin, ViewDef};
     use uuid::Uuid;
 
@@ -344,67 +311,92 @@ mod tests {
         column_info(&Field::new(name, DataType::Int64, true))
     }
 
-    /// A store with one ready table, one refused table, one ready view and a saved query —
-    /// built directly (no production signature bent to be
-    /// testable).
+    /// **One project fixture**, in the shape both hosts start from: the defs on disk. One ready
+    /// table, one the engine refuses, one ready view and a saved query.
+    fn defs() -> ProjectDefs {
+        ProjectDefs {
+            name: "sales".into(),
+            tables: vec![
+                TableDef {
+                    name: "orders".into(),
+                    format: SourceFormat::from_name("parquet"),
+                    source: None,
+                    paths: vec!["data/orders".into()],
+                    partition_cols: vec![("year".into(), "Int32".into())],
+                    origin: TableOrigin::External,
+                },
+                TableDef {
+                    name: "gone".into(),
+                    format: SourceFormat::from_name("csv"),
+                    source: None,
+                    paths: vec!["missing.csv".into()],
+                    partition_cols: Vec::new(),
+                    origin: TableOrigin::External,
+                },
+            ],
+            views: vec![ViewDef {
+                name: "daily".into(),
+                sql: "SELECT * FROM orders".into(),
+            }],
+            saved_queries: vec![SavedQuery {
+                id: Uuid::nil(),
+                name: "scratch".into(),
+                sql: "SELECT 1".into(),
+                meta: "—".into(),
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// What the registration pass learned about the ready table, and what it learned about the
+    /// view — the payloads that ride the outcomes and land on the rows.
+    fn table_meta() -> TableMeta {
+        TableMeta {
+            columns: vec![column("id"), column("total")],
+            rows: Some(42),
+        }
+    }
+
+    fn view_meta() -> ViewMeta {
+        ViewMeta {
+            columns: vec![column("id")],
+            tables: vec!["orders".into()],
+            remote: Vec::new(),
+            views: Vec::new(),
+        }
+    }
+
+    /// [`defs`] with the pass's answers landed on its rows — built directly (no production
+    /// signature bent to be testable).
     fn store() -> ProjectState {
-        let mut project = ProjectState::from_defs(
-            ProjectDefs {
-                name: "sales".into(),
-                tables: vec![
-                    TableDef {
-                        name: "orders".into(),
-                        format: SourceFormat::from_name("parquet"),
-                        source: None,
-                        paths: vec!["data/orders".into()],
-                        partition_cols: vec![("year".into(), "Int32".into())],
-                        origin: TableOrigin::External,
-                    },
-                    TableDef {
-                        name: "gone".into(),
-                        format: SourceFormat::from_name("csv"),
-                        source: None,
-                        paths: vec!["missing.csv".into()],
-                        partition_cols: Vec::new(),
-                        origin: TableOrigin::External,
-                    },
-                ],
-                views: vec![ViewDef {
-                    name: "daily".into(),
-                    sql: "SELECT * FROM orders".into(),
-                }],
-                saved_queries: vec![SavedQuery {
-                    id: Uuid::nil(),
-                    name: "scratch".into(),
-                    sql: "SELECT 1".into(),
-                    meta: "—".into(),
-                }],
-                ..Default::default()
-            },
-            PathBuf::from("/w/sales"),
-        );
-        project.table_registered(
-            "orders",
-            TableMeta {
-                columns: vec![column("id"), column("total")],
-                rows: Some(42),
-            },
-        );
+        let mut project = ProjectState::from_defs(defs(), PathBuf::from("/w/sales"));
+        project.table_registered("orders", table_meta());
         project.table_failed("gone");
-        project.view_registered(
-            "daily",
-            ViewMeta {
-                columns: vec![column("id")],
-                tables: vec!["orders".into()],
-                remote: Vec::new(),
-                aliases: Vec::new(),
-            },
-        );
+        project.view_registered("daily", view_meta());
         project
     }
 
-    /// What the engine answered about [`store`]'s defs — the other half of every row, and the
-    /// only half that says whether a def registered.
+    /// The same pass, as the headless host sees it: the outcomes it collected while `sync` ran.
+    /// A refused def carries the engine's sentence, which is also what the ledger recorded.
+    fn outcomes() -> Vec<RegOutcome> {
+        vec![
+            RegOutcome::Table {
+                name: "orders".into(),
+                result: Ok(table_meta()),
+            },
+            RegOutcome::Table {
+                name: "gone".into(),
+                result: Err("No source paths".into()),
+            },
+            RegOutcome::View {
+                name: "daily".into(),
+                result: Ok(view_meta()),
+            },
+        ]
+    }
+
+    /// What the engine's ledger holds for [`defs`] — the other half of every row, and the only
+    /// half that says whether a def registered. Both hosts read it; neither keeps a copy.
     fn answered() -> Registrations {
         Registrations {
             workspace: Answers::recorded(
@@ -422,6 +414,39 @@ mod tests {
             ),
             ..Default::default()
         }
+    }
+
+    /// **One project, one answer, whichever host is asked.** The window folds its rows and the
+    /// headless host folds the pass's outcomes, and this pins that those two folds are the same
+    /// answer rather than two that happen to agree today — which is what the shared constructors
+    /// on [`CatalogEntry`] and [`Described`] exist to make true.
+    ///
+    /// It is worth pinning because the two folds start from genuinely different material: a
+    /// window has store rows carrying what registration *landed*, and the headless host has the
+    /// outcomes it collected while `sync` ran. Everything past that — which state a def is in,
+    /// what a row carries, what a view is said to read — has to be one decision, and the only
+    /// way to see it drift is from a crate that can call both.
+    #[test]
+    fn both_hosts_answer_for_one_project_identically() {
+        let answers = answered();
+        let (headless_catalog, headless_described) =
+            listings(&defs(), &answers.workspace, &outcomes());
+
+        assert_eq!(catalog(&store(), &answers), headless_catalog);
+        for described in &headless_described {
+            assert_eq!(
+                describe(&store(), &answers, described.name()).expect("both hosts hold the def"),
+                *described,
+                "'{}'",
+                described.name()
+            );
+        }
+        assert_eq!(
+            headless_described.len(),
+            3,
+            "the two tables and the view, so the loop above ran over all of them; the saved \
+             query is a catalog row and nothing describes it"
+        );
     }
 
     /// The whole catalog, failed rows included — the P3-02 correction, which is the reason

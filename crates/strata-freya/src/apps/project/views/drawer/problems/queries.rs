@@ -17,10 +17,10 @@
 //! ## What is deliberately not here
 //!
 //! A failed **run**. This scope is the SQL-validation surface; a query failure belongs to a run,
-//! not to the text, and the results pane renders it in full — banner, code frame, caret, hint —
-//! from `QueryError`. Folding it in would mean either a copy of the error on the store that
-//! outlives the run it describes, or one freya-query subscription per tab in the drawer *and*
-//! in the rail badge.
+//! not to the text, and the results pane renders it where it lives — in that run's own query
+//! entry (`results::error`). Folding it in would mean either a copy of the error on the store
+//! that outlives the run it describes, or one freya-query subscription per tab in the drawer
+//! *and* in the rail badge.
 //!
 //! A failed **write**, or a def the engine refused: those are conditions about the *project*
 //! rather than about a query's text, and they are the [`Project`](super::project::Project)

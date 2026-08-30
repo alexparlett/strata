@@ -7,7 +7,7 @@
 //! engine retains it ([`Registrations`](strata_engine::Registrations)) and a row is the def
 //! this store holds *joined* with that answer — the desired state is the store's authority,
 //! the observed state is the engine's, and neither is copied into the other. What a row keeps
-//! is only what registration **learned**: a table's [`TableMeta`], a view's [`ViewInfo`], both
+//! is only what registration **learned**: a table's [`TableMeta`], a view's [`ViewMeta`], both
 //! absent until one has landed and dropped again by a failure, which learns nothing.
 //!
 //! Identity: **views and tables are addressed by name** — that is their engine/SQL
@@ -19,7 +19,7 @@
 //! ([`ProjectState::same_name`]) — DataFusion folds unquoted identifiers — and that rule
 //! governs **every** def-identity decision: `name_in_use`, the upserts and the removes.
 //! Only **landing engine answers** matches exactly (round-trips of our own strings). A
-//! view's `deps` are the exception on the read side: they come back from the *planner*,
+//! view's dependency lists are the exception on the read side: they come back from the *planner*,
 //! off the user's SQL rather than our strings, so [`ProjectState::view_problem`] looks
 //! them up case-insensitively too.
 //!
@@ -38,7 +38,7 @@ use freya::radio::RadioChannel;
 use strata_core::project::{self as project_io, name_ord, ProjectDefs};
 use strata_engine::register::view_order;
 use strata_engine::{RegStatus, Registrations, TableMeta, ViewMeta};
-use strata_model::{CatalogKind, ColumnInfo, SavedQuery, SourceDef, TableDef, ViewDef};
+use strata_model::{CatalogKind, SavedQuery, SourceDef, TableDef, ViewDef};
 use uuid::Uuid;
 
 use crate::apps::project::query::ScanId;
@@ -116,35 +116,18 @@ impl TableRow {
     }
 }
 
-/// What creating a view learned, with its aliases already resolved to actual views.
-pub struct ViewInfo {
-    /// The autocomplete symbol catalog (P2-04); the inspector reads it too (Phase 3).
-    pub columns: Vec<ColumnInfo>,
-    /// The **workspace** base tables it reads (transitive — the planner inlines nested views).
-    /// Read by [`ProjectState::view_problem`] (P3-04) and, from the other direction, by
-    /// [`ProjectState::dependent_views`] (P3-05); profile invalidation takes the same list
-    /// (P3-09).
-    pub deps: Vec<String>,
-    /// The relations it reads in a **data source's** catalog, qualified
-    /// (`pg.public.orders`) — the engine's [`ViewMeta::remote`], kept apart from `deps` for the
-    /// reason it is kept apart there: every question `deps` answers is asked of the project's
-    /// own rows, and a remote relation has none. It is not a missing dependency, it is not a
-    /// table any drop can name, and the only thing that knows whether it still exists is the
-    /// data source.
-    pub remote_deps: Vec<String>,
-    /// The views it reads (transitive), resolved from the engine's raw aliases. The view
-    /// half of the drop warning: `deps` is base tables *by construction*, so it can answer
-    /// "which views read this table" but never "which views read this view" (`DEV_TASKS` D10
-    /// records that limit) — this list is what answers it.
-    pub view_deps: Vec<String>,
-}
-
 /// One catalog view: its persisted def + what creating it learned.
 pub struct ViewRow {
     pub def: ViewDef,
-    /// What the last successful creation learned — see [`ViewInfo`], and [`TableRow::meta`] for
-    /// why whether it is *registered* is not here.
-    pub info: Option<ViewInfo>,
+    /// What the last successful creation learned — the engine's [`ViewMeta`] whole, exactly as
+    /// [`TableRow::meta`] holds a table's, and see that field for why whether the view is
+    /// *registered* is not here.
+    ///
+    /// Which surface reads which of its three lists: [`view_problem`](ProjectState::view_problem)
+    /// and [`dependent_views`](ProjectState::dependent_views) read `tables`, the drop confirm's
+    /// view case reads `views`, and `remote` is read by neither — both reconcile against the
+    /// project's own rows, and a relation in a data source's catalog has none.
+    pub info: Option<ViewMeta>,
     /// The profile scan asked for on this view — see [`TableRow::profile`]. A view is where a
     /// scan buys the most: it has no files under it, so it reports nothing for free.
     pub profile: Option<ScanId>,
@@ -449,36 +432,12 @@ impl ProjectState {
 
     /// Land a view creation answer on its row.
     ///
-    /// The engine's `aliases` are raw — inlined view names mixed with table-alias /
-    /// CTE noise it can't tell apart from a view inline. Keep only the ones that are
-    /// actually views (a view can't reference itself, and every view has a row from
-    /// load, so the filter sees them all regardless of registration order).
-    ///
-    /// Matched with [`same_name`](Self::same_name), not `==`: aliases come back from the
-    /// **planner**, which folds unquoted identifiers to lower case, while def names carry
-    /// whatever the user typed. An exact compare drops every alias of a view named with any
-    /// upper case at all, leaving `view_deps` empty — and since P3-05 an empty list is a
-    /// *claim*, rendered as "nothing reads this view" right before a destructive drop.
-    /// Folding here is what makes `dependent_views`' own fold reachable.
+    /// The answer lands **whole**: it arrives already resolved, so there is nothing to filter
+    /// here. Every name in it still compares with [`same_name`](Self::same_name) wherever these
+    /// lists are *read*, because they come back from the planner — which folds unquoted
+    /// identifiers — while def names carry whatever the user typed.
     pub fn view_registered(&mut self, name: &str, meta: ViewMeta) {
-        let view_deps: Vec<String> = meta
-            .aliases
-            .into_iter()
-            .filter(|a| {
-                self.views
-                    .iter()
-                    .any(|v| Self::same_name(&v.def.name, a) && !Self::same_name(&v.def.name, name))
-            })
-            .collect();
-        self.land_view(
-            name,
-            Some(ViewInfo {
-                columns: meta.columns,
-                deps: meta.tables,
-                remote_deps: meta.remote,
-                view_deps,
-            }),
-        );
+        self.land_view(name, Some(meta));
     }
 
     /// Land a **refused** view creation: the row drops what an earlier creation learned, for
@@ -488,7 +447,7 @@ impl ProjectState {
     }
 
     /// What a view creation answer leaves on its row, either way.
-    fn land_view(&mut self, name: &str, info: Option<ViewInfo>) {
+    fn land_view(&mut self, name: &str, info: Option<ViewMeta>) {
         if let Some(v) = self.views.iter_mut().find(|v| v.def.name == name) {
             v.info = info;
             v.profile = None;
@@ -500,12 +459,12 @@ impl ProjectState {
     /// - the **hard** failure the engine reported — the SQL didn't plan (a syntax error,
     ///   or a base table already missing when the view was created); or
     /// - a **missing dependency** — a base table it reads is gone from the catalog, or is
-    ///   itself failing to register. [`ViewInfo::deps`] is the *transitive* base-table set
+    ///   itself failing to register. [`ViewMeta::tables`] is the *transitive* base-table set
     ///   (the planner inlines nested views at creation), so this reaches through a
     ///   view-of-a-view, and it catches a table dropped **after** the view registered
     ///   cleanly, which raises no event of its own.
     ///
-    /// A cross-source view's **remote** reads ([`ViewInfo::remote_deps`]) are deliberately not
+    /// A cross-source view's **remote** reads ([`ViewMeta::remote`]) are deliberately not
     /// checked here, and the reason is what this check *is*: a reconciliation against the
     /// project's own rows. A relation in a data source's catalog has no row, so every
     /// answer this loop could give about one would be "not in the catalog" — a triangle on every
@@ -517,7 +476,7 @@ impl ProjectState {
     /// base table does **not** break the view's live plan — that plan captured each source
     /// by `Arc` at creation and never re-resolves the name, so `SELECT * FROM the_view`
     /// still answers. What is true is that the view will not survive a reload, which is
-    /// why it is flagged as *left invalid*. It is also why validity is derived from `deps`
+    /// why it is flagged as *left invalid*. It is also why validity is derived from `tables`
     /// rather than by re-issuing `CREATE OR REPLACE VIEW`: a re-plan catches a directly
     /// missing base table but a view-of-a-view masks it behind the same live `Arc`.
     pub fn view_problem(&self, row: &ViewRow, registrations: &Registrations) -> Option<String> {
@@ -526,7 +485,7 @@ impl ProjectState {
             return Some(why.to_string());
         }
         let info = row.info.as_ref()?;
-        info.deps.iter().find_map(|dep| {
+        info.tables.iter().find_map(|dep| {
             match self
                 .tables
                 .iter()
@@ -613,10 +572,10 @@ impl ProjectState {
     /// sorted) — the other direction of the same deps [`view_problem`](Self::view_problem)
     /// reads (D10). The drop confirm's consequence line and its name chips.
     ///
-    /// Which list answers depends on what is being dropped. [`ViewInfo::deps`] is the *base tables*
-    /// a view reads — transitive, because the planner inlines nested views at creation — so it
-    /// reaches a view-of-a-view over the dropped table; [`ViewInfo::view_deps`] is the *views* it
-    /// reads, the only thing that can answer the view case. A saved query is not a SQL object, so
+    /// Which list answers depends on what is being dropped. [`ViewMeta::tables`] is the *base
+    /// tables* a view reads — transitive, because the planner inlines nested views at creation —
+    /// so it reaches a view-of-a-view over the dropped table; [`ViewMeta::views`] is the *views*
+    /// it reads, the only thing that can answer the view case. A saved query is not a SQL object, so
     /// it has no dependents. Names fold case, because deps come back from the planner and the
     /// dropped name comes from a def.
     ///
@@ -635,8 +594,8 @@ impl ProjectState {
                     return false;
                 };
                 match kind {
-                    CatalogKind::Table => &info.deps,
-                    CatalogKind::View => &info.view_deps,
+                    CatalogKind::Table => &info.tables,
+                    CatalogKind::View => &info.views,
                     CatalogKind::Query => return false,
                 }
                 .iter()
@@ -650,7 +609,7 @@ impl ProjectState {
     ///
     /// Two sets, for two different reasons:
     ///
-    /// - the views that **read** it ([`ViewInfo::deps`], so transitively through a
+    /// - the views that **read** it ([`ViewMeta::tables`], so transitively through a
     ///   view-of-a-view). Re-registering a table does not break a view over it — worse, the
     ///   view goes on scanning the *old* provider with the *old* inferred schema, because its
     ///   plan captured that provider by `Arc` at creation and never re-resolves the name
@@ -676,7 +635,7 @@ impl ProjectState {
     /// Order `views` so that a view is re-created **after** every view it reads — the
     /// store's projection over [`view_order`] (`strata-engine`, beside the pass it
     /// orders): each view's known dependencies are its landed
-    /// [`ViewInfo::view_deps`], and a view with no landed answer carries none, so it
+    /// [`ViewMeta::views`], and a view with no landed answer carries none, so it
     /// sorts wherever it falls — at project open that is every view, which is why the
     /// scan keeps its fixed-point retry as well.
     pub fn refresh_order(&self, views: Vec<String>) -> Vec<String> {
@@ -685,7 +644,7 @@ impl ProjectState {
                 .iter()
                 .find(|v| Self::same_name(&v.def.name, name))
                 .and_then(|v| v.info.as_ref())
-                .map(|info| info.view_deps.clone())
+                .map(|info| info.views.clone())
                 .unwrap_or_default()
         })
     }
@@ -988,7 +947,7 @@ mod tests {
                 columns: Vec::new(),
                 tables: vec!["orders".into()],
                 remote: Vec::new(),
-                aliases: Vec::new(),
+                views: Vec::new(),
             },
         );
         p
@@ -1082,7 +1041,7 @@ mod tests {
             columns: Vec::new(),
             tables: deps.iter().map(|d| (*d).to_string()).collect(),
             remote: Vec::new(),
-            aliases: Vec::new(),
+            views: Vec::new(),
         }
     }
 
@@ -1208,14 +1167,14 @@ mod tests {
         );
     }
 
-    /// A view meta that reads views as well as tables — what the planner lands for a view over
-    /// a view (the base tables inlined, plus the view names among its raw aliases).
+    /// A view meta that reads views as well as tables — what the engine lands for a view over
+    /// a view: the base tables inlined at the leaves, and the views it reads resolved beside them.
     fn view_meta_over(tables: &[&str], views: &[&str]) -> ViewMeta {
         ViewMeta {
             columns: Vec::new(),
             tables: tables.iter().map(|d| (*d).to_string()).collect(),
             remote: Vec::new(),
-            aliases: views.iter().map(|d| (*d).to_string()).collect(),
+            views: views.iter().map(|d| (*d).to_string()).collect(),
         }
     }
 
@@ -1271,7 +1230,7 @@ mod tests {
         );
     }
 
-    /// Dropping a **view** is the other lookup — `view_deps`, not `deps`. Asserting both
+    /// Dropping a **view** is the other lookup — `views`, not `tables`. Asserting both
     /// directions off one store is the point: `orders_daily` reads `orders` and is read by
     /// `orders_weekly`, and neither question may be answered with the other's list.
     #[test]
@@ -1300,17 +1259,18 @@ mod tests {
     /// The row being dropped is never listed as its own dependent — a confirm warning that a
     /// view will invalidate itself is noise.
     ///
-    /// The guard is held at both layers, and this pins the **lookup's**, so the row is written
-    /// past `view_registered` (which already strips a self-alias): going through the landing path
-    /// would leave `view_deps` empty and the test would pass without the filter existing at all.
+    /// The guard is held at both layers, and this pins the **lookup's**. The row is written
+    /// directly rather than through `view_registered`, because the engine holds a view's own name
+    /// back when it resolves the list — a self-reference is a state only a fixture can reach,
+    /// which is what makes the lookup's own guard worth pinning.
     #[test]
     fn a_view_is_never_listed_as_its_own_dependent() {
         let mut p = settled();
-        p.views[0].info = Some(ViewInfo {
+        p.views[0].info = Some(ViewMeta {
             columns: Vec::new(),
-            deps: Vec::new(),
-            remote_deps: Vec::new(),
-            view_deps: vec!["orders_daily".into()],
+            tables: Vec::new(),
+            remote: Vec::new(),
+            views: vec!["orders_daily".into()],
         });
         assert_eq!(
             p.views[0].def.name, "orders_daily",
@@ -1322,12 +1282,12 @@ mod tests {
             .is_empty());
     }
 
-    /// The view→view direction folds case too, and it has to fold at **landing**: the planner
-    /// hands back lower-cased aliases while def names keep the user's capitals, so an exact
-    /// filter in `view_registered` would leave `view_deps` empty and the drop confirm would
-    /// state that nothing reads a view that something does.
+    /// The view→view direction folds case at **lookup**: the engine resolves these names off the
+    /// planner, which lower-cases an unquoted identifier, while def names keep the user's
+    /// capitals. An exact compare here would answer that nothing reads a view that something
+    /// does — right before a destructive drop.
     #[test]
-    fn view_dependencies_fold_case_when_the_alias_lands() {
+    fn view_dependencies_fold_case_at_the_lookup() {
         let defs = ProjectDefs {
             name: "test".into(),
             tables: Vec::new(),

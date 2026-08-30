@@ -85,7 +85,7 @@ pub use project::{FaultKind, ProjChan, ProjectState};
 /// index is tested exactly this way). A data source's row is not among them: nothing outside the
 /// store reads one directly any more, the data-sources tree having moved onto [`SourceNode`].
 #[cfg(test)]
-pub use project::{TableRow, ViewInfo, ViewRow};
+pub use project::{TableRow, ViewRow};
 pub use session::{ProblemGroup, QueryTab, SessionState, Stamp};
 pub use sources::{assemble, SourceContents, SourceNode};
 pub use statement::{settle, use_settle, use_statement_settle, Settle};

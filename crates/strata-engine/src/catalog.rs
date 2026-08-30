@@ -67,10 +67,10 @@ pub struct TableSpec {
     pub internal: bool,
 }
 
-/// What creating a view learned: its columns and what it reads. `tables` / `remote` /
-/// `aliases` come straight from [`PlanDeps`] — `aliases` is raw (view inlines mixed
-/// with table-alias / CTE noise); the caller keeps only the names that are actually
-/// views.
+/// What creating a view learned: its columns, and three lists of what it reads.
+///
+/// Each list is the answer to one question, resolved: a consumer keys on it directly rather than
+/// deriving it from the [`PlanDeps`] walk these come from.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ViewMeta {
     pub columns: Vec<ColumnInfo>,
@@ -78,9 +78,19 @@ pub struct ViewMeta {
     pub tables: Vec<String>,
     /// Base relations it scans in a data source's catalog, qualified
     /// (see [`PlanDeps::remote`]).
+    ///
+    /// Every part bare and dotted together, as the plan records the name — never a *rendered*
+    /// address, which quotes the parts that need it. A rendering is a spelling meant for a
+    /// message, and matching one against another matches nothing.
     pub remote: Vec<String>,
-    /// Every `SubqueryAlias` name in its plan (see [`PlanDeps::aliases`]).
-    pub aliases: Vec<String>,
+    /// The registered views it reads, transitively — what dropping this one would leave
+    /// invalid, from the other direction.
+    ///
+    /// Resolved from [`PlanDeps::aliases`], so a name that is merely a table alias
+    /// (`FROM t AS v`) or a CTE is included when a registered view is called that: a plan cannot
+    /// tell the three apart. Over-reporting is the safe direction here, since a missed reader is
+    /// a destructive action reported as harmless.
+    pub views: Vec<String>,
 }
 
 /// Register (or **re**-register) one external table from its spec, returning its
@@ -959,17 +969,18 @@ pub async fn remote_dependents(ctx: &SessionContext, at: &TableReference) -> Vec
 /// A different half of [`PlanDeps`], because a view is not a leaf: the inliner leaves the view's
 /// *name* behind as a `SubqueryAlias` and its base tables at the leaves, so a reader of `orders`
 /// and a reader of the view over `orders` are told apart by which list the name is in. That is
-/// exactly the split the store keeps (`ViewInfo::deps` vs `view_deps`), which is what makes the
-/// typed drop's report and the pane's warning the same fact.
+/// exactly the split [`ViewMeta`] keeps (`tables` vs `views`), which is what makes the typed
+/// drop's report and the pane's warning the same fact.
 ///
 /// **The aliases half is raw, and this over-reports on purpose.** A `SubqueryAlias` is what the
 /// inliner leaves *and* what `FROM t AS v` and a CTE named `v` leave, and the plan cannot tell
 /// them apart — so dropping the view `v` also names a view that merely aliased something else `v`.
 /// Kept, for two reasons. It is the safe direction: a **missed** reader is a destructive action
 /// reported as consequence-free, where a spare one is a name the user can look at. And it is not
-/// a divergence from the pane, whose filter (`ProjectState::view_registered`) keeps an alias only
-/// where a view row of that name exists — always true of the name being dropped, so the filter
-/// cannot subtract this case and the two surfaces still say one thing. Telling the two apart
+/// a divergence from the recorded copy a store holds: [`ViewMeta::views`] is this same set
+/// resolved against the same catalog, keeping an alias only where a *registered* view of that
+/// name exists — always true of the name being dropped, so the resolution cannot subtract this
+/// case and the two surfaces still say one thing. Telling the two apart
 /// would mean comparing the aliased subtree against the view's own registered plan, which is a
 /// change to what `PlanDeps` *is* and would have to move both surfaces at once.
 pub async fn dependents_of_view(ctx: &SessionContext, name: &str) -> Vec<String> {

@@ -9,20 +9,6 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
-/// What a pending removal targets — drives the confirm dialog's wording and the
-/// engine command sent on confirm.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum RemoveKind {
-    Table,
-    View,
-}
-
-#[derive(Clone)]
-pub struct RemoveTarget {
-    pub kind: RemoveKind,
-    pub name: String,
-}
-
 /// Which catalog section a right-clicked row belongs to.
 ///
 /// `Hash` because it rides a freya-query cache key (a profile is *of* a table or a view), and a
