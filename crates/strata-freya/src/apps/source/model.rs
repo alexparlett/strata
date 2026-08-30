@@ -61,10 +61,12 @@ pub enum SecretProbe {
     Refused(String),
 }
 
-/// What a [`Field::Secret`] row is showing: its sentence and both of its presses, off one value.
+/// What a [`Field::Secret`] row is showing: its sentence, its tone and its one press, off one
+/// value.
 ///
-/// A secret is optional wherever its key says so, so absence is a state rather than a mode and
-/// there is no pill; every arm is reachable by typing into the box or by one of the two presses.
+/// Absence is a state rather than a mode, so there is no pill: every arm is reachable by typing
+/// into the box or by the one press. What the arms are about is **this def against this machine**
+/// — the key's `required` is a question for form validity, one layer up.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum SecretRow {
     /// Something is typed: it lands in this machine's keystore at Save.
@@ -75,15 +77,19 @@ pub enum SecretRow {
     },
     /// Expected, and this machine holds it.
     Stored,
-    /// Expected, this machine does not hold it, and the kind **requires** one: nothing can
-    /// connect until it is entered here.
-    Missing,
-    /// Expected, this machine does not hold it, and the kind does **not** require one.
+    /// **Expected, and this machine has no entry** — the row's [error](Self::fault), because the
+    /// def records the slot its secret was filed under, so this is *never entered here* and not
+    /// the shrug it used to have to be.
     ///
-    /// States the fact and asks for nothing: a key declared `required: false` is one a data
-    /// source may simply not have, so an empty box is not a gap to be filled. Distinct from
-    /// [`Missing`](Self::Missing), which is the same absence where the kind does require one.
-    Optional,
+    /// Keyed on the expectation and not on [`required`](SourceSetting::required): a key the kind
+    /// does not require is one a data source may simply not have, but a def that **was saved
+    /// with** one has said it has it, and connecting will fail with exactly this sentence on the
+    /// data source's own row. The declaration still has its say elsewhere — a `required: true`
+    /// key with no expectation at all is [`Unused`](Self::Unused) and blocks Save through
+    /// [`SourceDraft::blocker`]. This does not: saving the def is harmless, and it is
+    /// *connecting* that fails, so the row is a preview of that failure rather than a second gate
+    /// in front of it.
+    Missing,
     /// Expected, and this machine's entry is being removed at Save. Other machines keep theirs,
     /// which is the whole difference from [`Unused`](Self::Unused).
     Removing,
@@ -94,13 +100,11 @@ pub enum SecretRow {
 impl SecretRow {
     /// What the def expects with the box empty, whether anything is typed, whether a removal is
     /// pending, and what the keystore said.
-    pub fn of(
-        required: bool,
-        expected: bool,
-        typed: bool,
-        removed: bool,
-        probe: &SecretProbe,
-    ) -> Self {
+    ///
+    /// The kind's `required` is not among them, and that is the point: what this row is about is
+    /// what **this def** recorded against what **this machine** holds, and the declaration
+    /// answers a different question one layer up (form validity, in [`SourceDraft::blocker`]).
+    pub fn of(expected: bool, typed: bool, removed: bool, probe: &SecretProbe) -> Self {
         if typed {
             return Self::Typed;
         }
@@ -113,18 +117,27 @@ impl SecretRow {
                 SecretProbe::Asking => Self::Asking,
                 SecretProbe::Stored => Self::Stored,
                 SecretProbe::Refused(why) => Self::Refused(why.clone()),
-                SecretProbe::Absent if required => Self::Missing,
-                SecretProbe::Absent => Self::Optional,
+                SecretProbe::Absent => Self::Missing,
             },
         }
+    }
+
+    /// Whether this row is stating something **wrong** rather than something true, which is what
+    /// puts its sentence in the error tone.
+    ///
+    /// Only [`Missing`](Self::Missing). [`Refused`](Self::Refused) is not one: a keystore that
+    /// would not answer leaves whether an entry is here *unknown*, and painting unknown as wrong
+    /// asserts a fact nobody established — the same rule that keeps the two probe answers apart.
+    pub fn fault(&self) -> bool {
+        matches!(self, Self::Missing)
     }
 
     /// Whether Save should keep the def's expectation of this secret.
     ///
     /// The one place the box's empty state is interpreted, because it means two things and only
-    /// this value can tell them apart: with something stored here it means *leave it alone* (a
-    /// stored secret is never rendered, so empty is its resting state), and with nothing stored
-    /// and nothing required it means *there is none*.
+    /// this value can tell them apart: over a def that expects one it means *leave it alone* (a
+    /// stored secret is never rendered, so empty is its resting state), and over a def that
+    /// expects none it means *there is none*.
     ///
     /// True for every arm but [`Unused`](Self::Unused), which is the def already saying there is
     /// none: an expectation is dropped by an act of the user, never by this machine's keystore
@@ -156,12 +169,9 @@ impl SecretRow {
                 format!("A {noun} is stored on this machine. Type a new one to replace it.")
             }
             Self::Missing => format!(
-                "This data source needs a {noun} and none is stored on this machine. Enter it \
-                 here."
+                "This data source was saved with a {noun} and none is stored on this machine. \
+                 Connecting fails until you enter it here."
             ),
-            Self::Optional => {
-                format!("No {noun} is stored on this machine.")
-            }
             Self::Removing => format!(
                 "The {noun} stored on this machine is removed when you save. This data source \
                  still expects one, so other machines keep theirs."
@@ -729,9 +739,7 @@ mod tests {
     fn a_secret_row_reports_this_machine_rather_than_the_def() {
         use SecretProbe as P;
 
-        let row = |expected, typed, removed, probe: &P| {
-            SecretRow::of(true, expected, typed, removed, probe)
-        };
+        let row = SecretRow::of;
 
         assert_eq!(
             row(false, false, false, &P::Absent),
@@ -741,7 +749,7 @@ mod tests {
         assert_eq!(
             row(true, false, false, &P::Absent),
             SecretRow::Missing,
-            "required, expected, and this machine has none"
+            "expected, and this machine has none"
         );
         assert_eq!(row(true, false, false, &P::Asking), SecretRow::Asking);
         assert_eq!(
@@ -774,14 +782,14 @@ mod tests {
         };
         assert!(SecretRow::Missing
             .note(&noun(&other))
-            .contains("needs a secret access key"));
+            .contains("saved with a secret access key"));
     }
 
     /// **Removing a secret from this machine is not saying the data source has none.** The
     /// expectation stands, so a colleague keeps their own secret.
     #[test]
     fn removing_a_secret_locally_is_not_declaring_the_source_has_none() {
-        let removing = SecretRow::of(true, true, false, true, &SecretProbe::Stored);
+        let removing = SecretRow::of(true, false, true, &SecretProbe::Stored);
         assert_eq!(removing, SecretRow::Removing);
         assert!(
             removing
@@ -791,7 +799,7 @@ mod tests {
             removing.note("password")
         );
 
-        let unused = SecretRow::of(true, false, false, true, &SecretProbe::Stored);
+        let unused = SecretRow::of(false, false, true, &SecretProbe::Stored);
         assert_eq!(unused, SecretRow::Unused { forgetting: true });
         assert!(
             unused.note("password").contains("without a password"),
@@ -800,33 +808,55 @@ mod tests {
         );
     }
 
-    /// **An empty box is an answer wherever the kind does not require one.**
+    /// **An empty box is an answer wherever the def expects nothing**, whatever the kind
+    /// requires — and it is a **fault** wherever the def expects one.
     ///
-    /// The declaration already said so — Postgres declares `required: false` on its password —
-    /// and the renderer used to ignore it: absence read as [`Missing`](SecretRow::Missing), a
-    /// demand, escapable only through a *This data source uses no password* control that looked
-    /// like a sentence. The control is gone; `required` decides.
+    /// A def that was saved with a secret has said it has one, so a machine holding no entry is
+    /// not an optional key left blank: it is the state that fails at connect, named here in the
+    /// error tone. This is the arm that used to read *"No password is stored on this machine."*
+    /// beside no fix at all, on the reasoning that the key was declared `required: false` — true
+    /// of the *declaration* and irrelevant to a def that recorded a slot.
     #[test]
-    fn an_optional_secret_is_answered_by_leaving_the_box_empty() {
+    fn an_empty_box_is_an_answer_over_a_def_that_expects_nothing() {
         use SecretProbe as P;
 
-        let optional = SecretRow::of(false, true, false, false, &P::Absent);
-        assert_eq!(optional, SecretRow::Optional);
+        let unused = SecretRow::of(false, false, false, &P::Absent);
+        assert_eq!(unused, SecretRow::Unused { forgetting: false });
+        assert!(!unused.fault(), "nothing is expected, so nothing is wrong");
         assert!(
-            !optional.note("password").contains("Enter it"),
-            "an optional secret asks for nothing: {}",
-            optional.note("password")
-        );
-        assert!(
-            optional.keeps_expectation(),
-            "and an absence on this machine never edits a shared def"
+            !unused.note("password").contains("enter it"),
+            "and it asks for nothing: {}",
+            unused.note("password")
         );
 
-        assert_eq!(
-            SecretRow::of(true, true, false, false, &P::Absent),
-            SecretRow::Missing,
-            "a key the kind requires still asks for one"
+        let missing = SecretRow::of(true, false, false, &P::Absent);
+        assert_eq!(missing, SecretRow::Missing);
+        assert!(missing.fault());
+        assert!(
+            missing.note("password").contains("enter it here"),
+            "the error names the fix: {}",
+            missing.note("password")
         );
+        assert!(
+            missing.keeps_expectation(),
+            "and an absence on this machine never edits a shared def"
+        );
+    }
+
+    /// **The missing-secret error does not block Save.** Writing the def is harmless; it is
+    /// *connecting* that fails, and that failure has a home on the data source's own row. The
+    /// editor's error is a preview of it, not a second gate.
+    #[test]
+    fn a_secret_missing_from_this_machine_does_not_block_the_save() {
+        let mut draft = source_draft();
+        draft.secrets.insert("password".into(), SecretRef::mint());
+        assert_eq!(draft.blocker(), None);
+
+        let key = TEST_SETTINGS
+            .iter()
+            .find(|declared| declared.key == "password")
+            .expect("the declaration");
+        assert!(!key.required, "and the declaration is not what said so");
     }
 
     /// **An empty box never drops a secret this machine is holding**, whatever the kind requires.
@@ -838,7 +868,7 @@ mod tests {
         use SecretProbe as P;
 
         for probe in [P::Stored, P::Asking, P::Refused("locked".into())] {
-            let row = SecretRow::of(false, true, false, false, &probe);
+            let row = SecretRow::of(true, false, false, &probe);
             assert!(
                 row.keeps_expectation(),
                 "{row:?}: nothing here established that there is no secret"
@@ -854,7 +884,6 @@ mod tests {
         for row in [
             SecretRow::Typed,
             SecretRow::Missing,
-            SecretRow::Optional,
             SecretRow::Removing,
             SecretRow::Asking,
             SecretRow::Unused { forgetting: false },
