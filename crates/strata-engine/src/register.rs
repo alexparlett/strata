@@ -412,7 +412,7 @@ async fn remove_absent(
             kind: *kind,
         });
     }
-    for (name, identity) in engine.source_defs.held() {
+    for (name, _) in engine.source_defs.held() {
         match desired
             .sources
             .iter()
@@ -425,7 +425,7 @@ async fn remove_absent(
                     kind: RegKind::Source,
                 });
             }
-            Some(def) if def.named() != identity => engine.sources().disconnect(&name),
+            Some(def) if engine.source_defs.moved(def) => engine.sources().disconnect(&name),
             Some(_) => {}
         }
     }
@@ -942,8 +942,72 @@ mod tests {
         );
         assert_eq!(
             engine.source_defs.held(),
-            vec![("lake".to_string(), "moved".to_string())],
-            "and the one that moved is held at its new address, not both"
+            vec![("lake".to_string(), "s3:moved".to_string())],
+            "and the one that moved is held at its new identity, not both"
+        );
+    }
+
+    /// **An unchanged data source has not moved, so a sync leaves it alone** — the half the diff
+    /// above never asked about.
+    ///
+    /// `sync` is not only the project open: `CREATE TABLE`, `CREATE VIEW`, a drop and the sidebar
+    /// refresh all reach it. A diff that answered "moved" for an unmoved source would tear down
+    /// every live one on each of those — dropping a database's pool and its cached listing, and
+    /// widening the window where its catalog resolves to nothing — before the pass reconnected
+    /// them anyway. It did: the two sides of the comparison were computed apart, `held()`
+    /// answering an *address* while the caller read a *name*, so the answer was "moved" for every
+    /// source not named after its own address.
+    ///
+    /// Asked of `SourceDefs::moved` rather than through `sync`, deliberately: the additive phase
+    /// reconnects every desired source on every pass, and a failed connect takes back whatever it
+    /// had registered, so the two behaviours **converge** in everything observable afterwards.
+    /// What the bug cost was the teardown in between, and the predicate is where it is decided.
+    #[tokio::test]
+    async fn an_unchanged_source_has_not_moved() {
+        let engine = Engine::builder().build();
+        let at = |kind: &str, name: &str, address: &str| SourceDef {
+            kind: kind.into(),
+            name: name.into(),
+            config: [("address", address), ("auth", "anonymous")]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            ..Default::default()
+        };
+
+        // A name whose address it is *not*, which is every real one and the case that broke.
+        let def = at("s3", "lake_s3", "acme-lake");
+        engine
+            .catalog()
+            .sync(
+                CatalogSpec {
+                    sources: vec![def.clone()],
+                    ..Default::default()
+                },
+                |_| {},
+            )
+            .await;
+
+        assert!(
+            !engine.source_defs.moved(&def),
+            "the def the engine was told about is where it is held"
+        );
+        assert!(
+            engine
+                .source_defs
+                .moved(&at("s3", "lake_s3", "other-bucket")),
+            "a moved address is a move"
+        );
+        assert!(
+            engine.source_defs.moved(&at("gcs", "lake_s3", "acme-lake")),
+            "and so is a moved kind, which keeps the address and still changes the URL the \
+             object store registered under"
+        );
+        assert!(
+            !engine
+                .source_defs
+                .moved(&at("s3", "unheard_of", "acme-lake")),
+            "a name this engine holds nothing for has nothing to take back"
         );
     }
 

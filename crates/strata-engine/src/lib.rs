@@ -727,6 +727,17 @@ impl Dependencies {
 #[derive(Clone, Debug, Default)]
 pub struct SourceDefs(Arc<Mutex<BTreeMap<String, SourceDef>>>);
 
+/// What a data source is *registered* as, for the one question `sync` asks of it: has this def
+/// moved where it went on the session?
+///
+/// `{kind}:{address}` — both halves, because the registration URL is composed from both
+/// ([`SourceKind::SCHEME`](crate::SourceKind::SCHEME) plus the address). It is **not** an
+/// identity in any other sense: what a data source *is* is its name, which the user writes and
+/// nothing derives (`SourceDef::named`).
+fn source_identity(def: &SourceDef) -> String {
+    format!("{}:{}", def.kind.trim(), def.setting("address"))
+}
+
 impl SourceDefs {
     /// The data source `name` addresses, **in the data source's own spelling** — `None` when this
     /// project has none.
@@ -830,16 +841,38 @@ impl SourceDefs {
     /// Every data source this engine has been told about, as `(name, identity)` — what
     /// [`sync`](crate::register::sync) diffs a desired set against.
     ///
-    /// Both halves, because a def whose bucket or provider was edited keeps its name and changes
+    /// Both halves, because a def whose bucket or **kind** was edited keeps its name and changes
     /// the URL its object store went in under: a diff by name alone leaves that URL registered
     /// with nothing addressing it.
+    ///
+    /// The identity is [`source_identity`] — the pair, not the address alone, because the URL is
+    /// composed from both and an `s3` bucket re-pointed at `gcs` keeps its address while moving
+    /// where it registered.
     pub(crate) fn held(&self) -> Vec<(String, String)> {
         self.0
             .lock()
             .unwrap()
             .iter()
-            .map(|(name, def)| (name.clone(), def.setting("address").to_string()))
+            .map(|(name, def)| (name.clone(), source_identity(def)))
             .collect()
+    }
+
+    /// Whether `def` would register somewhere other than where this engine currently holds it —
+    /// the one question [`sync`](crate::register::sync)'s diff asks about a name it is keeping.
+    ///
+    /// **Both sides are computed here**, which is the point of the method existing. They were
+    /// once computed apart — [`held`](Self::held) answered an address while the caller compared a
+    /// *name* — so the answer was "moved" for every source not named after its own address, and
+    /// every sync tore down and reconnected every live one before the pass reconnected them
+    /// anyway.
+    ///
+    /// A name this engine holds nothing for has not moved: there is nothing to take back.
+    pub(crate) fn moved(&self, def: &SourceDef) -> bool {
+        self.0
+            .lock()
+            .unwrap()
+            .get(&def.named())
+            .is_some_and(|held| source_identity(held) != source_identity(def))
     }
 
     fn note(&self, def: &SourceDef) {
