@@ -49,8 +49,8 @@ use self::model::{inspect, inspect_remote, Inspected};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::use_remote_schemas;
 use crate::apps::project::state::{
-    use_catalog, use_catalog_selection, use_remote_scans, Chan, ProjChan, ProjectState,
-    SessionState,
+    use_catalog, use_catalog_selection, use_registrations, use_remote_scans, Chan, ProjChan,
+    ProjectState, SessionState,
 };
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
@@ -139,6 +139,7 @@ impl Component for Inspector {
             _ => ProjChan::Tables,
         };
         let project = use_radio::<ProjectState, ProjChan>(channel);
+        let registrations = use_registrations();
         let remote_scans = use_remote_scans();
 
         let engine = use_consume::<EngineCtx>();
@@ -152,7 +153,14 @@ impl Component for Inspector {
         let inspected = selected.as_ref().map(|col| match &col.owner {
             ColOwner::Entry { kind, name } => {
                 let scan = project.read().profile_scan(*kind, name);
-                inspect(&project.read(), col, *kind, name, scan)
+                inspect(
+                    &project.read(),
+                    &registrations.read(),
+                    col,
+                    *kind,
+                    name,
+                    scan,
+                )
             }
             ColOwner::Remote(relation) => {
                 let scan = remote_scans.read().get(relation).copied();

@@ -1,11 +1,19 @@
-//! **The data sources, joined once** — the project's data source rows and the engine's
+//! **The data sources, joined once** — the project's data source defs and the engine's
 //! [`SourcesSnapshot`] folded into the one list the catalog tree draws.
 //!
 //! [`assemble`] is that join, and it is made **once, against one snapshot**, above the tree's
-//! walk. Both halves of a data source's row — its badge and status from the project, its schemas
-//! from the engine — then describe the same instant, where a lookup per row would be a moment
-//! per row. What it produces is a plain value: the walk below it decides shape, and the rows
-//! below that draw. Nothing here renders and nothing here reaches the engine.
+//! walk. The def side is the project's (what the user wrote down, in the order they arranged it);
+//! everything the row *says* — its badge, its schemas, whether it registered and what refused it
+//! — is the engine's, taken under one read so each row describes the same instant where a lookup
+//! per row would be a moment per row. What it produces is a plain value: the walk below it
+//! decides shape, and the rows below that draw. Nothing here renders and nothing here reaches
+//! the engine.
+//!
+//! **The verdict comes from the ledger, not from the snapshot**, though the snapshot carries one
+//! too. Both are the same record read at different moments, and the window holds the ledger
+//! already — so taking it from there is what makes a tree row and a Problems row describe one
+//! instant rather than two. The snapshot's own copy is for a reader with no window to hold one:
+//! the engine's `catalog_names`, and the agent's `list_tables`.
 //!
 //! ## The two halves are the same difference the tree draws
 //!
@@ -18,9 +26,9 @@
 use std::collections::BTreeMap;
 
 use strata_engine::sources::{SchemaListingView, SourceDetail, SourcesSnapshot};
-use strata_engine::SourceMode;
+use strata_engine::{Registrations, SourceMode};
 
-use super::{ProjectState, Reg};
+use super::ProjectState;
 
 /// One data source as the tree draws it, resolved.
 ///
@@ -41,9 +49,14 @@ pub struct SourceNode {
     /// From the registrants rather than from the data source's own row, so a def no pass has
     /// reached yet still answers for the kind that serves it.
     pub mode: SourceMode,
-    /// The last pass has not answered for it yet.
+    /// The engine has not answered for it yet — every data source in a window's first frames,
+    /// and one added since the last pass.
+    ///
+    /// Not "a pass is running": a re-scan does not un-answer what it is about to answer again, so
+    /// a row keeps the verdict it has while the pass runs and the header's spinner is what says a
+    /// pass is out.
     pub waiting: bool,
-    /// What the last pass refused it with, if it did.
+    /// What the engine refused it with, if it did.
     pub problem: Option<String>,
     pub contents: SourceContents,
 }
@@ -74,16 +87,21 @@ impl SourceNode {
     }
 }
 
-/// Join the project's data source rows with what the engine holds for each.
+/// Join the project's data source defs with what the engine holds for each.
 ///
-/// Ordered by the project's own rows, which is the order the pane draws and the user rearranges.
-/// A data source the engine has not been told about still gets its node, carrying its row's
-/// `Loading` and nothing else — a window's first frames are exactly that, and the tree has to
-/// draw a project's data sources before anything has registered them.
+/// Ordered by the project's own defs, which is the order the pane draws and the user rearranges.
+/// A data source the engine has not been told about still gets its node, drawn as waiting and
+/// carrying nothing else — a window's first frames are exactly that, and the tree has to draw a
+/// project's data sources before anything has registered them.
 ///
 /// Bucket links are grouped in **one pass over the tables**: a scan per bucket would cost a
 /// project with many tables and many data sources their product.
-pub fn assemble(project: &ProjectState, snapshot: &SourcesSnapshot) -> Vec<SourceNode> {
+pub fn assemble(
+    project: &ProjectState,
+    registrations: &Registrations,
+    snapshot: &SourcesSnapshot,
+) -> Vec<SourceNode> {
+    let answers = &registrations.sources;
     let mut over: BTreeMap<&str, Vec<String>> = BTreeMap::new();
     for table in &project.tables {
         if let Some(source) = table.def.source.as_deref() {
@@ -93,10 +111,10 @@ pub fn assemble(project: &ProjectState, snapshot: &SourcesSnapshot) -> Vec<Sourc
     project
         .sources
         .iter()
-        .map(|row| {
-            let name = row.def.named();
+        .map(|def| {
+            let name = def.named();
             let listing = snapshot.source(&name);
-            let catalogued = snapshot.mode(&row.def.kind) == Some(SourceMode::Catalog);
+            let catalogued = snapshot.mode(&def.kind) == Some(SourceMode::Catalog);
             let contents = match (catalogued, listing.map(|l| &l.detail)) {
                 (true, Some(SourceDetail::Catalog { schemas, .. })) => SourceContents::Catalog {
                     catalog: name.clone(),
@@ -111,11 +129,11 @@ pub fn assemble(project: &ProjectState, snapshot: &SourcesSnapshot) -> Vec<Sourc
                 },
             };
             SourceNode {
-                badge: snapshot.badge(&row.def.kind),
-                mode: snapshot.mode(&row.def.kind).unwrap_or(SourceMode::Store),
-                address: row.def.setting("address").to_string(),
-                waiting: matches!(row.reg, Reg::Loading),
-                problem: row.reg.error().map(str::to_owned),
+                badge: snapshot.badge(&def.kind),
+                mode: snapshot.mode(&def.kind).unwrap_or(SourceMode::Store),
+                address: def.setting("address").to_string(),
+                waiting: answers.of(&name).is_none(),
+                problem: answers.problem(&name).map(str::to_owned),
                 contents,
                 name,
             }
@@ -145,7 +163,9 @@ mod tests {
     use strata_core::project::ProjectDefs;
     use strata_engine::sources::source::{SourceInfo, SourceMode};
     use strata_engine::sources::{SchemaVisibility, SourceListing};
-    use strata_engine::CatalogGen;
+    use strata_engine::{CatalogGen, RegStatus};
+
+    use crate::apps::project::state::Answered;
     use strata_model::{SourceDef, SourceFormat, TableDef, TableOrigin};
 
     use super::*;
@@ -233,15 +253,19 @@ mod tests {
     fn a_bucket_takes_its_links_from_the_store_and_a_database_its_schemas_from_the_engine() {
         let nodes = assemble(
             &project(),
+            &Answered::default()
+                .source_ready("lake")
+                .source_ready("analytics")
+                .read(),
             &snapshot(vec![
                 SourceListing {
                     name: "lake".into(),
-                    live: true,
+                    status: Some(RegStatus::Ready),
                     detail: SourceDetail::Store,
                 },
                 SourceListing {
                     name: "analytics".into(),
-                    live: true,
+                    status: Some(RegStatus::Ready),
                     detail: SourceDetail::Catalog {
                         catalog: "analytics".into(),
                         schemas: vec![
@@ -286,6 +310,12 @@ mod tests {
             "a schema the data source does not show is not a row"
         );
         assert_eq!(nodes[1].badge, "PG");
+        assert!(
+            nodes
+                .iter()
+                .all(|node| !node.waiting && node.problem.is_none()),
+            "and both wear the engine's verdict"
+        );
     }
 
     /// **A data source the engine has not been told about still draws.** That is every window's
@@ -293,7 +323,7 @@ mod tests {
     /// them waiting rather than show nothing.
     #[test]
     fn a_source_the_engine_has_not_answered_for_still_gets_its_node() {
-        let nodes = assemble(&project(), &snapshot(Vec::new()));
+        let nodes = assemble(&project(), &Registrations::default(), &snapshot(Vec::new()));
 
         assert_eq!(nodes.len(), 2, "both data sources");
         assert!(nodes.iter().all(|node| node.waiting), "and both waiting");

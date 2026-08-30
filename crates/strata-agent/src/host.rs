@@ -46,9 +46,10 @@ pub struct Project {
     pub root: PathBuf,
 }
 
-/// How far a def has got with the engine — the app's `Reg<T>` without the payload, because
-/// what a *list* row carries is the state and what registration *learned* is
-/// [`Host::describe`]'s answer.
+/// How far a def has got with the engine — the engine's own `RegStatus` on the wire's terms,
+/// because what a *list* row carries is the state and what registration *learned* is
+/// [`Host::describe`]'s answer. Its third arm is the ledger's **absence**: a def no pass has
+/// reached.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RegState {
     /// The engine has not answered for this def yet (a fresh open, or a re-scan in flight).

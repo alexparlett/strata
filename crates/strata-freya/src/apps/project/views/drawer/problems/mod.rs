@@ -19,7 +19,7 @@
 //! | | re-derivable? | who writes it | surface |
 //! |---|---|---|---|
 //! | A diagnostic | yes — buffer revision + catalog generation | one driver, `state::diagnostics` | Queries |
-//! | A registration failure | yes — `Reg::Failed` on the row | the scan pass | Project |
+//! | A registration failure | yes — the engine's ledger, joined onto the row | the scan pass | Project |
 //! | A write fault | **no** — it describes a write that already happened | its observer, `persisted` | Project |
 //! | An event | no, and it is already finished | its observer | *Events, not here* |
 //!
@@ -36,7 +36,9 @@ use freya::radio::use_radio;
 use strata_model::ProblemsTab;
 
 use super::DrawerTheme;
-use crate::apps::project::state::{Chan, FaultsCtx, ProjChan, ProjectState, SessionState};
+use crate::apps::project::state::{
+    use_registrations, Chan, FaultsCtx, ProjChan, ProjectState, SessionState,
+};
 use freya::components::{Activable, FloatingTab};
 
 use crate::components::badge::Badge;
@@ -115,13 +117,14 @@ impl Component for ScopeStrip {
         let tables = use_radio::<ProjectState, ProjChan>(ProjChan::Tables);
         let views = use_radio::<ProjectState, ProjChan>(ProjChan::Views);
         let faults = use_consume::<FaultsCtx>();
+        let registrations = use_registrations();
         let tones = tones();
 
         let scope = layout.read().layout.problems_tab;
         let queries = session.read().error_count();
         let _ = sources.read();
         let _ = views.read();
-        let project = project_error_count(&tables.read(), &faults.read());
+        let project = project_error_count(&tables.read(), &registrations.read(), &faults.read());
 
         rect()
             .horizontal()
@@ -224,6 +227,7 @@ mod tests {
     use std::path::PathBuf;
     use strata_core::project::ProjectDefs;
     use strata_core::theme::load;
+    use strata_engine::{Answers, CatalogGen, RegStatus, Registrations};
     use strata_model::{SourceFormat, TableDef, TableOrigin};
 
     fn table(name: &str) -> TableDef {
@@ -251,7 +255,7 @@ mod tests {
         faults: PersistFaults,
         failed: Option<&str>,
     ) -> (TestingRunner, RadioStation<SessionState, Chan>) {
-        let mut store = {
+        let store = {
             let defs = ProjectDefs {
                 name: "p".into(),
                 tables: vec![table("orders")],
@@ -261,9 +265,18 @@ mod tests {
             };
             ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-problems-render"))
         };
-        if let Some(why) = failed {
-            store.table_failed("orders", why.into());
-        }
+        let answers = Registrations {
+            workspace: Answers::recorded(
+                failed.map(|why| {
+                    (
+                        "orders".to_string(),
+                        RegStatus::Failed { reason: why.into() },
+                    )
+                }),
+                CatalogGen::default(),
+            ),
+            ..Default::default()
+        };
         TestingRunner::new(
             app,
             (600., 400.).into(),
@@ -274,6 +287,7 @@ mod tests {
                 r.provide_root_context(|| RadioStation::<ProjectState, ProjChan>::create(store));
                 r.provide_root_context(|| State::create(Log::default()));
                 r.provide_root_context(|| State::create(faults));
+                r.provide_root_context(|| State::create(answers.clone()));
                 session
             },
             1.,

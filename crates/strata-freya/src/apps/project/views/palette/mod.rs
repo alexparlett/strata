@@ -42,7 +42,7 @@ use strata_model::RightPane;
 use self::model::{Entry, Index};
 use self::row::{GroupHead, PaletteRow};
 use crate::apps::project::commands::{use_palette_ctx, PaletteCtx};
-use crate::apps::project::state::{Chan, ProjChan, ProjectState};
+use crate::apps::project::state::{use_registrations, Chan, ProjChan, ProjectState};
 use crate::apps::project::views::{open_saved_query, view_row};
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
@@ -169,7 +169,8 @@ impl Component for PaletteOverlay {
         let settings = use_config(ConfigChan::Settings);
 
         let project = use_radio_station::<ProjectState, ProjChan>();
-        let offer = use_hook(move || Rc::new(Index::new(&project.peek())));
+        let registrations = use_registrations();
+        let offer = use_hook(move || Rc::new(Index::new(&project.peek(), &registrations.peek())));
 
         let query = use_state(String::new);
         let active = use_state(|| 0usize);

@@ -12,7 +12,7 @@ use crate::sources::source::SourceInfo;
 use crate::sources::store::s3;
 use crate::sources::{self, RemoteRelation, SchemaVisibility, SourceDetail, SourcesSnapshot};
 use crate::sql::{DatabaseSym, RelationSym, SchemaSym};
-use crate::{fold_ident, Dependents, Engine, EngineError, CATALOG};
+use crate::{fold_ident, Dependents, Engine, EngineError, RegStatus, CATALOG};
 
 /// This engine's data sources, from [`Engine::sources`].
 ///
@@ -48,6 +48,14 @@ impl Sources<'_> {
     /// Moves the [`generation`](crate::Catalog::generation) on either arm: a refused connect
     /// takes back whatever this data source last registered, so a three-part name that resolved
     /// no longer does.
+    ///
+    /// **A data source forgotten while its connect was in flight records nothing**, which is the
+    /// one arm that leaves the ledger without an entry rather than with an answer. It cannot be
+    /// an answer: the def is gone from [`SourceDefs`](crate::SourceDefs), so a status noted under
+    /// its name would describe a data source this engine no longer holds, answerable by no
+    /// [`disconnect`](Self::disconnect) and retired only by the next [`sync`](crate::Catalog::sync)'s
+    /// prune. Taking it back is the whole of the arm, and `disconnect` forgets the entry with the
+    /// registration.
     pub async fn connect(self, conn: SourceDef) -> Result<(), EngineError> {
         let engine = self.engine;
         let ctx = engine.ctx.clone();
@@ -63,8 +71,12 @@ impl Sources<'_> {
             .map_err(|e| EngineError::task("connect", e))?;
         if engine.source_defs.resolve(&name).is_none() {
             self.disconnect(&name);
+        } else {
+            let generation = engine.generation.bump();
+            engine
+                .ledger
+                .note_source(&name, RegStatus::of(&settled), generation);
         }
-        engine.generation.bump();
         settled.map_err(EngineError::from)
     }
 
@@ -90,6 +102,7 @@ impl Sources<'_> {
             name,
         );
         engine.source_defs.forget(name);
+        engine.ledger.forget_source(name);
         engine.generation.bump();
     }
 
@@ -105,9 +118,9 @@ impl Sources<'_> {
     pub fn listing(self) -> SourcesSnapshot {
         let engine = self.engine;
         sources::snapshot(
-            &engine.ctx,
             &engine.registrants,
             &engine.live,
+            &engine.ledger,
             &engine.source_defs.all(),
             engine.generation.current(),
         )

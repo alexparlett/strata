@@ -91,14 +91,14 @@ impl Component for EditorTab {
                     p.tables.iter().map(|t| {
                         (
                             t.def.name.as_str(),
-                            t.reg.ready().map(|m| m.columns.as_slice()).unwrap_or(&[]),
+                            t.meta.as_ref().map(|m| m.columns.as_slice()).unwrap_or(&[]),
                             t.def.origin.is_internal(),
                         )
                     }),
                     p.views.iter().map(|v| {
                         (
                             v.def.name.as_str(),
-                            v.reg.ready().map(|i| i.columns.as_slice()).unwrap_or(&[]),
+                            v.info.as_ref().map(|i| i.columns.as_slice()).unwrap_or(&[]),
                         )
                     }),
                     engine.lang().functions(),

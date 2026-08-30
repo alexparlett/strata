@@ -55,7 +55,7 @@ pub enum StoreEffect {
     /// A table def is gone and its provider deregistered. `dependents` are the views
     /// left reading it — **named, never cascaded**: a `ViewTable`'s inlined plan goes on
     /// executing until reload, and the epoch bump makes diagnostics re-derive immediately,
-    /// which is the surface that matters. They go `Reg::Failed` honestly on the next pass.
+    /// which is the surface that matters. The next pass answers for them honestly.
     TableRemoved {
         name: String,
         dependents: Vec<String>,

@@ -57,7 +57,7 @@ use super::providers::{deregister_catalog, is_store_catalog, StoreCatalogProvide
 use super::secrets::{SecretProvider, SecretRequest};
 use crate::policy::{Locality, TargetFacts};
 use crate::statements::Remote;
-use crate::CatalogGen;
+use crate::{CatalogGen, Ledger, RegStatus};
 use strata_core::secret::{Keystore, Secret, SecretRef};
 
 /// The keystore slot one of `conn`'s secrets lives in — **the one place the derivation is
@@ -403,13 +403,29 @@ pub struct SourcesSnapshot {
 pub struct SourceListing {
     /// What the data source is called, which is how every call addresses it.
     pub name: String,
+    /// **What the last registration answered for it**, from the engine's own ledger — `None` for
+    /// a data source no pass has reached yet, which is every one of them in a window's first
+    /// frames.
+    ///
+    /// A data source this engine was told about but could not reach is listed carrying its
+    /// refusal rather than left out: the def is the project's, the fix (`aws sso login`, a region
+    /// typed into the editor, ↻) happens afterwards, and the sentence naming it is the whole
+    /// reason a host has something to show.
+    pub status: Option<RegStatus>,
+    pub detail: SourceDetail,
+}
+
+impl SourceListing {
     /// Whether the session holds its registration now: its store resolves paths, or its catalog
     /// resolves names.
-    ///
-    /// A data source this engine was told about but could not reach is listed with `false` rather
-    /// than left out.
-    pub live: bool,
-    pub detail: SourceDetail,
+    pub fn live(&self) -> bool {
+        self.status.as_ref().is_some_and(RegStatus::is_ready)
+    }
+
+    /// What the last registration refused it with, if it refused it.
+    pub fn problem(&self) -> Option<&str> {
+        self.status.as_ref().and_then(RegStatus::reason)
+    }
 }
 
 /// What connecting yielded, by mode.
@@ -440,7 +456,7 @@ impl SourcesSnapshot {
     pub fn catalog_names(&self) -> Vec<String> {
         self.sources
             .iter()
-            .filter(|source| source.live)
+            .filter(|source| source.live())
             .filter_map(|source| match &source.detail {
                 SourceDetail::Catalog { catalog, .. } => Some(catalog.clone()),
                 SourceDetail::Store => None,
@@ -486,9 +502,9 @@ impl SourcesSnapshot {
 /// Costs no I/O — every answer is already held — so re-reading it is how a caller refreshes a
 /// derived value. Asking a source anything is the registration pass's job.
 pub(crate) fn snapshot(
-    ctx: &SessionContext,
     registrants: &Registrants,
     live: &Live,
+    ledger: &Ledger,
     defs: &[SourceDef],
     generation: CatalogGen,
 ) -> SourcesSnapshot {
@@ -496,25 +512,21 @@ pub(crate) fn snapshot(
         .iter()
         .map(|def| {
             let name = def.named();
-            match registrants.mode(&def.kind) {
-                Some(SourceMode::Catalog) => {
-                    let enumerated = live.listing(&name);
-                    SourceListing {
-                        live: enumerated.is_some(),
-                        detail: SourceDetail::Catalog {
-                            catalog: name.clone(),
-                            schemas: enumerated
-                                .map(|listing| scoped(&listing, def))
-                                .unwrap_or_default(),
-                        },
-                        name,
-                    }
-                }
-                _ => SourceListing {
-                    live: store_registered(ctx, registrants, def),
-                    detail: SourceDetail::Store,
-                    name,
+            let status = ledger.source(&name).map(|entry| entry.status);
+            let detail = match registrants.mode(&def.kind) {
+                Some(SourceMode::Catalog) => SourceDetail::Catalog {
+                    catalog: name.clone(),
+                    schemas: live
+                        .listing(&name)
+                        .map(|listing| scoped(&listing, def))
+                        .unwrap_or_default(),
                 },
+                _ => SourceDetail::Store,
+            };
+            SourceListing {
+                name,
+                status,
+                detail,
             }
         })
         .collect();
@@ -698,20 +710,6 @@ pub(crate) fn registration_url(
     def: &SourceDef,
 ) -> Option<ObjectStoreUrl> {
     ObjectStoreUrl::parse(registrants.prefix(def)?).ok()
-}
-
-/// Whether an object store answers for `def` on this session right now.
-///
-/// Asked of the registry rather than remembered beside the def, because the registry is what a
-/// scan resolves through: a store data source is live exactly while a path under it can be read.
-/// `false` for a def whose kind registers a catalog, which puts no store on the session.
-pub(crate) fn store_registered(
-    ctx: &SessionContext,
-    registrants: &Registrants,
-    def: &SourceDef,
-) -> bool {
-    registration_url(registrants, def)
-        .is_some_and(|url| ctx.runtime_env().object_store(&url).is_ok())
 }
 
 /// One data source's namespaces, scoped and tagged against [`SourceDef::schemas`].
@@ -1003,10 +1001,11 @@ mod snapshot_tests {
     }
 
     /// The snapshot is **membership**: a data source the engine was told about is listed whether
-    /// or not it went in, in name order, each carrying what it registers and its kind's own
-    /// badge.
+    /// or not it went in, in name order, each carrying what it registers, its kind's own badge —
+    /// and, for one that was refused, **the refusal itself**, which is what lets a host say what
+    /// to fix without keeping a status of its own.
     #[tokio::test]
-    async fn every_source_told_about_is_listed_live_or_not() {
+    async fn every_source_told_about_is_listed_with_what_the_engine_answered() {
         let engine = Engine::builder()
             .with_source(TestDoc::holding("fixture", &["orders"]))
             .build();
@@ -1025,7 +1024,8 @@ mod snapshot_tests {
         assert_eq!(names, ["lake", "sales", "void"], "in name order");
 
         let sales = &snapshot.sources[1];
-        assert!(sales.live, "it connected");
+        assert!(sales.live(), "it connected");
+        assert_eq!(sales.problem(), None, "with nothing to fix");
         assert_eq!(
             snapshot.badge(TestDoc::NAME),
             TestDoc::BADGE,
@@ -1039,7 +1039,12 @@ mod snapshot_tests {
         assert_eq!(schemas[0].visibility, SchemaVisibility::Live);
 
         let void = &snapshot.sources[2];
-        assert!(!void.live, "it was refused");
+        assert!(!void.live(), "it was refused");
+        assert!(
+            void.problem().is_some_and(|why| why.contains("nowhere")),
+            "carrying the refusal, naming what it could not find: {:?}",
+            void.problem()
+        );
         let SourceDetail::Catalog { catalog, schemas } = &void.detail else {
             panic!("a refused source is still a source");
         };
@@ -1047,7 +1052,14 @@ mod snapshot_tests {
         assert!(schemas.is_empty(), "with nothing enumerated behind it");
 
         assert_eq!(snapshot.sources[0].detail, SourceDetail::Store);
-        assert!(!snapshot.sources[0].live, "no credentials, no store");
+        assert!(!snapshot.sources[0].live(), "no region, no store");
+        assert!(
+            snapshot.sources[0]
+                .problem()
+                .is_some_and(|why| why.contains("region")),
+            "and the bucket's refusal names the setting: {:?}",
+            snapshot.sources[0].problem()
+        );
     }
 
     /// **The two name reads are not the same question.** Completion offers the catalog of a

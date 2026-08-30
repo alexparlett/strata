@@ -8,6 +8,7 @@
 //! same rows, same `Reg` status slots, same menus, same columns expansion — one level further in.
 
 use freya::prelude::*;
+use strata_engine::Registrations;
 use strata_model::{CatalogKind, ColOwner, ColumnInfo, WORKSPACE_CATALOG};
 
 use super::columns::flatten_cols;
@@ -16,7 +17,7 @@ use super::node::{Column, Entry, Node, NodeKind, Open, Place};
 use super::row::Row;
 use super::view::{body, RowBody, RowCtx};
 use crate::apps::configure::ConfigureTarget;
-use crate::apps::project::state::{ProjectState, Reg};
+use crate::apps::project::state::ProjectState;
 use crate::components::icon::{Icon, IconName};
 use crate::components::metrics::ROW_ACTION;
 use crate::components::typography::{Body, Caption, Eyebrow, MonoValue};
@@ -90,7 +91,14 @@ pub fn entry_ancestors(kind: CatalogKind) -> Vec<String> {
 ///
 /// The workspace holds the rows a filter is mostly for, so it opens on a match like any other
 /// container; its groups then narrow themselves.
-pub fn walk_workspace(project: &ProjectState, needle: &str, open: &Open, out: &mut Vec<Node>) {
+pub fn walk_workspace(
+    project: &ProjectState,
+    registrations: &Registrations,
+    needle: &str,
+    open: &Open,
+    out: &mut Vec<Node>,
+) {
+    let answers = &registrations.workspace;
     let filtering = !needle.is_empty();
     let shown = open.shows(WORKSPACE, filtering);
     out.push(Node::branch(
@@ -118,11 +126,11 @@ pub fn walk_workspace(project: &ProjectState, needle: &str, open: &Open, out: &m
                     kind: CatalogKind::Table,
                     name: row.def.name.clone(),
                     internal: row.def.origin.is_internal(),
-                    waiting: matches!(row.reg, Reg::Loading),
-                    problem: ProjectState::table_problem(row),
+                    waiting: answers.of(&row.def.name).is_none(),
+                    problem: answers.problem(&row.def.name).map(str::to_owned),
                     scan: row.profile,
                 },
-                row.reg.ready().map(|meta| meta.columns.as_slice()),
+                row.meta.as_ref().map(|meta| meta.columns.as_slice()),
                 &row.def.partition_cols,
                 open,
                 out,
@@ -142,11 +150,11 @@ pub fn walk_workspace(project: &ProjectState, needle: &str, open: &Open, out: &m
                     kind: CatalogKind::View,
                     name: row.def.name.clone(),
                     internal: false,
-                    waiting: matches!(row.reg, Reg::Loading),
-                    problem: project.view_problem(row),
+                    waiting: answers.of(&row.def.name).is_none(),
+                    problem: project.view_problem(row, registrations),
                     scan: row.profile,
                 },
-                row.reg.ready().map(|info| info.columns.as_slice()),
+                row.info.as_ref().map(|info| info.columns.as_slice()),
                 &[],
                 open,
                 out,

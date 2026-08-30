@@ -243,6 +243,7 @@ impl Component for RefreshButton {
 mod tests {
     use crate::apps::project::state::{CatalogState, Chats, Log, PersistFaults, Pick};
     use std::path::PathBuf;
+    use strata_engine::Registrations;
 
     use freya::radio::RadioStation;
     use freya_testing::TestingRunner;
@@ -302,6 +303,7 @@ mod tests {
             move |r| {
                 r.provide_root_context(EngineCtx::default);
                 r.provide_root_context(|| State::create(CatalogState::Cold));
+                r.provide_root_context(|| State::create(Registrations::default()));
                 let rescan = r.provide_root_context(|| State::create(ScanRequest::default()));
                 r.provide_root_context(|| State::create(None::<ColRef>));
                 r.provide_root_context(|| ConfigStation::create(AppConfig::default()));
@@ -449,7 +451,7 @@ mod tests {
 
     /// Pressing ↻ raises a re-scan **request** — and that is all it does. The pass belongs to the
     /// window root's driver (`use_init_project`), because a task spawned from this handler would
-    /// be cancelled the moment the sidebar collapses, stranding every tree row in `Reg::Loading`.
+    /// be cancelled the moment the sidebar collapses, leaving every tree row unanswered.
     /// So the button's whole contract is this counter, and the test drives it the way the user
     /// does rather than calling `refresh_catalog` directly.
     #[test]

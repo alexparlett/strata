@@ -37,7 +37,7 @@ use strata_agent::{
     AgentError, AgentId, CatalogEntry, Described, QuerySessionId, QuerySessionInfo,
     QuerySessionState, RegState,
 };
-use strata_engine::Engine;
+use strata_engine::{Engine, RegStatus, Registrations};
 use tokio::sync::mpsc;
 
 use crate::agent::ask::{AgentAsk, AgentNotice};
@@ -45,7 +45,7 @@ use crate::agent::AgentCtx;
 use crate::apps::project::contexts::EngineCtx;
 
 use super::agents::{Agents, AgentsCtx, Closed};
-use super::{log_event, LogCtx, LogLevel, ProjChan, ProjectState, Reg};
+use super::{log_event, LogCtx, LogLevel, ProjChan, ProjectState};
 
 /// Join the service directory for this mount's lifetime and drive its asks. Call once in
 /// `ProjectLoaded`, after the engine, the log, the agents satellite and the project store are
@@ -102,10 +102,14 @@ fn answer(
 ) {
     match ask {
         AgentAsk::Catalog(reply) => {
-            let _ = reply.send(catalog(&project.read()));
+            let _ = reply.send(catalog(&project.read(), &engine.catalog().registrations()));
         }
         AgentAsk::Describe { name, reply } => {
-            let _ = reply.send(describe(&project.read(), &name));
+            let _ = reply.send(describe(
+                &project.read(),
+                &engine.catalog().registrations(),
+                &name,
+            ));
         }
         AgentAsk::QuerySessions { agent, reply } => {
             let _ = reply.send(sessions(&agents.read(), agent, engine));
@@ -199,18 +203,19 @@ fn apply(notice: AgentNotice, engine: &Engine, agents: &mut AgentsCtx, log: LogC
     }
 }
 
-/// The catalog as the sidebar shows it: tables, then views, then saved queries.
-fn catalog(project: &ProjectState) -> Vec<CatalogEntry> {
+/// The catalog as the sidebar shows it: tables, then views, then saved queries — the project's
+/// defs joined with what the engine answered for each, which is the same join the rows draw.
+fn catalog(project: &ProjectState, registrations: &Registrations) -> Vec<CatalogEntry> {
     let tables = project.tables.iter().map(|row| CatalogEntry::Table {
         name: row.def.name.clone(),
         format: row.def.format.name().to_string(),
         sources: row.def.paths.clone(),
-        reg: reg_state(&row.reg),
+        reg: reg_state(registrations.workspace.status(&row.def.name)),
     });
     let views = project.views.iter().map(|row| CatalogEntry::View {
         name: row.def.name.clone(),
         sql: row.def.sql.clone(),
-        reg: reg_state(&row.reg),
+        reg: reg_state(registrations.workspace.status(&row.def.name)),
     });
     let queries = project.saved_queries.iter().map(|q| CatalogEntry::Query {
         id: q.id,
@@ -230,28 +235,32 @@ fn catalog(project: &ProjectState) -> Vec<CatalogEntry> {
 /// `remote_deps` apart because the questions *it* asks differ — only one is checkable against
 /// the project's rows — but a cross-source view reads a remote relation as truly as a workspace
 /// table, and an agent asking what a view reads is owed the whole answer, qualified names and all.
-fn describe(project: &ProjectState, name: &str) -> Result<Described, AgentError> {
+fn describe(
+    project: &ProjectState,
+    registrations: &Registrations,
+    name: &str,
+) -> Result<Described, AgentError> {
+    let answers = &registrations.workspace;
     if let Some(row) = project
         .tables
         .iter()
         .find(|r| ProjectState::same_name(&r.def.name, name))
     {
-        return Ok(match &row.reg {
-            Reg::Ready(meta) => Described::Table {
-                name: row.def.name.clone(),
+        let named = row.def.name.clone();
+        return Ok(match (answers.status(&named), &row.meta) {
+            (Some(RegStatus::Ready), Some(meta)) => Described::Table {
                 format: row.def.format.name().to_string(),
                 sources: row.def.paths.clone(),
                 partitions: row.def.partition_cols.clone(),
                 rows: meta.rows,
                 columns: meta.columns.clone(),
+                name: named,
             },
-            Reg::Failed(error) => Described::Failed {
-                name: row.def.name.clone(),
-                error: error.clone(),
+            (Some(RegStatus::Failed { reason }), _) => Described::Failed {
+                name: named,
+                error: reason.clone(),
             },
-            Reg::Loading => Described::Pending {
-                name: row.def.name.clone(),
-            },
+            _ => Described::Pending { name: named },
         });
     }
     if let Some(row) = project
@@ -259,20 +268,19 @@ fn describe(project: &ProjectState, name: &str) -> Result<Described, AgentError>
         .iter()
         .find(|r| ProjectState::same_name(&r.def.name, name))
     {
-        return Ok(match &row.reg {
-            Reg::Ready(info) => Described::View {
-                name: row.def.name.clone(),
+        let named = row.def.name.clone();
+        return Ok(match (answers.status(&named), &row.info) {
+            (Some(RegStatus::Ready), Some(info)) => Described::View {
                 sql: row.def.sql.clone(),
                 columns: info.columns.clone(),
                 reads: info.deps.iter().chain(&info.remote_deps).cloned().collect(),
+                name: named,
             },
-            Reg::Failed(error) => Described::Failed {
-                name: row.def.name.clone(),
-                error: error.clone(),
+            (Some(RegStatus::Failed { reason }), _) => Described::Failed {
+                name: named,
+                error: reason.clone(),
             },
-            Reg::Loading => Described::Pending {
-                name: row.def.name.clone(),
-            },
+            _ => Described::Pending { name: named },
         });
     }
     Err(AgentError::NotFound(format!(
@@ -306,13 +314,14 @@ fn sessions(agents: &Agents, agent: AgentId, engine: &Engine) -> Vec<QuerySessio
         .collect()
 }
 
-/// [`Reg`] without its payload — what a *listing* row carries, as against what [`describe`]
-/// answers.
-fn reg_state<T>(reg: &Reg<T>) -> RegState {
-    match reg {
-        Reg::Loading => RegState::Pending,
-        Reg::Ready(_) => RegState::Ready,
-        Reg::Failed(error) => RegState::Failed(error.clone()),
+/// The engine's answer as a *listing* row carries it — what registration **learned** is
+/// [`describe`]'s. A def the engine has not answered for is [`Pending`](RegState::Pending),
+/// which is what the ledger's absence means.
+fn reg_state(status: Option<&RegStatus>) -> RegState {
+    match status {
+        None => RegState::Pending,
+        Some(RegStatus::Ready) => RegState::Ready,
+        Some(RegStatus::Failed { reason }) => RegState::Failed(reason.clone()),
     }
 }
 
@@ -325,7 +334,7 @@ mod tests {
     use strata_agent::{Agent, AgentIdentity};
     use strata_arrow::column_info;
     use strata_core::project::ProjectDefs;
-    use strata_engine::{TableMeta, ViewMeta};
+    use strata_engine::{Answers, CatalogGen, TableMeta, ViewMeta};
     use strata_model::{ColumnInfo, SavedQuery, SourceFormat, TableDef, TableOrigin, ViewDef};
     use uuid::Uuid;
 
@@ -381,7 +390,7 @@ mod tests {
                 rows: Some(42),
             },
         );
-        project.table_failed("gone", "No source paths".into());
+        project.table_failed("gone");
         project.view_registered(
             "daily",
             ViewMeta {
@@ -394,11 +403,32 @@ mod tests {
         project
     }
 
+    /// What the engine answered about [`store`]'s defs — the other half of every row, and the
+    /// only half that says whether a def registered.
+    fn answered() -> Registrations {
+        Registrations {
+            workspace: Answers::recorded(
+                [
+                    ("orders".to_string(), RegStatus::Ready),
+                    (
+                        "gone".to_string(),
+                        RegStatus::Failed {
+                            reason: "No source paths".into(),
+                        },
+                    ),
+                    ("daily".to_string(), RegStatus::Ready),
+                ],
+                CatalogGen::default(),
+            ),
+            ..Default::default()
+        }
+    }
+
     /// The whole catalog, failed rows included — the P3-02 correction, which is the reason
     /// this is a store projection rather than an engine question.
     #[test]
     fn the_catalog_lists_every_def_with_its_registration_state() {
-        let listed = catalog(&store());
+        let listed = catalog(&store(), &answered());
         match &listed[..] {
             [CatalogEntry::Table {
                 name: ready,
@@ -434,7 +464,7 @@ mod tests {
             rows,
             columns,
             ..
-        }) = describe(&project, "orders")
+        }) = describe(&project, &answered(), "orders")
         else {
             panic!("expected a table");
         };
@@ -443,7 +473,7 @@ mod tests {
         assert_eq!(columns.len(), 2);
 
         assert!(matches!(
-            describe(&project, "ORDERS"),
+            describe(&project, &answered(), "ORDERS"),
             Ok(Described::Table { .. })
         ));
     }
@@ -452,7 +482,7 @@ mod tests {
     /// is otherwise indistinguishable from a table nobody registered.
     #[test]
     fn describe_reports_a_refused_def_as_failed_rather_than_missing() {
-        let Ok(Described::Failed { error, .. }) = describe(&store(), "gone") else {
+        let Ok(Described::Failed { error, .. }) = describe(&store(), &answered(), "gone") else {
             panic!("expected a failed def");
         };
         assert_eq!(error, "No source paths");
@@ -460,7 +490,8 @@ mod tests {
 
     #[test]
     fn describe_of_a_view_names_what_it_reads() {
-        let Ok(Described::View { sql, reads, .. }) = describe(&store(), "daily") else {
+        let Ok(Described::View { sql, reads, .. }) = describe(&store(), &answered(), "daily")
+        else {
             panic!("expected a view");
         };
         assert_eq!(sql, "SELECT * FROM orders");
@@ -473,7 +504,10 @@ mod tests {
     fn a_saved_query_is_listed_but_not_describable() {
         for name in ["scratch", "nope"] {
             assert!(
-                matches!(describe(&store(), name), Err(AgentError::NotFound(_))),
+                matches!(
+                    describe(&store(), &answered(), name),
+                    Err(AgentError::NotFound(_))
+                ),
                 "{name}"
             );
         }

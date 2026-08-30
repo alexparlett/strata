@@ -123,6 +123,7 @@ mod tests {
             &[
                 "sync",
                 "generation",
+                "registrations",
                 "register",
                 "deregister",
                 "spec",

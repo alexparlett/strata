@@ -19,7 +19,7 @@ use futures::executor::block_on;
 use strata_arrow::column_info;
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
-use strata_engine::{CatalogGen, TableMeta, TableSpec, ViewMeta};
+use strata_engine::{CatalogGen, Registrations, TableMeta, TableSpec, ViewMeta};
 use strata_model::{
     ColRef, ColumnInfo, RemoteRef, SourceFormat, Stat, StatKey, TableDef, TableOrigin, ViewDef,
 };
@@ -203,6 +203,7 @@ fn runner_at(width: f32) -> (TestingRunner, Handles) {
             });
             let profile_target = r.provide_root_context(|| State::create(None::<ProfileTarget>));
             r.provide_root_context(|| State::create(CatalogState::Settled(CatalogGen::default())));
+            r.provide_root_context(|| State::create(Registrations::default()));
             r.provide_root_context(|| State::create(BTreeMap::<RemoteRef, ScanId>::new()));
             (selection, project, session, profile_target)
         },
@@ -442,7 +443,9 @@ fn a_selection_whose_row_is_dropped_says_so() {
 fn a_landing_registration_refreshes_the_open_panel() {
     let (mut runner, (mut sel, mut project, ..)) = runner();
     settle(&mut runner);
-    project.write_channel(ProjChan::Tables).reload_tables();
+    project
+        .write_channel(ProjChan::Tables)
+        .table_failed("events");
     select(
         &mut runner,
         &mut sel,

@@ -48,7 +48,9 @@ use strata_core::project::ProjectDefs;
 use strata_engine::profile::{aggregates, profile_sql};
 use strata_engine::register::RegOutcome;
 use strata_engine::sources::postgres::settings::PASSWORD as PASSWORD_KEY;
-use strata_engine::sources::{put_secret, SchemaListingView, SchemaVisibility, SourceDetail};
+use strata_engine::sources::{
+    put_secret, SchemaListingView, SchemaVisibility, SourceDetail, SourceListing,
+};
 use strata_engine::{
     sql, Engine, EngineError, RunOutcome, RunTag, SourceDefs, StopReason, StoreEffect, ViewMeta,
     WsId,
@@ -399,7 +401,7 @@ fn live(engine: &Engine, conn: &SourceDef) -> bool {
         .sources()
         .listing()
         .source(&conn.named())
-        .is_some_and(|source| source.live)
+        .is_some_and(SourceListing::live)
 }
 
 /// What the data source called `name` shows, scoped and tagged — the one read every surface makes.

@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use async_io::Timer;
 use freya::prelude::*;
-use freya::radio::use_radio;
+use strata_engine::RegStatus;
 
 pub use footer::Footer;
 pub use title_bar::TitleBar;
@@ -32,7 +32,7 @@ use crate::apps::configure::views::paths::SourcePaths;
 use crate::apps::configure::views::status::StatusBlock;
 use crate::apps::configure::{ConfigureCtx, Status};
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::{ProjChan, ProjectState, Reg};
+use crate::apps::project::use_registrations;
 use crate::components::form::Form;
 use crate::components::metrics::SP_5;
 
@@ -69,36 +69,35 @@ impl Component for ConfigureBody {
     }
 }
 
-/// Watch the catalog row this window is waiting on, and settle the save.
+/// Watch the engine's answer for the table this window is waiting on, and settle the save.
 ///
 /// The registration itself belongs to the project window's one scan driver — this is a
-/// **reconciliation over the shared store**, not an await on a second registration path. While
-/// the status is `Registering(name)`, the row's `Reg` is the answer: `Ready` means the table is
-/// registered and this window's work is done, `Failed` brings the engine's own message back to
-/// the footer. `Loading` is simply "not yet".
+/// **reconciliation over the window's view of the engine's ledger**, not an await on a second
+/// registration path. While the status is `Registering`, the answer stamped past the generation
+/// Save asked at is the verdict: `Ready` means the table is registered and this window's work is
+/// done, `Failed` brings the engine's own message back to the footer, and no answer yet is simply
+/// "not yet".
 ///
-/// The status gate is what makes this safe to mount unconditionally: an existing table's row is
-/// already `Ready` when the window opens, and without the gate that would close the window at
-/// mount.
+/// Two things make this safe to mount unconditionally. The status gate: a window sitting Idle
+/// watches nothing. And the generation: an edited table's row already carries the previous pass's
+/// `Ready`, so a status read alone would close the window on an answer given before Save was
+/// pressed.
 pub fn use_watch_registration(mut ctx: ConfigureCtx) {
-    let project = use_radio::<ProjectState, ProjChan>(ProjChan::Tables);
+    let registrations = use_registrations();
     let platform = use_hook(Platform::get);
 
     use_side_effect(move || {
-        let Status::Registering(name) = ctx.status.read().clone() else {
+        let Status::Registering { name, asked_at } = ctx.status.read().clone() else {
             return;
         };
-        let answer = project.read().tables.iter().find_map(|row| {
-            ProjectState::same_name(&row.def.name, &name).then(|| match &row.reg {
-                Reg::Loading => None,
-                Reg::Ready(_) => Some(Ok(())),
-                Reg::Failed(why) => Some(Err(why.clone())),
-            })
-        });
-        match answer.flatten() {
+        match registrations
+            .read()
+            .workspace
+            .answered_since(&name, asked_at)
+        {
             None => {}
-            Some(Ok(())) => platform.close_current_window(),
-            Some(Err(why)) => ctx.status.set(Status::Failed(why)),
+            Some(RegStatus::Ready) => platform.close_current_window(),
+            Some(RegStatus::Failed { reason }) => ctx.status.set(Status::Failed(reason.clone())),
         }
     });
 }

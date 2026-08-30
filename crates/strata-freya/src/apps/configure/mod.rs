@@ -46,6 +46,7 @@ use freya::radio::{use_share_radio, RadioStation};
 use freya::winit::platform::macos::WindowAttributesExtMacOS;
 use freya::winit::window::WindowId;
 use strata_core::config::Command;
+use strata_engine::CatalogGen;
 
 use crate::apps::configure::views::{use_watch_registration, ConfigureBody, Footer, TitleBar};
 use crate::apps::project::contexts::EngineCtx;
@@ -126,12 +127,16 @@ pub enum Status {
     /// Waiting for the user.
     Idle,
     /// The def is written and a registration pass is in flight for `name`. The window watches
-    /// that row: `Ready` closes it, `Failed` brings the reason back here.
+    /// the engine's answer for that name: `Ready` closes it, `Failed` brings the reason back here.
     ///
-    /// The work belongs to the **project** window's scan driver, which lands its answer on the
-    /// catalog row whether this window is here to watch or not — which is why this state does
-    /// not hold the window open.
-    Registering(String),
+    /// `asked_at` is the catalog generation when Save pressed, and the window waits for an answer
+    /// stamped **past** it. Without that this waits on nothing: an edited table's previous
+    /// registration is still in the engine's ledger, reading `Ready`, and the window would close
+    /// on the answer to the question before this one.
+    ///
+    /// The work belongs to the **project** window's scan driver, which answers whether this
+    /// window is here to watch or not — which is why this state does not hold the window open.
+    Registering { name: String, asked_at: CatalogGen },
     /// **This window is running the statement that creates `name`** (IT-01) — the one state in
     /// which the work is *this* window's own.
     ///
@@ -166,7 +171,7 @@ impl Status {
     /// Whether the window is busy at all — either kind of work, which is what disables Save and
     /// what [`ConfigureCtx::edit`] refuses against.
     pub fn busy(&self) -> bool {
-        matches!(self, Status::Registering(_) | Status::Creating(_))
+        matches!(self, Status::Registering { .. } | Status::Creating(_))
     }
 }
 
@@ -351,7 +356,7 @@ impl App for ConfigureApp {
                     None => ConfigureDraft::default(),
                     Some(name) => {
                         let store = project.peek();
-                        let sources: Vec<_> = store.sources.iter().map(|c| c.def.clone()).collect();
+                        let sources: Vec<_> = store.sources.clone();
                         store
                             .tables
                             .iter()

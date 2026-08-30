@@ -61,11 +61,11 @@ use crate::host::{
     self, Agent, AgentId, AgentIdentity, Described, Host, Project, QuerySessionId, RunMode, Settled,
 };
 use crate::wire::{
-    cells, columns, export_format, functions_result, plan_result, rows_result, tables_result,
-    Columns, DescribeResult, DescribeTableParams, DiagnosticWire, ExportResult, ExportResultParams,
-    FunctionsResult, ListFunctionsParams, ListTablesParams, PageResult, ProjectParams,
-    ProjectsResult, QuerySessionParams, QuerySessionResult, QuerySessionsResult, ReadPageParams,
-    RunParams, RunResult, TablesResult, ValidateParams, ValidateResult,
+    cells, columns, export_format, functions_result, plan_result, rows_result, source_wires,
+    tables_result, Columns, DescribeResult, DescribeTableParams, DiagnosticWire, ExportResult,
+    ExportResultParams, FunctionsResult, ListFunctionsParams, ListTablesParams, PageResult,
+    ProjectParams, ProjectsResult, QuerySessionParams, QuerySessionResult, QuerySessionsResult,
+    ReadPageParams, RunParams, RunResult, TablesResult, ValidateParams, ValidateResult,
 };
 
 /// The most rows one call will hand back, however large a `page_size` is asked for. A cap
@@ -774,21 +774,26 @@ impl<H: Host> StrataTools<H> {
         }
     }
 
-    /// The project's catalog, plus the database catalogs its connections registered.
+    /// The project's catalog, plus its data sources and what registering each one answered.
     ///
     /// **The entries are the store's defs and only those** (introspection
-    /// would hide exactly the failed rows an agent most needs to see). A connection has
-    /// no defs to show — the whole catalog comes through the connection — so listing its
+    /// would hide exactly the failed rows an agent most needs to see). A data source has
+    /// no defs to show — the whole catalog comes through it — so listing its
     /// relations here would mean an unbounded remote enumeration inside a paged listing of
     /// something else. Naming the catalogs is the honest middle: the answer says the databases
     /// exist and how to reach into them, and `describe_table` answers for one relation at a
     /// time.
+    ///
+    /// **Every data source is listed, with the engine's own verdict on it** — including the ones
+    /// that failed, which is the row an agent most needs: a bucket with no usable credentials
+    /// takes every table over it with it, and the tables' own errors say only that signing
+    /// failed.
     pub async fn list_tables(&self, params: ListTablesParams) -> Result<TablesResult, AgentError> {
         let (project, engine) = self.engine(params.project.as_deref()).await?;
         let entries = self.host.catalog(&project.root).await?;
         Ok(tables_result(
             entries,
-            engine.sources().listing().catalog_names(),
+            source_wires(&engine.sources().listing()),
             params.matching.as_deref(),
             params.page,
         ))
@@ -1591,16 +1596,16 @@ mod tests {
         assert!(message.contains("'pg.public.orders'"), "{message}");
     }
 
-    /// A project with no connection says so by omission, and the field is what a
-    /// later one will appear in — pinned so the listing cannot start inventing catalogs.
+    /// A project with no data source says so by omission, and the field is what a
+    /// later one will appear in — pinned so the listing cannot start inventing them.
     #[tokio::test]
-    async fn list_tables_names_no_databases_when_there_are_none() {
+    async fn list_tables_names_no_sources_when_there_are_none() {
         let (_root, tools) = one_project("list_databases").await;
         let listed = tools
             .list_tables(ListTablesParams::default())
             .await
             .unwrap();
-        assert!(listed.databases.is_empty());
+        assert!(listed.sources.is_empty());
         assert!(!listed.entries.is_empty(), "and the defs are still listed");
     }
 

@@ -136,9 +136,7 @@ fn use_sources() -> Vec<SourceDef> {
     use_radio::<ProjectState, ProjChan>(ProjChan::Sources)
         .read()
         .sources
-        .iter()
-        .map(|row| row.def.clone())
-        .collect()
+        .clone()
 }
 
 /// The same list, read **at the press** — for the two pills, which do not render a data source and
@@ -149,12 +147,7 @@ fn use_sources() -> Vec<SourceDef> {
 /// handler that runs on a click. It would also wake these two on a channel neither of them draws
 /// anything from.
 fn sources_at_press(station: RadioStation<ProjectState, ProjChan>) -> Vec<SourceDef> {
-    station
-        .peek()
-        .sources
-        .iter()
-        .map(|row| row.def.clone())
-        .collect()
+    station.peek().sources.clone()
 }
 
 /// **TYPE** — the provider whose data sources the picker offers. Its labels are

@@ -15,10 +15,10 @@
 //! is keyed on it. Without the bump the tree redraws while every open tab keeps the verdict it
 //! had, and the popup goes on offering names that have stopped resolving.
 //!
-//! Which is also why the write is **not** `upsert_source`: that replaces the row with a fresh
-//! `Reg::Loading`, and nothing would answer it short of a whole-catalog re-scan — a permanent
-//! spinner over a change that touched no engine state. The store's def-in-place write
-//! ([`ProjectState::update_data source_def`]) keeps the row's verdict, which is still true.
+//! Which is also why the write is **not** `upsert_source`: that replaces the def at its sorted
+//! slot, on a key this edit must not move, and asks for a registration nothing here needs. The
+//! store's def-in-place write ([`ProjectState::update_source_def`]) leaves the engine's verdict
+//! for this data source exactly where it was, which is still true.
 //!
 //! The offer is [`Sources::listing`](strata_engine::Sources::listing)'s **scoped and tagged**
 //! answer and nothing derived beside it, so this picker, the tree and completion cannot disagree
@@ -37,8 +37,8 @@ use strata_model::SourceDef;
 
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
-    catalog_settled, persisted_defs, use_catalog, use_report, Catalog, ProjChan, ProjectState,
-    ReportCtx,
+    catalog_settled, persisted_defs, use_catalog, use_registrations, use_report, Catalog, ProjChan,
+    ProjectState, RegistrationsCtx, ReportCtx,
 };
 use crate::components::dialog::{CheckboxRow, Dialog, DialogHeader};
 use crate::components::icon::{Icon, IconName};
@@ -72,7 +72,7 @@ struct Offer {
 /// data source that is refusing to connect *because* of it.
 fn offers(engine: &EngineCtx, name: &str, source: &SourceDef) -> (Vec<Offer>, bool) {
     let listing = engine.sources().listing();
-    let live = listing.source(name).filter(|source| source.live);
+    let live = listing.source(name).filter(|source| source.live());
     let Some(SourceDetail::Catalog { schemas, .. }) = live.map(|source| &source.detail) else {
         let offers = source
             .schemas
@@ -108,6 +108,7 @@ fn apply(
     project: RadioStation<ProjectState, ProjChan>,
     engine: &EngineCtx,
     catalog: Catalog,
+    registrations: RegistrationsCtx,
     report: ReportCtx,
     url: &str,
     schemas: Vec<String>,
@@ -119,7 +120,7 @@ fn apply(
         engine.sources().show_schemas(url, &schemas);
         persisted_defs(&p, report);
     }
-    catalog_settled(catalog, engine);
+    catalog_settled(catalog, registrations, engine);
 }
 
 /// Mounted at the window root beside the other dialogs, on the same terms: while open, its key
@@ -142,6 +143,7 @@ impl Component for SchemasPicker {
         let url = slot.read().clone();
         let engine = use_consume::<EngineCtx>();
         let catalog = use_catalog();
+        let registrations = use_registrations();
         let radio = use_radio::<ProjectState, ProjChan>(ProjChan::Sources);
         let project = use_radio_station::<ProjectState, ProjChan>();
         let report = use_report();
@@ -160,8 +162,8 @@ impl Component for SchemasPicker {
             .read()
             .sources
             .iter()
-            .find(|c| c.def.named() == url)
-            .map(|c| c.def.clone())
+            .find(|c| c.named() == url)
+            .cloned()
         else {
             slot.set(None);
             return rect().into_element();
@@ -228,6 +230,7 @@ impl Component for SchemasPicker {
                 project,
                 &engine,
                 catalog,
+                registrations,
                 report,
                 &url,
                 draft.peek().iter().cloned().collect(),
@@ -273,7 +276,7 @@ impl Component for SchemasPicker {
 mod tests {
     use std::path::PathBuf;
     use strata_engine::sources::postgres::Pg;
-    use strata_engine::{CatalogGen, SourceKind};
+    use strata_engine::{CatalogGen, Registrations, SourceKind};
 
     use freya::radio::RadioStation;
     use freya_testing::TestingRunner;
@@ -327,6 +330,7 @@ mod tests {
                 let catalog = r.provide_root_context(|| {
                     State::create(CatalogState::Settled(CatalogGen::default()))
                 });
+                r.provide_root_context(|| State::create(Registrations::default()));
                 let target = r.provide_root_context(|| State::create(None::<String>));
                 let project = r.provide_root_context(|| {
                     let defs = ProjectDefs {
@@ -385,7 +389,7 @@ mod tests {
         click_text(&mut runner, "Apply");
 
         assert_eq!(
-            project.peek().sources[0].def.clone(),
+            project.peek().sources[0].clone(),
             SourceDef {
                 schemas: vec!["public".into()],
                 ..source()

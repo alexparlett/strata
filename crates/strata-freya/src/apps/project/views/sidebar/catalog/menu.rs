@@ -30,8 +30,9 @@ use super::node::Remote;
 use crate::apps::configure::ConfigureTarget;
 use crate::apps::project::query::ProfileTarget;
 use crate::apps::project::state::{
-    persisted_defs, refresh_table, use_catalog, use_catalog_rescan, use_report, Anchor, Catalog,
-    CatalogRescan, Chan, ChatsCtx, ProjChan, ProjectState, Reg, ReportCtx, SessionState,
+    persisted_defs, refresh_table, use_catalog, use_catalog_rescan, use_registrations, use_report,
+    Anchor, Catalog, CatalogRescan, Chan, ChatsCtx, ProjChan, ProjectState, RegistrationsCtx,
+    ReportCtx, SessionState,
 };
 use crate::apps::project::views::{
     ask_about, profile_verb, use_profile_actions, ConfigureRequest, DropTarget, ProfileActions,
@@ -59,6 +60,9 @@ pub struct CatalogActions {
     /// Whether a catalog pass is in flight — Refresh is a no-op while one is, so it says so
     /// rather than offering a press that does nothing.
     pub catalog: Catalog,
+    /// What the engine last answered for each def — which of a row's items are offered depends
+    /// on whether it registered, and that is the engine's answer rather than the row's.
+    pub registrations: RegistrationsCtx,
     /// Where Refresh puts its request. The menu item deliberately cannot spawn the pass itself:
     /// its own scope is a `MenuButton` that the same press closes, and Freya drops a scope's
     /// tasks before polling them. The window root's driver owns the pass (`state/catalog.rs`).
@@ -95,6 +99,7 @@ pub fn use_catalog_actions() -> CatalogActions {
         session: use_radio_station::<SessionState, Chan>(),
         project: use_radio_station::<ProjectState, ProjChan>(),
         catalog: use_catalog(),
+        registrations: use_registrations(),
         rescan: use_catalog_rescan(),
         config: use_config_station(),
         drop_target: use_consume::<State<Option<DropTarget>>>(),
@@ -155,19 +160,11 @@ impl CatalogActions {
     /// any column a scan could report on. An unanswered row is not offered one either; the answer
     /// is moments away, and by then the offer means something.
     fn registered(&self, kind: CatalogKind, name: &str) -> bool {
-        let p = self.project.peek();
         match kind {
-            CatalogKind::View => p
-                .views
-                .iter()
-                .find(|v| v.def.name == name)
-                .is_some_and(|v| v.reg.ready().is_some()),
             CatalogKind::Query => false,
-            CatalogKind::Table => p
-                .tables
-                .iter()
-                .find(|t| t.def.name == name)
-                .is_some_and(|t| t.reg.ready().is_some()),
+            CatalogKind::Table | CatalogKind::View => {
+                self.registrations.peek().workspace.is_ready(name)
+            }
         }
     }
 
@@ -211,13 +208,14 @@ fn menu_row(icon: IconName, label: impl Into<String>) -> impl IntoElement {
 /// gone the window cannot receive an internal def at all.
 pub fn table_menu(actions: &CatalogActions, name: String) -> Menu {
     let scanning = actions.catalog.peek().is_scanning();
-    let (loading, origin) = {
+    let loading = actions.registrations.peek().workspace.of(&name).is_none();
+    let origin = {
         let p = actions.project.peek();
-        let row = p.tables.iter().find(|t| t.def.name == name);
-        (
-            matches!(row.map(|t| &t.reg), Some(Reg::Loading)),
-            row.map(|t| t.def.origin).unwrap_or_default(),
-        )
+        p.tables
+            .iter()
+            .find(|t| t.def.name == name)
+            .map(|t| t.def.origin)
+            .unwrap_or_default()
     };
     let internal = origin.is_internal();
     let registered = actions.registered(CatalogKind::Table, &name);

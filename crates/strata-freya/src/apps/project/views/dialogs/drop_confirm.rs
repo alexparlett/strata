@@ -56,8 +56,8 @@ use uuid::Uuid;
 
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
-    catalog_settled, log_event, persisted_defs, use_catalog, use_report, Catalog, Chan, LogLevel,
-    ProjChan, ProjectState, ReportCtx, SessionState,
+    catalog_settled, log_event, persisted_defs, use_catalog, use_registrations, use_report,
+    Catalog, Chan, LogLevel, ProjChan, ProjectState, RegistrationsCtx, ReportCtx, SessionState,
 };
 use crate::apps::project::views::{CancelButtonThemePartial, CancelButtonThemePreference};
 use crate::components::badge::Badge;
@@ -260,6 +260,7 @@ impl Component for DropConfirm {
         let project = use_radio_station::<ProjectState, ProjChan>();
         let session = use_radio_station::<SessionState, Chan>();
         let catalog = use_catalog();
+        let registrations = use_registrations();
         let report = use_report();
         let tones = tones();
         let roles = use_roles();
@@ -272,7 +273,15 @@ impl Component for DropConfirm {
         let confirm = move |engine: &EngineCtx| {
             let mut slot = slot;
             if let Some(target) = slot.peek().clone() {
-                drop_row(engine, project, session, catalog, report, &target);
+                drop_row(
+                    engine,
+                    project,
+                    session,
+                    catalog,
+                    registrations,
+                    report,
+                    &target,
+                );
             }
             slot.set(None);
         };
@@ -438,6 +447,7 @@ fn drop_row(
     mut project: RadioStation<ProjectState, ProjChan>,
     mut session: RadioStation<SessionState, Chan>,
     catalog: Catalog,
+    registrations: RegistrationsCtx,
     report: ReportCtx,
     target: &DropTarget,
 ) {
@@ -472,7 +482,7 @@ fn drop_row(
                         format!("The engine could not finish dropping table '{name}': {e}"),
                     );
                 }
-                catalog_settled(catalog, &engine);
+                catalog_settled(catalog, registrations, &engine);
             });
         }
         DropTarget::View(name) => {
@@ -508,7 +518,7 @@ fn drop_row(
                         format!("The engine kept view '{name}' until the next re-scan: {e}"),
                     );
                 }
-                catalog_settled(catalog, &engine);
+                catalog_settled(catalog, registrations, &engine);
             });
         }
         DropTarget::Source { name, .. } => {
@@ -525,7 +535,7 @@ fn drop_row(
                 return;
             }
             engine.sources().disconnect(name);
-            catalog_settled(catalog, engine);
+            catalog_settled(catalog, registrations, engine);
         }
         DropTarget::Query { id, .. } => {
             let landed = {
@@ -574,7 +584,7 @@ mod tests {
     use strata_core::project::{self as project_io, ProjectDefs};
     use strata_core::theme::load;
     use strata_engine::register::CatalogSpec;
-    use strata_engine::{RunTag, TableMeta, TableSpec, ViewMeta, WsId};
+    use strata_engine::{Registrations, RunTag, TableMeta, TableSpec, ViewMeta, WsId};
     use strata_model::{
         Origin, SavedQuery, SourceDef, SourceFormat, TableDef, TableOrigin, ViewDef,
     };
@@ -728,23 +738,17 @@ mod tests {
             source: source.map(str::to_string),
             internal: false,
         };
-        block_on(
-            engine.catalog().sync(
-                CatalogSpec {
-                    sources: project(root)
-                        .sources
-                        .iter()
-                        .map(|c| c.def.clone())
-                        .collect(),
-                    tables: vec![table("orders", Some("lake")), table("users", None)],
-                    views: vec![
-                        view("orders_daily", "SELECT * FROM orders"),
-                        view("orders_weekly", "SELECT * FROM orders_daily"),
-                    ],
-                },
-                |_| {},
-            ),
-        );
+        block_on(engine.catalog().sync(
+            CatalogSpec {
+                sources: project(root).sources.iter().map(SourceDef::clone).collect(),
+                tables: vec![table("orders", Some("lake")), table("users", None)],
+                views: vec![
+                    view("orders_daily", "SELECT * FROM orders"),
+                    view("orders_weekly", "SELECT * FROM orders_daily"),
+                ],
+            },
+            |_| {},
+        ));
         engine
     }
 
@@ -782,6 +786,7 @@ mod tests {
             move |r| {
                 r.provide_root_context(|| registered(&root));
                 r.provide_root_context(|| State::create(CatalogState::Cold));
+                r.provide_root_context(|| State::create(Registrations::default()));
                 let target = r.provide_root_context(|| State::create(None::<DropTarget>));
                 let session = r.provide_root_context(|| {
                     RadioStation::<SessionState, Chan>::create(SessionState::default())
@@ -980,7 +985,8 @@ mod tests {
         );
         assert_eq!(p.views.len(), 2, "its readers are flagged, not deleted");
         assert_eq!(
-            p.view_problem(&p.views[0]).as_deref(),
+            p.view_problem(&p.views[0], &Registrations::default())
+                .as_deref(),
             Some("Reads orders, which is no longer in the catalog."),
             "and the row now says what the dialog warned"
         );
@@ -1342,7 +1348,7 @@ mod tests {
 
         click_action(&mut runner, "Forget data source");
         assert!(
-            !project.peek().sources.iter().any(|c| c.def.named() == name),
+            !project.peek().sources.iter().any(|c| c.named() == name),
             "confirming forgot it"
         );
     }
@@ -1382,7 +1388,7 @@ mod tests {
                 .peek()
                 .sources
                 .iter()
-                .map(|c| c.def.named())
+                .map(SourceDef::named)
                 .collect::<Vec<_>>(),
             ["lake"],
             "the other data source over the same bucket stays"
@@ -1500,6 +1506,8 @@ mod tests {
                 move |r| {
                     r.provide_root_context(|| engine.clone());
                     r.provide_root_context(|| State::create(CatalogState::Cold));
+                    r.provide_root_context(|| State::create(Registrations::default()));
+                    r.provide_root_context(|| State::create(Registrations::default()));
                     let target = r.provide_root_context(|| State::create(None::<DropTarget>));
                     let session = r.provide_root_context(|| {
                         RadioStation::<SessionState, Chan>::create(SessionState::default())

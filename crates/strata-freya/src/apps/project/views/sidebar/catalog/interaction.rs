@@ -33,7 +33,9 @@ use super::row::{fold_plan, Folds, ICON_SLOT, INDENT};
 use super::*;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{ProfileTarget, ScanId};
-use crate::apps::project::state::{Chan, Reg, ScanRequest, ScanScope, SessionState};
+use crate::apps::project::state::{
+    Answered, Chan, RegistrationsCtx, ScanRequest, ScanScope, SessionState,
+};
 use crate::apps::project::views::{DropTarget, SchemasRequest};
 use crate::apps::source::SourceTarget;
 use crate::components::metrics::PROGRESS_HOLD;
@@ -133,13 +135,48 @@ fn defs() -> ProjectDefs {
     }
 }
 
+/// The engine's refusal of `events` — the fixture's one broken row, and the wording every test
+/// that asserts on a triangle reads back.
+const BROKEN: &str = "No such file or directory (os error 2)";
+
+/// What the engine answered about [`project`]'s defs: `events` refused, `orders` and the three
+/// views registered, and `users` deliberately left **unanswered**, which is the state a def no
+/// pass has reached yet is in.
+fn answered() -> Answered {
+    Answered::default()
+        .failed("events", BROKEN)
+        .ready("orders")
+        .ready("archive_totals")
+        .ready("orders_daily")
+        .ready("regions")
+}
+
+/// A fixture is **both halves of the join**: the defs the store holds and what the engine
+/// answered about them. They are handed in together because that is what a row is, and a runner
+/// given one without the other would draw a catalog no pass could have produced.
+type Fixture = fn() -> (ProjectState, Answered);
+
+/// What the engine answered about a fixture that says nothing else: every def registered.
+fn all_registered(project: &ProjectState) -> Answered {
+    let names = project
+        .tables
+        .iter()
+        .map(|t| t.def.name.as_str())
+        .chain(project.views.iter().map(|v| v.def.name.as_str()));
+    names.fold(Answered::default(), Answered::ready)
+}
+
 /// A store whose registrations have already landed — `orders` carries a nested `address` struct
-/// and the `year` partition column, so expansion and the PART chip are exercisable. `users` is
-/// deliberately left `Loading` to cover the unanswered state, `events` is **refused** by the
-/// engine, and `archive_totals` registered cleanly over a base table that isn't in the catalog.
-fn project() -> ProjectState {
+/// and the `year` partition column, so expansion and the PART chip are exercisable. `users` has
+/// learned nothing, `events` is **refused** by the engine (see [`answered`]), and
+/// `archive_totals` registered cleanly over a base table that isn't in the catalog.
+fn project() -> (ProjectState, Answered) {
+    (project_store(), answered())
+}
+
+fn project_store() -> ProjectState {
     let mut p = ProjectState::from_defs(defs(), PathBuf::from("/tmp/strata-catalog-test"));
-    p.table_failed("events", "No such file or directory (os error 2)".into());
+    p.table_failed("events");
     p.table_registered(
         "orders",
         TableMeta {
@@ -186,7 +223,13 @@ fn project() -> ProjectState {
 
 /// A project holding **one table of each origin**, both registered — the pair the row marker and
 /// the row menu have to tell apart.
-fn mixed_origins() -> ProjectState {
+fn mixed_origins() -> (ProjectState, Answered) {
+    let p = mixed_origins_store();
+    let answers = all_registered(&p);
+    (p, answers)
+}
+
+fn mixed_origins_store() -> ProjectState {
     let defs = ProjectDefs {
         name: "test".into(),
         tables: vec![table("orders", vec![]), internal("daily_totals")],
@@ -234,6 +277,8 @@ struct Handles {
     selection: State<Option<ColRef>>,
     session: RadioStation<SessionState, Chan>,
     store: RadioStation<ProjectState, ProjChan>,
+    /// The engine's half of every row — what a test writes to move a def between its states.
+    registrations: RegistrationsCtx,
     drop_target: State<Option<DropTarget>>,
     rescan: State<ScanRequest>,
     profile_target: State<Option<ProfileTarget>>,
@@ -250,22 +295,18 @@ fn runner() -> (TestingRunner, Handles) {
 
 /// [`runner`] over a project of the caller's choosing — a `fn` pointer rather than a value,
 /// because `TestingRunner`'s initializer is a plain closure and a `fn` is `Copy` in one.
-fn runner_over(project: fn() -> ProjectState) -> (TestingRunner, Handles) {
-    runner_sized(project, 300.)
+fn runner_over(fixture: Fixture) -> (TestingRunner, Handles) {
+    runner_sized(fixture, 300.)
 }
 
 /// [`runner_over`] at a chosen pane width — what the badge's fold is measured against.
-fn runner_sized(project: fn() -> ProjectState, width: f32) -> (TestingRunner, Handles) {
-    runner_shaped(project, width, 1400.)
+fn runner_sized(fixture: Fixture, width: f32) -> (TestingRunner, Handles) {
+    runner_shaped(fixture, width, 1400.)
 }
 
 /// [`runner_sized`] at a chosen pane **height** too — what the virtualization is measured against,
 /// since the whole claim is that a row off the bottom of the viewport is never built.
-fn runner_shaped(
-    project: fn() -> ProjectState,
-    width: f32,
-    height: f32,
-) -> (TestingRunner, Handles) {
+fn runner_shaped(fixture: Fixture, width: f32, height: f32) -> (TestingRunner, Handles) {
     TestingRunner::new(
         app,
         (width, height).into(),
@@ -279,10 +320,13 @@ fn runner_shaped(
                     s
                 })
             });
+            let (project, answers) = fixture();
             let store = r.provide_root_context(move || {
-                RadioStation::<ProjectState, ProjChan>::create(project())
+                RadioStation::<ProjectState, ProjChan>::create(project)
             });
             r.provide_root_context(EngineCtx::default);
+            let registrations =
+                r.provide_root_context(move || State::create(answers.read())) as RegistrationsCtx;
             r.provide_root_context(|| State::create(CatalogState::Cold));
             let rescan = r.provide_root_context(|| State::create(ScanRequest::default()));
             r.provide_root_context(|| ConfigStation::create(AppConfig::default()));
@@ -303,6 +347,7 @@ fn runner_shaped(
                 selection,
                 session,
                 store,
+                registrations,
                 drop_target,
                 rescan,
                 profile_target,
@@ -815,10 +860,8 @@ fn a_refusal_too_long_for_the_tooltip_is_clipped_here_not_in_the_store() {
     assert!(long.chars().count() > 240, "the case only bites when long");
 
     let (mut runner, h) = runner();
-    let mut store = h.store;
-    store
-        .write_channel(ProjChan::Tables)
-        .table_failed("users", long.clone());
+    let mut registrations = h.registrations;
+    registrations.set(answered().failed("users", &long).read());
     settle(&mut runner);
 
     let shown = status_labels(&runner)
@@ -834,15 +877,16 @@ fn a_refusal_too_long_for_the_tooltip_is_clipped_here_not_in_the_store() {
         shown.chars().count() < long.chars().count(),
         "and it is genuinely shorter than the message"
     );
-    let kept = store
+    let kept = h
+        .store
         .peek()
-        .registration_faults()
+        .registration_faults(&registrations.peek())
         .into_iter()
         .find(|f| f.name == "users")
         .expect("the fault is on the row");
     assert_eq!(
         kept.why, long,
-        "the store — and so Problems, and so its copy button — keeps the whole thing"
+        "the ledger — and so Problems, and so its copy button — keeps the whole thing"
     );
 }
 
@@ -852,12 +896,10 @@ fn a_refusal_too_long_for_the_tooltip_is_clipped_here_not_in_the_store() {
 #[test]
 fn a_triangle_clears_when_the_row_registers() {
     let (mut runner, h) = runner();
-    let mut store = h.store;
+    let (mut store, mut registrations) = (h.store, h.registrations);
     settle(&mut runner);
 
-    assert!(status_labels(&runner)
-        .iter()
-        .any(|w| w == "No such file or directory (os error 2)"));
+    assert!(status_labels(&runner).iter().any(|w| w == BROKEN));
 
     store.write_channel(ProjChan::Tables).table_registered(
         "events",
@@ -866,6 +908,7 @@ fn a_triangle_clears_when_the_row_registers() {
             rows: Some(4),
         },
     );
+    registrations.set(answered().ready("events").read());
     settle(&mut runner);
 
     assert_eq!(
@@ -881,7 +924,7 @@ fn a_triangle_clears_when_the_row_registers() {
 #[test]
 fn a_row_answered_inside_the_delay_never_spins() {
     let (mut runner, h) = runner();
-    let mut store = h.store;
+    let (mut store, mut registrations) = (h.store, h.registrations);
     settle(&mut runner);
 
     assert!(shows(&runner, "users"), "the def renders regardless");
@@ -893,6 +936,7 @@ fn a_row_answered_inside_the_delay_never_spins() {
             rows: Some(2),
         },
     );
+    registrations.set(answered().ready("users").read());
     settle(&mut runner);
 
     wait_out_the_spinner_delay(&mut runner);
@@ -911,47 +955,34 @@ fn spinners(runner: &TestingRunner) -> usize {
         .count()
 }
 
-/// The whole point of the hold, and the case that sent us looking: **↻ on a broken row must not
-/// blink its triangle**. A re-scan resets every table row to `Loading`, at which point the store
-/// honestly has no verdict — but the slot keeps showing the last one, so a row that was broken
-/// before and is broken after never visibly changes. Nor does the pane fill with spinners the
-/// instant ↻ is pressed.
+/// The case that sent us looking: **↻ on a broken row must not blink its triangle**. A re-scan
+/// re-answers each def as the pass reaches it — it does not un-answer them first — so a row that
+/// was broken before and is broken after never visibly changes, and the pane does not fill with
+/// spinners the instant ↻ is pressed.
 #[test]
 fn a_rescan_does_not_blink_the_triangle_of_a_row_that_stays_broken() {
     let (mut runner, h) = runner();
-    let mut store = h.store;
+    let mut registrations = h.registrations;
     settle(&mut runner);
-    let broken = "No such file or directory (os error 2)";
-    assert!(status_labels(&runner).iter().any(|l| l == broken));
+    assert!(status_labels(&runner).iter().any(|l| l == BROKEN));
 
-    store.write_channel(ProjChan::Tables).reload_tables();
+    registrations.set(answered().read());
     settle(&mut runner);
 
     assert!(
-        status_labels(&runner).iter().any(|l| l == broken),
-        "the verdict is held through the gap rather than un-said: {:?}",
+        status_labels(&runner).iter().any(|l| l == BROKEN),
+        "the same refusal, landed again, is not a change: {:?}",
         status_labels(&runner)
     );
     assert_eq!(spinners(&runner), 0, "and no row spins on the spot");
-
-    store
-        .write_channel(ProjChan::Tables)
-        .table_failed("events", broken.into());
-    settle(&mut runner);
-
-    assert!(status_labels(&runner).iter().any(|l| l == broken));
 }
 
-/// The exception that keeps the hold honest — a **settled** answer applies at once. A re-scan that
-/// fixes a row clears its triangle the moment the registration lands, with no wait to sit through:
-/// holding a verdict we now know to be wrong would be worse than the blink.
+/// The other half: a re-scan that **fixes** a row clears its triangle the moment the answer
+/// lands, with no wait to sit through.
 #[test]
 fn a_rescan_that_fixes_a_row_clears_its_triangle_at_once() {
     let (mut runner, h) = runner();
-    let mut store = h.store;
-    settle(&mut runner);
-
-    store.write_channel(ProjChan::Tables).reload_tables();
+    let (mut store, mut registrations) = (h.store, h.registrations);
     settle(&mut runner);
 
     store.write_channel(ProjChan::Tables).table_registered(
@@ -961,50 +992,41 @@ fn a_rescan_that_fixes_a_row_clears_its_triangle_at_once() {
             rows: Some(4),
         },
     );
+    registrations.set(answered().ready("events").read());
     settle(&mut runner);
 
     assert!(
-        !status_labels(&runner)
-            .iter()
-            .any(|l| l == "No such file or directory (os error 2)"),
-        "a good answer supersedes the held verdict immediately"
+        !status_labels(&runner).iter().any(|l| l == BROKEN),
+        "the new answer applies immediately"
     );
 }
 
-/// Past the hold, a wait is news in its own right: a row still unanswered after the delay gives its
-/// slot over to the spinner, held verdict or not. The row that was *already* waiting keeps spinning
-/// throughout — its wait never stopped, so re-arming it would blink the spinner instead.
+/// Past the hold, a wait is news in its own right: a def the engine has not answered for gives
+/// its slot over to the spinner once the delay is up, and one that *has* an answer never spins at
+/// all however long the pane is left alone.
 #[test]
-fn a_slow_rescan_gives_every_waiting_row_over_to_the_spinner() {
+fn a_def_the_engine_has_not_answered_for_gives_its_slot_over_to_the_spinner() {
     let (mut runner, h) = runner();
-    let mut store = h.store;
+    let mut registrations = h.registrations;
     runner.sync_and_update();
     wait_out_the_spinner_delay(&mut runner);
     assert_eq!(
         spinners(&runner),
         1,
-        "only `users` has been waiting long enough to spin"
+        "only `users` has no answer, so only `users` spins"
     );
 
-    store.write_channel(ProjChan::Tables).reload_tables();
+    registrations.set(Answered::default().read());
     settle(&mut runner);
-    assert_eq!(
-        spinners(&runner),
-        1,
-        "the rows the re-scan reset serve the hold; the one already waiting keeps its spinner"
-    );
-
     wait_out_the_spinner_delay(&mut runner);
 
     assert_eq!(
         spinners(&runner),
-        3,
-        "once every table row's wait is real, every one of them spins"
+        6,
+        "once no def has an answer, every table and view row spins"
     );
     assert!(
-        !status_labels(&runner)
-            .iter()
-            .any(|l| l == "No such file or directory (os error 2)"),
+        !status_labels(&runner).iter().any(|l| l == BROKEN),
         "and the spinner supersedes the held triangle rather than doubling up on it"
     );
 }
@@ -1017,10 +1039,11 @@ fn a_slow_rescan_gives_every_waiting_row_over_to_the_spinner() {
 #[test]
 fn the_trailing_marks_line_up_whatever_each_row_is_doing() {
     let (runner, ..) = settled_over(|| {
-        let mut p = mixed_origins();
-        p.table_failed("orders", "boom".into());
+        let mut p = mixed_origins_store();
+        p.table_failed("orders");
         p.request_profile(CatalogKind::Table, "daily_totals");
-        p
+        let answers = all_registered(&p).failed("orders", "boom");
+        (p, answers)
     });
 
     let right_of = |name: &str| {
@@ -1253,8 +1276,8 @@ fn settled() -> (TestingRunner, Handles) {
 }
 
 /// [`settled`] over a project of the caller's choosing.
-fn settled_over(project: fn() -> ProjectState) -> (TestingRunner, Handles) {
-    let (mut runner, handles) = runner_over(project);
+fn settled_over(fixture: Fixture) -> (TestingRunner, Handles) {
+    let (mut runner, handles) = runner_over(fixture);
     settle(&mut runner);
     (runner, handles)
 }
@@ -1723,7 +1746,7 @@ fn refresh_table_asks_for_a_pass_scoped_to_that_row() {
         "the row it was pressed on, not the whole catalog"
     );
     assert!(
-        matches!(store.peek().tables[1].reg, Reg::Ready(_)),
+        store.peek().tables[1].meta.is_some(),
         "`orders` still wears the answer it had"
     );
 }
@@ -1781,7 +1804,11 @@ mod data_sources {
 
     /// One data source of each kind, plus a table over the bucket so the object-store node has a
     /// child to link with. `lake` has answered; the database has not been asked yet.
-    fn project() -> ProjectState {
+    fn project() -> (ProjectState, Answered) {
+        (project_store(), answered())
+    }
+
+    fn project_store() -> ProjectState {
         let defs = ProjectDefs {
             name: "test".into(),
             tables: vec![over("events", "lake")],
@@ -1789,7 +1816,6 @@ mod data_sources {
             ..Default::default()
         };
         let mut p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-tree-sources"));
-        p.source_registered("lake");
         p.table_registered(
             "events",
             TableMeta {
@@ -1798,6 +1824,12 @@ mod data_sources {
             },
         );
         p
+    }
+
+    /// What the engine answered here: the bucket connected, its one table registered, and the
+    /// database has not been asked yet.
+    fn answered() -> Answered {
+        Answered::default().source_ready("lake").ready("events")
     }
 
     fn tree() -> (TestingRunner, Handles) {
@@ -1882,7 +1914,7 @@ mod data_sources {
     #[test]
     fn a_refused_source_carries_the_engines_reason() {
         let (mut runner, h) = tree();
-        let mut store = h.store;
+        let mut registrations = h.registrations;
 
         assert!(
             !status_labels(&runner)
@@ -1891,11 +1923,14 @@ mod data_sources {
             "a settled data source wears no glyph"
         );
 
-        store.write_channel(ProjChan::Sources).source_failed(
-            "lake",
-            "Received redirect without LOCATION, this normally indicates an incorrectly \
-             configured region"
-                .into(),
+        registrations.set(
+            answered()
+                .source_failed(
+                    "lake",
+                    "Received redirect without LOCATION, this normally indicates an incorrectly \
+                     configured region",
+                )
+                .read(),
         );
         settle(&mut runner);
 
@@ -2205,14 +2240,16 @@ mod data_sources {
     /// the header control fold under pressure.
     #[test]
     fn an_empty_project_offers_to_add_a_source() {
-        fn no_sources() -> ProjectState {
-            ProjectState::from_defs(
+        fn no_sources() -> (ProjectState, Answered) {
+            let p = ProjectState::from_defs(
                 ProjectDefs {
                     name: "test".into(),
                     ..Default::default()
                 },
                 PathBuf::from("/tmp/strata-tree-no-sources"),
-            )
+            );
+            let answers = all_registered(&p);
+            (p, answers)
         }
 
         let (mut runner, h) = runner_over(no_sources);
@@ -2243,7 +2280,7 @@ mod virtualization {
     /// confused for one another at any plausible row height.
     const MANY: usize = 600;
 
-    fn wide_project() -> ProjectState {
+    fn wide_project() -> (ProjectState, Answered) {
         let defs = ProjectDefs {
             name: "test".into(),
             tables: (0..MANY)
@@ -2251,7 +2288,9 @@ mod virtualization {
                 .collect(),
             ..Default::default()
         };
-        ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-tree-virtualized"))
+        let p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-tree-virtualized"));
+        let answers = all_registered(&p);
+        (p, answers)
     }
 
     /// How many table rows the tree actually built.
@@ -2291,7 +2330,7 @@ mod virtualization {
     /// link is the gesture under test, and the row that link names is nowhere near the viewport.
     #[test]
     fn a_jump_scrolls_to_a_row_that_was_never_built() {
-        fn linked() -> ProjectState {
+        fn linked() -> (ProjectState, Answered) {
             let mut tables: Vec<TableDef> = (0..MANY)
                 .map(|i| table(&format!("t{i:04}"), vec![]))
                 .collect();
@@ -2304,9 +2343,9 @@ mod virtualization {
                 sources: vec![data_sources::s3("lake")],
                 ..Default::default()
             };
-            let mut p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-tree-jump"));
-            p.source_registered("lake");
-            p
+            let p = ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-tree-jump"));
+            let answers = all_registered(&p).source_ready("lake");
+            (p, answers)
         }
 
         let (mut runner, _) = runner_shaped(linked, 300., 400.);

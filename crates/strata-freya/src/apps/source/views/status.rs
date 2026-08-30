@@ -42,7 +42,7 @@ impl Component for StatusBlock {
         match status {
             Status::Idle => rect(),
             Status::Storing => rect(),
-            Status::Connecting(url) => rect()
+            Status::Connecting { name, .. } => rect()
                 .width(Size::fill())
                 .horizontal()
                 .cross_align(Alignment::Center)
@@ -52,7 +52,7 @@ impl Component for StatusBlock {
                 .background(win.panel_background)
                 .border(Border::new().width(1.).fill(win.border_fill))
                 .child(CircularLoader::new().size(STATUS_GLYPH))
-                .child(Path::new(format!("Connecting to '{url}'…")).color(text)),
+                .child(Path::new(format!("Connecting to '{name}'…")).color(text)),
             Status::Failed(why) => rect()
                 .width(Size::fill())
                 .horizontal()

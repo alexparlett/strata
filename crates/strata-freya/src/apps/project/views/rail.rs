@@ -16,7 +16,9 @@ use freya::prelude::*;
 use freya::radio::use_radio;
 use strata_model::{DrawerTab, SidebarPane};
 
-use crate::apps::project::state::{Chan, FaultsCtx, ProjChan, ProjectState, SessionState};
+use crate::apps::project::state::{
+    use_registrations, Chan, FaultsCtx, ProjChan, ProjectState, SessionState,
+};
 use crate::apps::project::views::drawer::project_error_count;
 use crate::components::icon::{Icon, IconName};
 use crate::components::metrics::{pill, SP_1, SP_2, SP_3};
@@ -124,10 +126,11 @@ impl Component for ProblemsBadge {
         let tables = use_radio::<ProjectState, ProjChan>(ProjChan::Tables);
         let views = use_radio::<ProjectState, ProjChan>(ProjChan::Views);
         let faults = use_consume::<FaultsCtx>();
+        let registrations = use_registrations();
         let _ = sources.read();
         let _ = views.read();
-        let errors =
-            session.read().error_count() + project_error_count(&tables.read(), &faults.read());
+        let errors = session.read().error_count()
+            + project_error_count(&tables.read(), &registrations.read(), &faults.read());
         let roles = use_roles();
         let (background, color, ring) = (
             tones().error,

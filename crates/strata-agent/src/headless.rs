@@ -36,7 +36,9 @@ use strata_arrow::plan::as_explain;
 use strata_core::config::Settings;
 use strata_core::project::{exists_at, load_defs, ProjectDefs};
 use strata_engine::register::RegOutcome;
-use strata_engine::{Capability, CapabilityPolicyProvider, Engine, RunRows, RunTag, WsId};
+use strata_engine::{
+    Capability, CapabilityPolicyProvider, Engine, RegStatus, RunRows, RunTag, WsId,
+};
 use tokio::runtime::Builder as RuntimeBuilder;
 
 use crate::error::AgentError;
@@ -95,10 +97,10 @@ impl HeadlessHost {
     /// `Err` only for a project that cannot be read. A *def* the engine refused is not an error: it
     /// is a `failed` catalog row, exactly as in the app.
     ///
-    /// The pass connects the project's object stores first, so a table over a bucket registers here
-    /// exactly as it does in a window. A connection is not itself a catalog entry, so
-    /// [`settled`](Self::settled) does not list one — a refused connection surfaces as the `failed`
-    /// rows of the tables that needed it.
+    /// The pass connects the project's data sources first, so a table over a bucket registers here
+    /// exactly as it does in a window. A data source is not itself a catalog entry, so
+    /// [`settled`](Self::settled) does not list one — what it answered is on the engine's ledger,
+    /// which `list_tables` reads for its own rows.
     ///
     /// The engine is built with a read-only policy ceiling, which is what
     /// [`StrataTools::run`]'s gate is narrowed against: this process has no editor and no user to
@@ -125,19 +127,27 @@ impl HeadlessHost {
         Ok(HeadlessHost::settled(root, defs, engine, outcomes))
     }
 
-    /// Fold the defs and what the pass answered for each into the two listings a host serves.
+    /// Fold the defs, what the engine answered for each, and what each registration *learned*
+    /// into the two listings a host serves.
     ///
     /// Driven by the **defs**, not by the outcomes: the catalog is the set of things the user
-    /// wrote down, in the order `load_defs` sorted them, and an outcome is the state one of
-    /// them reached. A saved query has no outcome at all — it is text the user parked, not an
-    /// object the engine holds — so it is a `list_tables` row and never a `describe_table`
-    /// answer.
+    /// wrote down, in the order `load_defs` sorted them. A saved query has no outcome at all — it
+    /// is text the user parked, not an object the engine holds — so it is a `list_tables` row and
+    /// never a `describe_table` answer.
+    ///
+    /// **Whether a def registered comes from the engine's ledger**, not from the outcomes this
+    /// pass happened to see: it is the engine's own record, and reading it here is the same join
+    /// a window's rows make. The outcomes are still what carry the payloads — a table's columns
+    /// and free row count, a view's schema and what it reads — which are facts about the answer
+    /// rather than the answer itself.
     fn settled(
         root: PathBuf,
         defs: ProjectDefs,
         engine: Arc<Engine>,
         outcomes: Vec<RegOutcome>,
     ) -> HeadlessHost {
+        let registrations = engine.catalog().registrations();
+        let answers = registrations.workspace;
         let mut catalog = Vec::new();
         let mut described = Vec::new();
         for def in &defs.tables {
@@ -149,10 +159,10 @@ impl HeadlessHost {
                 name: def.name.clone(),
                 format: def.format.name().to_string(),
                 sources: def.paths.clone(),
-                reg: reg_state(result),
+                reg: reg_state(answers.status(&def.name)),
             });
-            described.push(match result {
-                Some(Ok(meta)) => Described::Table {
+            described.push(match (answers.problem(&def.name), result) {
+                (None, Some(Ok(meta))) => Described::Table {
                     name: def.name.clone(),
                     format: def.format.name().to_string(),
                     sources: def.paths.clone(),
@@ -160,11 +170,11 @@ impl HeadlessHost {
                     rows: meta.rows,
                     columns: meta.columns.clone(),
                 },
-                Some(Err(error)) => Described::Failed {
+                (Some(error), _) => Described::Failed {
                     name: def.name.clone(),
-                    error: error.clone(),
+                    error: error.to_string(),
                 },
-                None => Described::Pending {
+                _ => Described::Pending {
                     name: def.name.clone(),
                 },
             });
@@ -177,20 +187,20 @@ impl HeadlessHost {
             catalog.push(CatalogEntry::View {
                 name: def.name.clone(),
                 sql: def.sql.clone(),
-                reg: reg_state(result),
+                reg: reg_state(answers.status(&def.name)),
             });
-            described.push(match result {
-                Some(Ok(meta)) => Described::View {
+            described.push(match (answers.problem(&def.name), result) {
+                (None, Some(Ok(meta))) => Described::View {
                     name: def.name.clone(),
                     sql: def.sql.clone(),
                     columns: meta.columns.clone(),
                     reads: meta.tables.clone(),
                 },
-                Some(Err(error)) => Described::Failed {
+                (Some(error), _) => Described::Failed {
                     name: def.name.clone(),
-                    error: error.clone(),
+                    error: error.to_string(),
                 },
-                None => Described::Pending {
+                _ => Described::Pending {
                     name: def.name.clone(),
                 },
             });
@@ -238,15 +248,15 @@ impl HeadlessHost {
     }
 }
 
-/// [`RegState`] from what the pass answered for a def — `Reg<T>` without the payload, which is
-/// what a *listing* row carries and what registration **learned** is [`Host::describe`]'s.
-/// `None` is a def the pass never reached, which cannot happen here (see
+/// [`RegState`] from what the engine last answered for a def — the ledger's answer without its
+/// stamp, which is what a *listing* row carries; what registration **learned** is
+/// [`Host::describe`]'s. `None` is a def no pass reached, which cannot happen here (see
 /// [`HeadlessHost::settled`]) and is exactly what `Pending` means.
-fn reg_state<T>(result: Option<&Result<T, String>>) -> RegState {
-    match result {
+fn reg_state(status: Option<&RegStatus>) -> RegState {
+    match status {
         None => RegState::Pending,
-        Some(Ok(_)) => RegState::Ready,
-        Some(Err(error)) => RegState::Failed(error.clone()),
+        Some(RegStatus::Ready) => RegState::Ready,
+        Some(RegStatus::Failed { reason }) => RegState::Failed(reason.clone()),
     }
 }
 
@@ -451,11 +461,13 @@ mod tests {
     use std::{env, process};
 
     use strata_core::project::save_defs;
-    use strata_model::{SourceFormat, TableDef, TableOrigin, ViewDef};
+    use strata_model::{SourceDef, SourceFormat, TableDef, TableOrigin, ViewDef};
 
     use strata_engine::register::{CatalogSpec, RegKind};
 
     use crate::host::AgentIdentity;
+    use crate::wire::{ListTablesParams, StateWire};
+    use crate::StrataTools;
 
     use super::*;
     use strata_engine::SourceDefs;
@@ -546,6 +558,64 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// **The headless payoff.** A data source the engine refused answers with its refusal, read
+    /// with no app store anywhere: the sentence is the engine's own ledger's, `list_tables` is
+    /// where an agent reads it, and nothing in this process could have kept a status of its own.
+    ///
+    /// It is the row that matters. A bucket with no usable credentials takes every table over it
+    /// down with it, and the tables say only that their files could not be found — so without
+    /// this an agent is handed a project full of symptoms and nothing naming the cause.
+    #[tokio::test]
+    async fn a_refused_data_source_answers_with_its_refusal() {
+        let root = scratch("refused-source");
+        save_defs(
+            &root,
+            &ProjectDefs {
+                name: "sales".into(),
+                sources: vec![SourceDef {
+                    kind: "s3".into(),
+                    name: "lake".into(),
+                    config: [("address".to_string(), "acme-lake".to_string())]
+                        .into_iter()
+                        .collect(),
+                    ..Default::default()
+                }],
+                tables: vec![TableDef {
+                    source: Some("lake".into()),
+                    ..table("events", "events/")
+                }],
+                views: Vec::new(),
+                saved_queries: Vec::new(),
+            },
+        )
+        .unwrap();
+        let host = HeadlessHost::open(root.clone()).await.unwrap();
+
+        let tools = StrataTools::new(Arc::new(host));
+        let listed = tools
+            .list_tables(ListTablesParams::default())
+            .await
+            .expect("the catalog lists");
+
+        match &listed.sources[..] {
+            [source] => {
+                assert_eq!(source.name, "lake");
+                assert!(matches!(source.state, StateWire::Failed));
+                assert!(
+                    source
+                        .error
+                        .as_deref()
+                        .is_some_and(|why| why.contains("region")),
+                    "the refusal names what to fix: {:?}",
+                    source.error
+                );
+            }
+            other => panic!("one data source, refused: {other:?}"),
+        }
+        assert_eq!(listed.total, 1, "and its table is still a row of its own");
         let _ = fs::remove_dir_all(&root);
     }
 

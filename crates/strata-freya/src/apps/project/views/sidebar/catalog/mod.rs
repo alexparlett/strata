@@ -111,7 +111,9 @@ use self::view::TreeRow;
 use self::workspace::seeded_paths;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::use_remote_schemas;
-use crate::apps::project::state::{assemble, use_catalog, ProjChan, ProjectState};
+use crate::apps::project::state::{
+    assemble, use_catalog, use_registrations, ProjChan, ProjectState,
+};
 use crate::components::metrics::{SP_3, SP_4};
 use crate::keymap::on_command;
 use crate::state::use_config_station;
@@ -310,10 +312,15 @@ impl Component for Catalog {
         let generation = catalog.read().generation();
         let described = use_remote_schemas(&engine, wanted.read().clone(), generation);
 
-        let sources = use_side_effect_value(move || {
-            drop(catalog.read());
+        let registrations = use_registrations();
+        let source_nodes = use_side_effect_value(move || {
+            drop(registrations.read());
             drop(sources.read());
-            assemble(&tables.read(), &engine.sources().listing())
+            assemble(
+                &tables.read(),
+                &registrations.read(),
+                &engine.sources().listing(),
+            )
         });
 
         let Walked {
@@ -322,7 +329,14 @@ impl Component for Catalog {
         } = {
             let project = tables.read();
             let expanded = open.read();
-            walk(&project, &sources.read(), &needle, &expanded, &described)
+            walk(
+                &project,
+                &registrations.read(),
+                &source_nodes.read(),
+                &needle,
+                &expanded,
+                &described,
+            )
         };
         use_side_effect_with_deps(&open_relations, move |relations| {
             let mut wanted = wanted;
