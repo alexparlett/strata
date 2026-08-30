@@ -234,7 +234,6 @@
         "user": "strata",
         "sslmode": "disable"
       },
-      "secrets": [],
       "schemas": [
         "public",
         "analytics"
