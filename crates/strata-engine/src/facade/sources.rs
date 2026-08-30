@@ -48,6 +48,14 @@ impl Sources<'_> {
     /// Moves the [`generation`](crate::Catalog::generation) on either arm: a refused connect
     /// takes back whatever this data source last registered, so a three-part name that resolved
     /// no longer does.
+    ///
+    /// **A data source forgotten while its connect was in flight records nothing**, which is the
+    /// one arm that leaves the ledger without an entry rather than with an answer. It cannot be
+    /// an answer: the def is gone from [`SourceDefs`](crate::SourceDefs), so a status noted under
+    /// its name would describe a data source this engine no longer holds, answerable by no
+    /// [`disconnect`](Self::disconnect) and retired only by the next [`sync`](crate::Catalog::sync)'s
+    /// prune. Taking it back is the whole of the arm, and `disconnect` forgets the entry with the
+    /// registration.
     pub async fn connect(self, conn: SourceDef) -> Result<(), EngineError> {
         let engine = self.engine;
         let ctx = engine.ctx.clone();
