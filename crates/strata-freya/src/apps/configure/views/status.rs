@@ -37,13 +37,13 @@ impl Component for StatusBlock {
 
         let busy = match &status {
             Status::Creating(name) => Some(format!("Creating '{name}'…")),
-            Status::Registering(name) => Some(format!("Registering '{name}'…")),
+            Status::Registering { name, .. } => Some(format!("Registering '{name}'…")),
             _ => None,
         };
 
         match status {
             Status::Idle => rect(),
-            Status::Creating(_) | Status::Registering(_) => rect()
+            Status::Creating(_) | Status::Registering { .. } => rect()
                 .width(Size::fill())
                 .horizontal()
                 .cross_align(Alignment::Center)

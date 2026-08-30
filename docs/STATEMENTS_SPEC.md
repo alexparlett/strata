@@ -125,7 +125,9 @@ pub struct StatementReport {
 `StoreEffect` (`engine/statements/arms/mod.rs`) is the catalog mutation the statement leaves behind:
 `TableUpserted { def, meta }`, `TableRemoved { name, dependents }`, `ViewUpserted`, `ViewRemoved`,
 `RescanTable`, `FunctionsChanged`, `PreparedChanged`, `RemoteRelationsChanged`. An effect carries
-the def *and* what registration learned, so the sidebar row lands `Reg::Ready` directly. The last
+the def *and* what registration learned, so the sidebar row lands its shape directly — and the
+engine records the outcome itself as it applies the effect, so the row's *status* is the ledger's
+next read rather than anything the effect carries. The last
 three persist nothing — functions and prepared statements are session-scoped (§8), and a remote
 relation has no store row at all — and are still effects for the reason an effect exists: a name
 that did not resolve a moment ago now does, so the catalog generation has to move with it.
@@ -571,7 +573,7 @@ rootless engine replay pre-resolved paths and what turns an ephemeral store's va
 the honest failed row. The def is a `TableDef` with `origin: Internal` and a
 project-relative source, so the store, the persist funnel, replay and the headless host need no
 new code. The def travels and the data does not: `tables/` is gitignored, and a clone without the
-data gets an honest `Reg::Failed` row in its own words.
+data gets an honest failed row in its own words.
 
 Around it, as built:
 
@@ -1294,10 +1296,10 @@ table store (`.strata/tables/<slug>/` under the default) → registers via `regi
 (`TableSpec { format: Arrow, internal: true }`) → returns `RunOutcome::Statement` carrying
 `StoreEffect::TableUpserted { def, meta }`.
 
-At settle: store upsert on `ProjChan::Tables` (the sidebar shows the row immediately,
-`Reg::Ready(meta)`) → `persisted_defs` rewrites `.strata/project.json` atomically through the
-persist funnel → `catalog_settled` adopts the engine's catalog generation (diagnostics revalidate;
-other tabs resolve the new
+At settle: store upsert on `ProjChan::Tables` (the sidebar shows the row immediately, carrying
+what the registration inferred) → `persisted_defs` rewrites `.strata/project.json` atomically
+through the persist funnel → `catalog_settled` takes the engine's ledger again and adopts its
+catalog generation (the row reads `Ready`; diagnostics revalidate; other tabs resolve the new
 name) → history + event log → the results pane renders a statement row ("Table 't' created, 1,204
 rows") — no grid, no snapshot.
 

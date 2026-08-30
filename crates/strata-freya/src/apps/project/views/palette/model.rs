@@ -25,11 +25,12 @@
 //! this repo's own reference fixture, so walking it to build a search index would be that same
 //! unbounded materialization paid on every open. Views' columns are indexed as well as tables'.
 
+use strata_engine::Registrations;
 use strata_model::{CatalogKind, ColRef, Kind, SavedQuery};
 use uuid::Uuid;
 
 use crate::apps::project::commands::Action;
-use crate::apps::project::state::{ProjectState, Reg};
+use crate::apps::project::state::ProjectState;
 
 /// How many rows a **catalog** group offers at once. A section longer than a glance is a section
 /// that has not narrowed anything — and the whole point of typing more is to shorten it.
@@ -200,17 +201,18 @@ pub struct Results {
 /// A **snapshot**: built once when the overlay opens and filtered per keystroke, the same trade
 /// the catalog row menus make (`views::sidebar::catalog::menu`). A palette shows what was true
 /// when it opened, and acting on it dismisses it.
-fn entries(project: &ProjectState) -> Vec<Entry> {
+fn entries(project: &ProjectState, registrations: &Registrations) -> Vec<Entry> {
+    let answers = &registrations.workspace;
     let mut entries: Vec<Entry> = Action::ALL.iter().copied().map(Entry::Action).collect();
 
     for table in &project.tables {
         entries.push(Entry::Table {
             name: table.def.name.clone(),
-            meta: table.meta_label(),
+            meta: table.meta_label(answers.status(&table.def.name)),
         });
     }
     for view in &project.views {
-        let cols = view.reg.ready().map(|v| v.columns.len());
+        let cols = view.info.as_ref().map(|v| v.columns.len());
         entries.push(Entry::View {
             name: view.def.name.clone(),
             meta: match cols {
@@ -227,7 +229,7 @@ fn entries(project: &ProjectState) -> Vec<Entry> {
     }
 
     for table in &project.tables {
-        let Reg::Ready(meta) = &table.reg else {
+        let Some(meta) = &table.meta else {
             continue;
         };
         for column in &meta.columns {
@@ -248,7 +250,7 @@ fn entries(project: &ProjectState) -> Vec<Entry> {
         }
     }
     for view in &project.views {
-        let Reg::Ready(info) = &view.reg else {
+        let Some(info) = &view.info else {
             continue;
         };
         for column in &info.columns {
@@ -269,8 +271,8 @@ fn entries(project: &ProjectState) -> Vec<Entry> {
 
 impl Index {
     /// Build the snapshot for this project.
-    pub fn new(project: &ProjectState) -> Self {
-        let entries = entries(project);
+    pub fn new(project: &ProjectState, registrations: &Registrations) -> Self {
+        let entries = entries(project, registrations);
         let haystacks = entries.iter().map(Entry::haystack).collect();
         Self { entries, haystacks }
     }
@@ -336,7 +338,7 @@ mod tests {
 
     use datafusion::arrow::datatypes::{DataType, Field};
     use strata_arrow::column_info;
-    use strata_engine::TableMeta;
+    use strata_engine::{Answers, CatalogGen, RegStatus, TableMeta};
     use strata_model::{ColumnInfo, SourceFormat, TableDef, TableOrigin, ViewDef};
 
     use super::*;
@@ -346,7 +348,7 @@ mod tests {
         column_info(&Field::new(name, dtype, true))
     }
 
-    fn table(name: &str, partition_cols: &[&str], reg: Reg<TableMeta>) -> TableRow {
+    fn table(name: &str, partition_cols: &[&str], meta: Option<TableMeta>) -> TableRow {
         TableRow {
             def: TableDef {
                 name: name.to_string(),
@@ -359,8 +361,29 @@ mod tests {
                     .collect(),
                 origin: TableOrigin::External,
             },
-            reg,
+            meta,
             profile: None,
+        }
+    }
+
+    /// What the engine answered about [`store`]'s defs — the half of a row that says whether it
+    /// registered.
+    fn answered() -> Registrations {
+        Registrations {
+            workspace: Answers::recorded(
+                [
+                    ("orders".to_string(), RegStatus::Ready),
+                    (
+                        "broken".to_string(),
+                        RegStatus::Failed {
+                            reason: "No files found".into(),
+                        },
+                    ),
+                    ("revenue".to_string(), RegStatus::Ready),
+                ],
+                CatalogGen::default(),
+            ),
+            ..Default::default()
         }
     }
 
@@ -376,7 +399,7 @@ mod tests {
                 table(
                     "orders",
                     &["country"],
-                    Reg::Ready(TableMeta {
+                    Some(TableMeta {
                         columns: vec![
                             column("order_id", DataType::Int64),
                             column("country", DataType::Utf8),
@@ -384,14 +407,14 @@ mod tests {
                         rows: Some(1_000),
                     }),
                 ),
-                table("broken", &[], Reg::Failed("No files found".to_string())),
+                table("broken", &[], None),
             ],
             views: vec![ViewRow {
                 def: ViewDef {
                     name: "revenue".to_string(),
                     sql: "SELECT 1".to_string(),
                 },
-                reg: Reg::Ready(ViewInfo {
+                info: Some(ViewInfo {
                     columns: vec![column("total", DataType::Float64)],
                     deps: vec!["orders".to_string()],
                     remote_deps: Vec::new(),
@@ -427,7 +450,7 @@ mod tests {
     /// offer every column in it.
     #[test]
     fn an_empty_query_offers_everything_but_the_columns() {
-        let groups = Index::new(&store()).search("");
+        let groups = Index::new(&store(), &answered()).search("");
         assert_eq!(
             present(&groups),
             [
@@ -451,7 +474,7 @@ mod tests {
     /// against a figure that would need updating with it.
     #[test]
     fn every_command_is_offered_however_many_there_are() {
-        let groups = Index::new(&store()).search("");
+        let groups = Index::new(&store(), &answered()).search("");
         let offered = labels(&groups, Group::Actions);
         let declared: Vec<String> = Action::ALL.iter().map(|a| a.label().to_string()).collect();
         assert_eq!(offered, declared);
@@ -465,14 +488,14 @@ mod tests {
     /// …and typing brings them in.
     #[test]
     fn a_column_is_found_by_its_own_name() {
-        let groups = Index::new(&store()).search("order_id");
+        let groups = Index::new(&store(), &answered()).search("order_id");
         assert_eq!(labels(&groups, Group::Columns), ["orders.order_id"]);
     }
 
     /// A view's columns are indexed too — the sidebar lists them, so the palette must find them.
     #[test]
     fn a_views_columns_are_indexed() {
-        let groups = Index::new(&store()).search("total");
+        let groups = Index::new(&store(), &answered()).search("total");
         assert_eq!(labels(&groups, Group::Columns), ["revenue.total"]);
     }
 
@@ -480,7 +503,7 @@ mod tests {
     /// schema behind it, so it contributes no columns.
     #[test]
     fn a_failed_table_is_listed_but_has_no_columns() {
-        let all = entries(&store());
+        let all = entries(&store(), &answered());
         assert!(all.iter().any(|e| e.label() == "broken"));
         assert!(!all.iter().any(|e| e.label().starts_with("broken.")));
     }
@@ -488,7 +511,7 @@ mod tests {
     /// Every word has to match, in any order and any case — the settings box's rule.
     #[test]
     fn words_match_in_any_order() {
-        let index = Index::new(&store());
+        let index = Index::new(&store(), &answered());
         for query in ["top countries", "countries top", "TOP Countries"] {
             assert_eq!(
                 labels(&index.search(query), Group::SavedQueries),
@@ -502,7 +525,7 @@ mod tests {
     /// called "execute".
     #[test]
     fn a_command_is_found_by_its_keywords() {
-        let groups = Index::new(&store()).search("execute");
+        let groups = Index::new(&store(), &answered()).search("execute");
         assert_eq!(labels(&groups, Group::Actions), ["Run query"]);
     }
 
@@ -510,7 +533,7 @@ mod tests {
     /// than a list of empty sections.
     #[test]
     fn groups_keep_their_order_and_empty_ones_vanish() {
-        let index = Index::new(&store());
+        let index = Index::new(&store(), &answered());
         let groups = index.search("o");
         let order = present(&groups);
         let mut expected = order.clone();
@@ -529,14 +552,14 @@ mod tests {
     #[test]
     fn the_cap_is_per_group() {
         let mut project = store();
-        let Reg::Ready(meta) = &mut project.tables[0].reg else {
+        let Some(meta) = &mut project.tables[0].meta else {
             unreachable!("the fixture's first table is registered")
         };
         meta.columns = (0..20)
             .map(|i| column(&format!("c{i}"), DataType::Int64))
             .collect();
 
-        let groups = Index::new(&project).search("c");
+        let groups = Index::new(&project, &answered()).search("c");
         assert_eq!(labels(&groups, Group::Columns).len(), MAX_PER_GROUP);
         assert!(
             labels(&groups, Group::Tables).contains(&"orders".to_string()),
@@ -548,7 +571,10 @@ mod tests {
     /// drawer's collapse rule, applied to a list that is rebuilt on every keystroke.
     #[test]
     fn every_entry_has_its_own_id() {
-        let mut ids: Vec<String> = entries(&store()).iter().map(Entry::id).collect();
+        let mut ids: Vec<String> = entries(&store(), &answered())
+            .iter()
+            .map(Entry::id)
+            .collect();
         let count = ids.len();
         ids.sort();
         ids.dedup();
@@ -559,7 +585,7 @@ mod tests {
     /// excluded.
     #[test]
     fn rows_read_in_group_order_and_headings_point_into_them() {
-        let groups = Index::new(&store()).search("");
+        let groups = Index::new(&store(), &answered()).search("");
         assert_eq!(groups.rows[0], Entry::Action(Action::ALL[0]));
         assert_eq!(groups.heading(0), Some(Group::Actions));
         for (index, entry) in groups.rows.iter().enumerate() {
@@ -576,7 +602,7 @@ mod tests {
     /// — it has no files under it to report anything else for free.
     #[test]
     fn a_view_row_reports_its_column_count() {
-        let groups = Index::new(&store()).search("revenue");
+        let groups = Index::new(&store(), &answered()).search("revenue");
         assert_eq!(
             groups
                 .rows

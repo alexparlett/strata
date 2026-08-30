@@ -15,8 +15,8 @@ use crate::statements::arms::{self, stamped};
 use crate::statements::report::StatementOutcome;
 use crate::statements::{StatementReport, StmtKind, StoreEffect};
 use crate::{
-    fold_ident, profile, BackgroundGuard, CatalogGen, Engine, EngineError, ProfileRun, Scans,
-    SourceDefs, StopReason,
+    fold_ident, profile, BackgroundGuard, CatalogGen, Engine, EngineError, ProfileRun, RegStatus,
+    Registrations, Scans, SourceDefs, StopReason,
 };
 
 /// This engine's workspace catalog, from [`Engine::catalog`].
@@ -48,6 +48,25 @@ impl Catalog<'_> {
         self.engine.generation.current()
     }
 
+    /// **What this engine last answered for each def it was asked to register** — the
+    /// registration ledger, read as of one moment, in both its namespaces.
+    ///
+    /// The outcome of a registration is the engine's own decision, so the engine retains it and
+    /// a host renders it rather than keeping its own copy: a row is the def the store holds
+    /// joined with the answer here, keyed on the [`generation`](Self::generation) the read is
+    /// stamped with. A def no pass has reached is **absent**, which is the stated staleness
+    /// bound and not a state of its own.
+    ///
+    /// One read for the whole catalog, deliberately: a walk that asked per row would describe a
+    /// different instant per row, and would reach the engine from inside a render pass. A caller
+    /// that is already reading [`Sources::listing`](crate::Sources::listing) has a data source's
+    /// answer on the listing beside it, from this same ledger.
+    ///
+    /// Costs no I/O.
+    pub fn registrations(self) -> Registrations {
+        self.engine.ledger.registrations(self.generation())
+    }
+
     /// (Re)register one external table from its spec, returning its inferred schema +
     /// free row count.
     ///
@@ -76,7 +95,7 @@ impl Catalog<'_> {
             .map_err(|e| EngineError::task("register", e))?;
         self.engine.note_origin(&name, internal && meta.is_ok());
         self.engine.note_scans(&name, Some(Scans::Table(source)));
-        self.engine.generation.bump();
+        self.engine.note_registration(&name, RegStatus::of(&meta));
         meta.map_err(EngineError::from)
     }
 
@@ -89,7 +108,7 @@ impl Catalog<'_> {
         deregister_anywhere(&self.engine.ctx, table);
         self.engine.note_origin(table, false);
         self.engine.note_scans(table, None);
-        self.engine.generation.bump();
+        self.engine.forget_registration(table);
     }
 
     /// What `name`'s row says **now** — its columns and free row count — read from the files
@@ -224,7 +243,8 @@ impl Catalog<'_> {
                 }),
             );
         }
-        self.engine.generation.bump();
+        self.engine
+            .note_registration(&created_as, RegStatus::of(&created));
         created.map_err(EngineError::from)
     }
 

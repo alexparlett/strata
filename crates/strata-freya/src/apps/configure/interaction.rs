@@ -21,6 +21,7 @@ use freya::radio::RadioStation;
 use freya_testing::TestingRunner;
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
+use strata_engine::{CatalogGen, Registrations};
 use strata_model::SourceDef;
 
 use super::model::Where;
@@ -86,6 +87,7 @@ fn runner(tag: &'static str, connected: bool, draft: ConfigureDraft) -> (Testing
         move |r| {
             r.provide_root_context(EngineCtx::default);
             r.provide_root_context(|| State::create(CatalogState::Cold));
+            r.provide_root_context(|| State::create(Registrations::default()));
             r.provide_root_context(|| State::create(ScanRequest::default()));
             r.provide_root_context(|| State::create(Log::default()));
             r.provide_root_context(|| State::create(PersistFaults::default()));
@@ -461,15 +463,22 @@ fn configure_internal_preview() {
 /// publishes its spool by rename before its own last await — so a window dismissed mid-create
 /// would leave a data directory under `.strata/tables/` that no def points at and no sweep
 /// collects. Cancel and Esc both read [`Status::holds_window`], so they cannot disagree.
+fn registering() -> Status {
+    Status::Registering {
+        name: "daily".into(),
+        asked_at: CatalogGen::default(),
+    }
+}
+
 #[test]
 fn only_a_create_in_flight_holds_the_window() {
     assert!(!Status::Idle.holds_window());
-    assert!(!Status::Registering("daily".into()).holds_window());
+    assert!(!registering().holds_window());
     assert!(!Status::Failed("nope".into()).holds_window());
     assert!(Status::Creating("daily".into()).holds_window());
 
     assert!(!Status::Idle.busy());
-    assert!(Status::Registering("daily".into()).busy());
+    assert!(registering().busy());
     assert!(Status::Creating("daily".into()).busy());
 }
 

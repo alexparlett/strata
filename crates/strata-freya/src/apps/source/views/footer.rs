@@ -68,7 +68,7 @@ impl Component for Footer {
 
         let busy = match *ctx.status.read() {
             Status::Storing => Some("Saving…"),
-            Status::Connecting(_) => Some("Connecting…"),
+            Status::Connecting { .. } => Some("Connecting…"),
             Status::Idle | Status::Failed(_) => None,
         };
         let scanning = catalog.read().is_scanning();
@@ -171,7 +171,7 @@ fn name_clash(ctx: SourceCtx, project: RadioStation<ProjectState, ProjChan>) -> 
         .peek()
         .sources
         .iter()
-        .any(|c| c.def.named() == name)
+        .any(|c| c.named() == name)
         .then(|| format!("'{name}' is already a data source in this project."))
 }
 
@@ -195,8 +195,8 @@ fn catalog_clash(ctx: SourceCtx, project: RadioStation<ProjectState, ProjChan>) 
         .peek()
         .sources
         .iter()
-        .filter(|c| editing.as_deref() != Some(c.def.named().as_str()))
-        .map(|c| c.def.clone())
+        .filter(|c| editing.as_deref() != Some(c.named().as_str()))
+        .cloned()
         .collect();
     check_catalog_name(&existing, &def).err()
 }
@@ -309,8 +309,8 @@ fn save(
             .peek()
             .sources
             .iter()
-            .find(|c| c.def.named() == name)
-            .map(|row| row.def.clone())
+            .find(|c| c.named() == name)
+            .cloned()
     });
     let ops = secret_ops(
         previous.as_ref(),
@@ -352,6 +352,7 @@ fn commit(
     engine: EngineCtx,
     report: ReportCtx,
 ) {
+    let asked_at = engine.catalog().generation();
     let def = ctx.draft.peek().def();
     let name = def.named();
     let moved_from = ctx
@@ -376,7 +377,10 @@ fn commit(
                 .into(),
         ));
     } else {
-        ctx.status.set(Status::Connecting(name.clone()));
+        ctx.status.set(Status::Connecting {
+            name: name.clone(),
+            asked_at,
+        });
     }
     {
         let mut target = ctx.target;

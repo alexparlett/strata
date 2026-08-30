@@ -13,7 +13,7 @@
 use std::collections::HashSet;
 
 use freya::components::Disclosure;
-use strata_engine::SourceMode;
+use strata_engine::{Registrations, SourceMode};
 use strata_model::{CatalogKind, ColOwner, RemoteRef};
 use uuid::Uuid;
 
@@ -305,12 +305,14 @@ pub struct Walked {
 
 /// Walk the tree.
 ///
-/// `needle` is **already lowercased** — see [`matches`](super::matches). `sources` and `columns`
-/// are *inputs* like the expansion set: the pane joins the data sources once against the engine's
-/// snapshot and subscribes to the columns of whatever the last walk reported open, then hands
-/// both back here — so this stays a plain function, never awaits, and reaches no engine.
+/// `needle` is **already lowercased** — see [`matches`](super::matches). `registrations`,
+/// `sources` and `columns` are *inputs* like the expansion set: the pane takes the engine's
+/// answers once, joins the data sources against its snapshot, and subscribes to the columns of
+/// whatever the last walk reported open, then hands them all back here — so this stays a plain
+/// function, never awaits, and reaches no engine.
 pub fn walk(
     project: &ProjectState,
+    registrations: &Registrations,
     sources: &[SourceNode],
     needle: &str,
     open: &HashSet<String>,
@@ -318,7 +320,7 @@ pub fn walk(
 ) -> Walked {
     let open = Open(open);
     let mut out = Walked::default();
-    walk_workspace(project, needle, &open, &mut out.nodes);
+    walk_workspace(project, registrations, needle, &open, &mut out.nodes);
     walk_sources(sources, needle, &open, columns, &mut out);
     out
 }

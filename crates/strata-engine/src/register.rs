@@ -346,7 +346,9 @@ pub async fn sync(
     mut settled: impl FnMut(RegOutcome),
 ) -> PassReport {
     remove_absent(engine, &desired, &mut settled).await;
-    engine.dependencies.retain(&named(&desired));
+    let (workspace, sources) = named(&desired);
+    engine.dependencies.retain(&workspace);
+    engine.ledger.retain(&workspace, &sources);
     register_pass(
         engine,
         desired.sources,
@@ -360,20 +362,27 @@ pub async fn sync(
     }
 }
 
-/// Every table and view `desired` names, folded: the set
-/// [`Dependencies`](crate::Dependencies) is pruned to.
+/// What `desired` names, folded and split by namespace: the workspace's tables and views, then
+/// its data sources — the sets [`Dependencies`](crate::Dependencies) and [`Ledger`](crate::Ledger)
+/// are pruned to.
 ///
-/// [`remove_absent`] cannot do this job: it diffs against the **registered** catalog, and a table
-/// whose registration failed is not in it — so its dependency entry is reported by no removal and
-/// would outlive the def that put it there. Reconciling against the spec instead is the same rule
-/// the pass itself follows, and it is total.
-fn named(desired: &CatalogSpec) -> BTreeSet<String> {
-    desired
+/// [`remove_absent`] cannot do this job: it diffs against what is **registered**, and a def whose
+/// registration failed is not — so its entry is reported by no removal and would outlive the def
+/// that put it there, which for the ledger is precisely the entry a host most needs retired.
+/// Reconciling against the spec instead is the same rule the pass itself follows, and it is total.
+fn named(desired: &CatalogSpec) -> (BTreeSet<String>, BTreeSet<String>) {
+    let workspace = desired
         .tables
         .iter()
         .map(|t| fold_ident(&t.name))
         .chain(desired.views.iter().map(|v| fold_ident(&v.name)))
-        .collect()
+        .collect();
+    let sources = desired
+        .sources
+        .iter()
+        .map(|def| fold_ident(&def.named()))
+        .collect();
+    (workspace, sources)
 }
 
 /// Takes out everything the engine holds that `desired` does not name — [`sync`]'s first phase,

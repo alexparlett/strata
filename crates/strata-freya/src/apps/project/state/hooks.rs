@@ -17,7 +17,7 @@ use freya::radio::{use_init_radio_station, use_radio, use_radio_station, RadioSt
 use strata_core::project::{self as project_io, ProjectDefs, SessionLoadError};
 use strata_core::util::{fmt_int, plural};
 use strata_engine::register::{CatalogSpec, RegOutcome};
-use strata_engine::{SourceDefs, TableSpec};
+use strata_engine::{CatalogGen, Registrations, SourceDefs, TableSpec};
 use strata_model::{SessionSnapshot, ViewDef, WindowGeom};
 
 use crate::apps::project::contexts::EngineCtx;
@@ -25,8 +25,8 @@ use crate::state::ConfigStation;
 use crate::task::offload;
 
 use super::catalog::{
-    claim_scan, request_scan, use_init_catalog, use_init_catalog_rescan, CatalogRescan, ScanGuard,
-    ScanScope,
+    claim_scan, registrations_settled, request_scan, use_init_catalog, use_init_catalog_rescan,
+    use_init_registrations, CatalogRescan, RegistrationsCtx, ScanGuard, ScanScope,
 };
 use super::history::{History, HistoryCtx};
 use super::log::{log_event, LogCtx, LogLevel};
@@ -126,9 +126,10 @@ fn new_session() -> SessionState {
 /// counter, since this is where the scans run. Call once in the window root, after the
 /// engine is in context.
 ///
-/// Registration is IO-heavy (schema inference reads file footers)
-/// and runs as a spawned task, landing results row by row through [`ProjChan::Tables`] /
-/// [`ProjChan::Views`] so rows flip `Loading → Ready/Failed` as answers arrive.
+/// Registration is IO-heavy (schema inference reads file footers) and runs as a spawned task,
+/// landing what each answer *learned* row by row through [`ProjChan::Tables`] /
+/// [`ProjChan::Views`] and taking the engine's ledger again beside it, so a row settles as its
+/// own answer arrives rather than when the pass ends.
 ///
 /// **This is the window's one scan driver** — project open and every ↻ come through the same
 /// effect, so there is a single place that claims the flag and spawns the pass. The ↻ can't
@@ -154,6 +155,7 @@ pub fn use_init_project(
         ProjectState::from_defs(loaded.defs.clone(), root)
     });
     let catalog = use_init_catalog();
+    let registrations = use_init_registrations(engine);
     let rescan = use_init_catalog_rescan();
     let engine = engine.clone();
     use_hook(move || {
@@ -162,14 +164,23 @@ pub fn use_init_project(
     });
     use_side_effect(move || {
         let request = rescan.read().clone();
-        let Some(guard) = claim_scan(catalog, &engine) else {
+        let Some(guard) = claim_scan(catalog, registrations, &engine) else {
             return;
         };
-        let work = plan_scan(&engine, &station.peek(), &request.scope);
-        if request.seq > 0 {
-            reset_rows(station, &work);
-        }
-        spawn(scan_catalog(engine.clone(), station, log, guard, work));
+        let work = plan_scan(
+            &engine,
+            &station.peek(),
+            &registrations.peek(),
+            &request.scope,
+        );
+        spawn(scan_catalog(
+            engine.clone(),
+            station,
+            registrations,
+            log,
+            guard,
+            work,
+        ));
     });
     station
 }
@@ -211,11 +222,16 @@ enum ScanWork {
 ///
 /// Takes the state rather than the station, because it only reads it — and because that is what
 /// lets the name reconciliation below be pinned by a test that needs no window.
-fn plan_scan(engine: &EngineCtx, p: &ProjectState, scope: &ScanScope) -> ScanWork {
-    let known = SourceDefs::of(&p.sources.iter().map(|c| c.def.clone()).collect::<Vec<_>>());
+fn plan_scan(
+    engine: &EngineCtx,
+    p: &ProjectState,
+    registrations: &Registrations,
+    scope: &ScanScope,
+) -> ScanWork {
+    let known = SourceDefs::of(&p.sources);
     match scope {
         ScanScope::All => ScanWork::Catalog(CatalogSpec {
-            sources: p.sources.iter().map(|c| c.def.clone()).collect(),
+            sources: p.sources.clone(),
             tables: p
                 .tables
                 .iter()
@@ -236,7 +252,7 @@ fn plan_scan(engine: &EngineCtx, p: &ProjectState, scope: &ScanScope) -> ScanWor
             Some(row) => ScanWork::Table {
                 spec: engine.catalog().table_spec(&p.root, &row.def, &known),
                 views: p
-                    .views_to_refresh(&row.def.name)
+                    .views_to_refresh(&row.def.name, registrations)
                     .into_iter()
                     .filter_map(|name| p.views.iter().find(|v| v.def.name == name))
                     .map(|v| v.def.clone())
@@ -244,31 +260,6 @@ fn plan_scan(engine: &EngineCtx, p: &ProjectState, scope: &ScanScope) -> ScanWor
             },
             None => ScanWork::Nothing,
         },
-    }
-}
-
-/// Drop the rows this pass will re-answer back to `Loading` — and only those. A row Refresh
-/// leaves the rest of the catalog wearing the verdicts it already has, which is the whole
-/// difference between asking about one table and re-scanning the project.
-fn reset_rows(mut station: RadioStation<ProjectState, ProjChan>, work: &ScanWork) {
-    match work {
-        ScanWork::Catalog(_) => {
-            station.write_channel(ProjChan::Sources).reload_sources();
-            station.write_channel(ProjChan::Tables).reload_tables();
-            station.write_channel(ProjChan::Views).reload_views();
-        }
-        ScanWork::Table { spec, views } => {
-            station
-                .write_channel(ProjChan::Tables)
-                .reload_table(&spec.name);
-            if !views.is_empty() {
-                let mut p = station.write_channel(ProjChan::Views);
-                for view in views {
-                    p.reload_view(&view.name);
-                }
-            }
-        }
-        ScanWork::Nothing => {}
     }
 }
 
@@ -308,17 +299,35 @@ pub fn refresh_table_rows(
     name: String,
 ) {
     spawn_forever(async move {
+        let asked_at = engine.catalog().generation();
         let meta = engine.catalog().table_meta(name.clone()).await;
         if !project.is_alive() {
             return;
         }
         match meta {
+            Ok(_) if superseded(&engine, &name, asked_at) => {}
             Ok(meta) => project
                 .write_channel(ProjChan::Tables)
-                .table_reread(&name, meta),
+                .table_registered(&name, meta),
             Err(e) => tracing::error!("table meta '{name}': {e}"),
         }
     });
+}
+
+/// Whether a **registration** answered for `name` while a re-read of its own facts was out —
+/// in which case the re-read describes the files as they were before, and landing it would
+/// silently undo the re-scan the user asked for.
+///
+/// Asked of the engine's ledger rather than of a row's state, because the engine is what
+/// registered: a pass stamps each answer with the generation it landed at, so "did this row move
+/// under me" is one comparison against the number read before the call went out.
+fn superseded(engine: &EngineCtx, name: &str, asked_at: CatalogGen) -> bool {
+    engine
+        .catalog()
+        .registrations()
+        .workspace
+        .answered_since(name, asked_at)
+        .is_some()
 }
 
 /// The sidebar's ↻ (P3-03): ask for a re-scan of the whole catalog — re-infer every table's
@@ -358,11 +367,12 @@ pub fn refresh_catalog(rescan: CatalogRescan) {
 async fn scan_catalog(
     engine: EngineCtx,
     station: RadioStation<ProjectState, ProjChan>,
+    registrations: RegistrationsCtx,
     log: LogCtx,
     _scan: ScanGuard,
     work: ScanWork,
 ) {
-    register_defs(engine, station, log, work).await;
+    register_defs(engine, station, registrations, log, work).await;
 }
 
 /// What the project subtree needs off disk before it can mount: the defs and the persisted
@@ -426,8 +436,8 @@ pub async fn load_project(root: PathBuf) -> Result<Rc<Loaded>, String> {
 ///
 /// Shared by project open, the sidebar's ↻ ([`refresh_catalog`]) and a row's Refresh
 /// ([`refresh_table`]); which engine call each makes is [`ScanWork`]'s. Either way this keeps
-/// only what is genuinely the store's: `Reg<T>` rows and log entries, folded per outcome as each
-/// settles ([`settle_reg`]).
+/// only what is genuinely the store's — what each registration **learned**, and the log entries
+/// — folded per outcome as each settles ([`settle_reg`]).
 ///
 /// Every answer the engine gives is also **recorded in the event log** (P3-13) — one event per def,
 /// on either arm, for every width of pass. Not a synthesized "re-scanned N tables" summary: the
@@ -437,15 +447,14 @@ pub async fn load_project(root: PathBuf) -> Result<Rc<Loaded>, String> {
 async fn register_defs(
     engine: EngineCtx,
     mut station: RadioStation<ProjectState, ProjChan>,
+    registrations: RegistrationsCtx,
     log: LogCtx,
     work: ScanWork,
 ) {
+    let mut settle = |outcome| settle_reg(&mut station, registrations, &engine, log, outcome);
     match work {
         ScanWork::Catalog(spec) => {
-            engine
-                .catalog()
-                .sync(spec, |outcome| settle_reg(&mut station, log, outcome))
-                .await;
+            engine.catalog().sync(spec, &mut settle).await;
         }
         ScanWork::Table { spec, views } => {
             let name = spec.name.clone();
@@ -454,18 +463,22 @@ async fn register_defs(
                 .register(spec)
                 .await
                 .map_err(|e| e.to_string());
-            settle_reg(&mut station, log, RegOutcome::Table { name, result });
-            engine
-                .catalog()
-                .create_views(views, |outcome| settle_reg(&mut station, log, outcome))
-                .await;
+            settle(RegOutcome::Table { name, result });
+            engine.catalog().create_views(views, &mut settle).await;
         }
         ScanWork::Nothing => {}
     }
 }
 
-/// Fold one def's answer onto its catalog row and into the event log — the store half of every
-/// registration gesture, so the two calls above cannot answer a row differently.
+/// Fold one def's answer into the window: what it **learned** onto its catalog row, the engine's
+/// ledger taken again beside it, and the answer itself into the event log — the store half of
+/// every registration gesture, so the two calls above cannot answer a row differently.
+///
+/// **Whether the def registered is not written here.** That is the engine's own answer, and this
+/// re-reads it ([`registrations_settled`]) rather than copying it onto the row: a row is the def
+/// joined with the ledger, and per outcome is exactly as often as it moves. What lands on the row
+/// is only the payload — a table's `TableMeta`, a view's `ViewInfo` — dropped on a refusal, which
+/// learned nothing.
 ///
 /// [`RegOutcome::Removed`] arrives only from `Catalog::sync`, and only for something the *engine*
 /// holds that the project's own defs no longer name — the spec is built from the store rows, so
@@ -473,17 +486,15 @@ async fn register_defs(
 /// its observer saw.
 fn settle_reg(
     station: &mut RadioStation<ProjectState, ProjChan>,
+    registrations: RegistrationsCtx,
+    engine: &EngineCtx,
     log: LogCtx,
     outcome: RegOutcome,
 ) {
+    registrations_settled(registrations, engine);
     match outcome {
         RegOutcome::Source { name, result } => match result {
-            Ok(()) => {
-                log_event(log, LogLevel::Ok, format!("Connected '{name}'"));
-                station
-                    .write_channel(ProjChan::Sources)
-                    .source_registered(&name);
-            }
+            Ok(()) => log_event(log, LogLevel::Ok, format!("Connected '{name}'")),
             Err(e) => {
                 tracing::error!("connect '{name}' failed: {e}");
                 log_event(
@@ -491,9 +502,6 @@ fn settle_reg(
                     LogLevel::Error,
                     format!("Data source '{name}' failed: {e}"),
                 );
-                station
-                    .write_channel(ProjChan::Sources)
-                    .source_failed(&name, e);
             }
         },
         RegOutcome::Table { name, result } => match result {
@@ -520,9 +528,7 @@ fn settle_reg(
                     LogLevel::Error,
                     format!("Table '{name}' failed to register: {e}"),
                 );
-                station
-                    .write_channel(ProjChan::Tables)
-                    .table_failed(&name, e);
+                station.write_channel(ProjChan::Tables).table_failed(&name);
             }
         },
         RegOutcome::View { name, result } => match result {
@@ -546,7 +552,7 @@ fn settle_reg(
                     LogLevel::Error,
                     format!("View '{name}' failed to register: {e}"),
                 );
-                station.write_channel(ProjChan::Views).view_failed(&name, e);
+                station.write_channel(ProjChan::Views).view_failed(&name);
             }
         },
         RegOutcome::Removed { name, kind } => log_event(
@@ -916,9 +922,12 @@ mod tests {
         );
 
         let engine = EngineCtx::default();
-        let ScanWork::Table { spec, .. } =
-            plan_scan(&engine, &p, &ScanScope::Table("mytable".into()))
-        else {
+        let ScanWork::Table { spec, .. } = plan_scan(
+            &engine,
+            &p,
+            &Registrations::default(),
+            &ScanScope::Table("mytable".into()),
+        ) else {
             panic!("the folded request must find the row");
         };
         assert_eq!(
@@ -927,7 +936,12 @@ mod tests {
         );
         assert!(
             matches!(
-                plan_scan(&engine, &p, &ScanScope::Table("gone".into())),
+                plan_scan(
+                    &engine,
+                    &p,
+                    &Registrations::default(),
+                    &ScanScope::Table("gone".into())
+                ),
                 ScanWork::Nothing
             ),
             "a name with no row at all is nothing to do"
@@ -958,8 +972,19 @@ mod tests {
             ));
 
         let scan = |station: RadioStation<ProjectState, ProjChan>| {
-            let work = plan_scan(&EngineCtx::default(), &station.peek(), &ScanScope::All);
-            block_on(register_defs(engine.clone(), station, log, work));
+            let work = plan_scan(
+                &EngineCtx::default(),
+                &station.peek(),
+                &Registrations::default(),
+                &ScanScope::All,
+            );
+            block_on(register_defs(
+                engine.clone(),
+                station,
+                State::create_global(Registrations::default()),
+                log,
+                work,
+            ));
         };
         let resolves = |name: &str, tag: u128| {
             block_on(

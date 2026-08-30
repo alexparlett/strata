@@ -21,7 +21,8 @@ use crate::sources::Live;
 use crate::tables::{InternalTableStore, LocalIpcTableStore};
 use crate::udf_package::UdfPackage;
 use crate::{
-    build_context, runtime_subset, Dependencies, Engine, InternalTables, SessionScope, SourceDefs,
+    build_context, runtime_subset, Dependencies, Engine, InternalTables, Ledger, SessionScope,
+    SourceDefs,
 };
 
 /// The engine-id allocator — see [`Engine::id`].
@@ -251,6 +252,7 @@ impl EngineBuilder {
             tables,
             internal: InternalTables::default(),
             dependencies: Dependencies::default(),
+            ledger: Ledger::default(),
             source_defs: SourceDefs::default(),
             generation: GenClock::default(),
             live: Live::default(),

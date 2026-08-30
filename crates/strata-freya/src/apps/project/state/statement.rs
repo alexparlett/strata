@@ -38,7 +38,10 @@ use strata_engine::{StatementReport, StoreEffect};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{QueryOutcome, RunQuery};
 
-use super::catalog::{catalog_settled, use_catalog, use_catalog_rescan, Catalog, CatalogRescan};
+use super::catalog::{
+    catalog_settled, use_catalog, use_catalog_rescan, use_registrations, Catalog, CatalogRescan,
+    RegistrationsCtx,
+};
 use super::hooks::{refresh_table, refresh_table_rows};
 use super::log::{log_event, LogLevel};
 use super::persist::{persisted_defs, use_report, ReportCtx};
@@ -50,6 +53,10 @@ use super::{ProjChan, ProjectState};
 pub struct Settle {
     pub project: RadioStation<ProjectState, ProjChan>,
     pub catalog: Catalog,
+    /// The window's view of the engine's ledger, so the fold's adoption re-reads what the
+    /// statement just made the engine answer — a `CREATE` registers a def, and the row drawing
+    /// it is a join against this.
+    pub registrations: RegistrationsCtx,
     pub rescan: CatalogRescan,
     /// Both reporting handles — the event log *and* the fault satellite. The log is reached
     /// through here rather than held beside it: `ReportCtx` already carries it, and a second
@@ -69,6 +76,7 @@ pub fn use_settle() -> Settle {
     Settle {
         project: use_radio_station::<ProjectState, ProjChan>(),
         catalog: use_catalog(),
+        registrations: use_registrations(),
         rescan: use_catalog_rescan(),
         report: use_report(),
     }
@@ -140,7 +148,11 @@ fn apply(to: Settle, engine: &EngineCtx, effect: &StoreEffect) -> bool {
                 p.upsert_table(def.clone());
                 p.table_registered(&def.name, meta.clone());
             });
-            if !to.project.peek().views_to_refresh(&def.name).is_empty() {
+            let stale = to
+                .project
+                .peek()
+                .views_to_refresh(&def.name, &to.registrations.peek());
+            if !stale.is_empty() {
                 refresh_table(to.rescan, def.name.clone());
             }
             landed
@@ -162,7 +174,7 @@ fn apply(to: Settle, engine: &EngineCtx, effect: &StoreEffect) -> bool {
         StoreEffect::FunctionsChanged
         | StoreEffect::PreparedChanged
         | StoreEffect::RemoteRelationsChanged => {
-            catalog_settled(to.catalog, engine);
+            catalog_settled(to.catalog, to.registrations, engine);
             true
         }
     }
@@ -188,7 +200,7 @@ fn mutated(
         write(&mut p);
         persisted_defs(&p, to.report)
     };
-    catalog_settled(to.catalog, engine);
+    catalog_settled(to.catalog, to.registrations, engine);
     persisted
 }
 
@@ -211,7 +223,7 @@ mod tests {
     use futures::executor::block_on;
     use strata_core::project::{save_defs, ProjectDefs};
     use strata_core::theme::load;
-    use strata_engine::{RunOutcome, RunTag, StoreEffect, TableMeta, WsId};
+    use strata_engine::{Registrations, RunOutcome, RunTag, StoreEffect, TableMeta, WsId};
 
     use crate::apps::project::state::{CatalogState, Log, PersistFaults, ScanRequest};
     use crate::theme::strata_theme;
@@ -230,6 +242,7 @@ mod tests {
             let to = Settle {
                 project: use_radio_station::<ProjectState, ProjChan>(),
                 catalog: use_catalog(),
+                registrations: use_registrations(),
                 rescan: use_catalog_rescan(),
                 report: use_report(),
             };
@@ -293,6 +306,7 @@ mod tests {
                 move |r| {
                     r.provide_root_context(|| engine.clone());
                     r.provide_root_context(|| State::create(CatalogState::Cold));
+                    r.provide_root_context(|| State::create(Registrations::default()));
                     r.provide_root_context(|| State::create(ScanRequest::default()));
                     r.provide_root_context(|| State::create(Log::default()));
                     r.provide_root_context(|| State::create(PersistFaults::default()));
@@ -320,7 +334,7 @@ mod tests {
         };
 
         let rows = |p: &RadioStation<ProjectState, ProjChan>| {
-            p.peek().tables[0].reg.ready().and_then(|m| m.rows)
+            p.peek().tables[0].meta.as_ref().and_then(|m| m.rows)
         };
         assert_eq!(rows(&project), Some(1), "the row before the fold answers");
 

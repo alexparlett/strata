@@ -186,7 +186,7 @@ tangle:
 
 Around those, satellites with one job each: the project store (the catalog — a store, **not** a
 query against DataFusion; a def whose registration failed is exactly the row it must keep
-showing), the event log, the agents satellite (bookkeeping only — no surface shows it), query
+showing, and whether it failed is the engine's own record joined onto that row), the event log, the agents satellite (bookkeeping only — no surface shows it), query
 history (a `.jsonl` file, not a store
 field), the assistant's model listings (`strata_core::models` — what each provider last reported
 serving, beside the config file rather than in it, because a fetched list is a cache of a remote
@@ -265,6 +265,15 @@ Connecting a client is [MCP_CLIENTS.md](MCP_CLIENTS.md).
   engine mints on every registry write and on nothing else. The window adopts it rather than
   counting its own: it is what a tab's diagnostics are stamped against and what the remote-columns
   cache is keyed by, so a gesture that changed nothing re-derives nothing.
+
+  What each registration **answered** is the engine's too, and it keeps it: the *ledger*
+  (`catalog().registrations()`), one `Ready`-or-`Failed`-with-its-reason entry per def, stamped
+  with the generation it was answered at, and forgotten when the def is taken out. So a catalog
+  row is a **join** — the def from the store, the verdict from that read — and every embedder
+  renders one record rather than keeping its own: the window's rows and Problems drawer, the
+  headless host's catalog answers, and the agent's `list_tables`, which is where a refused data
+  source is finally named in the engine's own words instead of only through the tables it took
+  down with it.
 - **Databases** — a PostgreSQL source registers a DataFusion **catalog** of relations the server
   enumerates, so the whole database is queryable as `pg.public.orders` with no per-table declaration,
   and a same-source subplan is pushed back to the server as one statement

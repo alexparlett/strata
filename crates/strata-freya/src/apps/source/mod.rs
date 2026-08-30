@@ -62,7 +62,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use strata_core::config::Command;
 use strata_core::secret::Keystore;
 use strata_engine::sources::secret_slot;
-use strata_engine::Field;
+use strata_engine::{CatalogGen, Field};
 
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::ReportCtx;
@@ -124,13 +124,17 @@ pub enum Status {
     /// A password is going into (or out of) this machine's keystore, before anything is written.
     ///
     /// Its own state rather than a flag beside [`Connecting`](Self::Connecting), which means "a
-    /// pass is out for this URL" and is what `use_watch_data source` acts on: set before the store
-    /// write it would read an edited data source's existing `Ready` row and close the window over
-    /// a save that had not happened.
+    /// pass is out for this name" and is what [`use_watch_source`](views::use_watch_source) acts
+    /// on.
     Storing,
-    /// The def is written and a registration pass is in flight for this URL. The window watches
-    /// that row: `Ready` closes it, `Failed` brings the engine's reason back here.
-    Connecting(String),
+    /// The def is written and a registration pass is in flight for this name. The window watches
+    /// the engine's answer for it: `Ready` closes the window, `Failed` brings the engine's reason
+    /// back here.
+    ///
+    /// `asked_at` is the catalog generation when Save pressed, and the window waits for an answer
+    /// stamped **past** it — an edited data source's previous `Ready` is still the engine's last
+    /// word about it, and reading that would close the window over a save that had not happened.
+    Connecting { name: String, asked_at: CatalogGen },
     /// The last attempt failed. Kept on screen, because this window is the only place that can
     /// explain it while the user still has the draft that caused it.
     Failed(String),
@@ -173,7 +177,10 @@ impl SourceCtx {
     /// each control: `use_side_effect` builds its closure once, so a captured comparison value
     /// freezes at the first render and reverting a field silently does nothing.)
     pub fn edit(mut self, f: impl FnOnce(&mut SourceDraft)) {
-        if matches!(*self.status.peek(), Status::Storing | Status::Connecting(_)) {
+        if matches!(
+            *self.status.peek(),
+            Status::Storing | Status::Connecting { .. }
+        ) {
             return;
         }
         {
@@ -328,8 +335,8 @@ impl App for SourceApp {
                         .peek()
                         .sources
                         .iter()
-                        .find(|c| c.def.named() == name)
-                        .map(|row| SourceDraft::of(&row.def, &registrants))
+                        .find(|c| c.named() == name)
+                        .map(|def| SourceDraft::of(def, &registrants))
                         .unwrap_or_else(|| {
                             panic!("edit '{name}': no such data source in this project")
                         }),

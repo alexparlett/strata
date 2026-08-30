@@ -257,14 +257,14 @@ impl ProfileActions {
                 .views
                 .iter()
                 .find(|v| ProjectState::same_name(&v.def.name, name))
-                .and_then(|v| v.reg.ready())
+                .and_then(|v| v.info.as_ref())
                 .map(|info| &info.columns),
             CatalogKind::Query => None,
             CatalogKind::Table => p
                 .tables
                 .iter()
                 .find(|t| ProjectState::same_name(&t.def.name, name))
-                .and_then(|t| t.reg.ready())
+                .and_then(|t| t.meta.as_ref())
                 .map(|meta| &meta.columns),
         }?;
         columns.first().map(|c| c.name.clone())

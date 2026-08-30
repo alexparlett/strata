@@ -364,7 +364,7 @@ Top level is **data sources**:
   addressed as `strata`. It is not a "files provider": it is the catalog Strata's federating
   engine defines, so file tables, internal tables, views, saved queries — and a **cross-source**
   view joining workspace files onto `pg.…` — all nest under it. Its children are the flat pane's
-  TABLES · VIEWS · QUERIES groups verbatim: same rows, same `Reg` status slots, same menus, same
+  TABLES · VIEWS · QUERIES groups verbatim: same rows, same status slots, same menus, same
   expansion to columns, and the TABLES `+` still opens Configure on a new table;
 - one node per **database source**, opening onto its enabled schemas, then Tables and Views
   groups split by the listing's own `relkind`, then its relations. All of it is
@@ -401,10 +401,10 @@ actions are the menu.
 **Schemas…** is a picker over the same `Sources::listing` answer, so the tree, the picker and
 completion cannot disagree about what a data source shows — and it is the one surface that sees a
 schema the data source does *not* show, taking one back being what it is for. Its write is display-only, so it edits
-the def **in place** (`ProjectState::update_source_def`) and keeps the row's registration —
-going through `upsert_source` would leave a `Reg::Loading` that only a whole-catalog re-scan
-could answer. A data source that is not live has no enumeration to offer: the picker then lists
-the def's own schemas and says so.
+the def **in place** (`ProjectState::update_source_def`) and asks the engine nothing — going
+through `upsert_source` would move the def's identity under a registration that had not been
+asked for again. A data source that is not live has no enumeration to offer: the picker then
+lists the def's own schemas and says so.
 
 The header's `+`, the empty state's row and a node's Edit all open the editor window. **Forget's
 consequence differs by kind**, and the confirm carries which kind it is rather than looking it
@@ -579,8 +579,8 @@ to `relkind IN ('r','p','v','m','f')` and to what the role may `USAGE`/`SELECT`,
 excluded — and registers a catalog whose table providers are built lazily on first use and then
 cached. There are no per-table defs and no manual adds. The line is *discovery gets catalogs,
 declaration gets defs*: a bucket cannot say what its tables are — someone must declare globs, a
-format and its options, and that declaration can fail, which is what the `Reg` rows exist to show
-— while a database answers for itself. Pinning one remote relation into the workspace is a
+format and its options, and that declaration can fail, which is what a table row's status exists
+to show — while a database answers for itself. Pinning one remote relation into the workspace is a
 **view** (`CREATE VIEW orders AS SELECT * FROM pg.public.orders`), which needs no new machinery.
 
 `pg_class` rather than the provider crate's own `pg_tables` listing: remote views, materialized

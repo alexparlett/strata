@@ -27,7 +27,9 @@ use strata_arrow::plan::QueryPlan;
 use strata_core::util::{clip, collapse_sql};
 use strata_engine::export::{Csv, ExportReport, Format, Json, Parquet};
 use strata_engine::formats::FormatInfo;
+use strata_engine::sources::{SourceDetail, SourcesSnapshot};
 use strata_engine::sql::{FunctionCatalog, FunctionSym};
+use strata_engine::RegStatus;
 use strata_model::{Cell, ColumnInfo, Diagnostic, Kind, QueryOutput, Severity, Stat, StatKey};
 
 use crate::error::AgentError;
@@ -303,13 +305,15 @@ pub struct TablesResult {
     /// Entries the catalog holds (or 'matching' matched), before paging.
     pub total: usize,
     pub entries: Vec<EntryWire>,
-    /// Catalogs the project's connections have registered. Nothing in 'entries'
-    /// describes them and nothing is meant to: a database answers for itself, so its relations
-    /// are not defs of this project and 'matching' does not reach them. Read one by three-part
-    /// name ('pg.public.orders'), list them with SHOW TABLES, and read one relation's schema
-    /// with `describe_table` under that same name.
+    /// The project's data sources, and what registering each one answered. A data source that
+    /// registered a **catalog** carries the name its relations are addressed by: nothing in
+    /// 'entries' describes them and nothing is meant to, since a database answers for itself, so
+    /// read one by three-part name ('pg.public.orders'), list them with SHOW TABLES, and read one
+    /// relation's schema with `describe_table` under that same name. A data source with no
+    /// catalog is an object store: what it holds is described by the table entries that read
+    /// through it, and a 'failed' one is why they failed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub databases: Vec<String>,
+    pub sources: Vec<SourceWire>,
     /// Present only when the answer is one window of more.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page: Option<usize>,
@@ -358,13 +362,14 @@ pub(crate) fn windowed<T>(items: Vec<T>, page: Option<usize>, per: usize) -> Win
 /// The `list_tables` projection: filter by name, then window — totals first, so a narrowed
 /// answer always states what it matched against.
 ///
-/// `databases` rides outside the window and outside `total` on purpose: they are not entries, and
+/// `sources` rides outside the window and outside `total` on purpose: they are not entries, and
 /// counting them into a total the caller pages through would promise pages that do not exist.
-/// They are **not** filtered by `matching` either — a narrowed listing that dropped the
-/// connections would read as a project with none.
+/// They are **not** filtered by `matching` either — a narrowed listing that dropped the data
+/// sources would read as a project with none, and a refused one is the reason the entries it
+/// serves are failing.
 pub fn tables_result(
     entries: Vec<CatalogEntry>,
-    databases: Vec<String>,
+    sources: Vec<SourceWire>,
     matching: Option<&str>,
     page: Option<usize>,
 ) -> TablesResult {
@@ -380,10 +385,51 @@ pub fn tables_result(
     TablesResult {
         total: w.total,
         entries: w.shown.into_iter().map(entry_wire).collect(),
-        databases,
+        sources,
         page: w.page,
         page_size: w.page_size,
     }
+}
+
+/// One data source, as `list_tables` reports it: what it is called, what its relations are
+/// addressed by if it registers a catalog, and what the engine last answered for it.
+///
+/// The **whole reason it carries a state**: a bucket whose credentials this machine cannot
+/// resolve takes every table over it down with it, and without this row an agent sees a project
+/// full of signing failures and nothing saying which one thing is actually wrong.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct SourceWire {
+    pub name: String,
+    /// The catalog its relations are addressed by. Absent for an object store, which has no
+    /// namespace of its own — what it holds is the table entries that read through it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub catalog: Option<String>,
+    pub state: StateWire,
+    /// What the engine refused it with, present exactly when `state` is `failed`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Every data source an engine holds, as `list_tables` reports them — one row each, in the
+/// snapshot's own name order.
+pub fn source_wires(snapshot: &SourcesSnapshot) -> Vec<SourceWire> {
+    snapshot
+        .sources
+        .iter()
+        .map(|source| SourceWire {
+            name: source.name.clone(),
+            catalog: match &source.detail {
+                SourceDetail::Catalog { catalog, .. } => Some(catalog.clone()),
+                SourceDetail::Store => None,
+            },
+            state: match &source.status {
+                None => StateWire::Pending,
+                Some(RegStatus::Ready) => StateWire::Ready,
+                Some(RegStatus::Failed { .. }) => StateWire::Failed,
+            },
+            error: source.problem().map(str::to_owned),
+        })
+        .collect()
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -944,6 +990,8 @@ pub fn cells(rows: &[Vec<Cell>]) -> Vec<Vec<Option<String>>> {
 
 #[cfg(test)]
 mod tests {
+    use strata_engine::sources::SourceListing;
+    use strata_engine::CatalogGen;
     use uuid::Uuid;
 
     use super::*;
@@ -1097,25 +1145,61 @@ mod tests {
         assert_eq!(small.page_size, None);
     }
 
-    /// **The database catalogs ride beside the entries, not among them** (DB-03): outside the
-    /// total, outside the window, and outside 'matching' — a narrowed listing that dropped them
-    /// would read as a project with no database connections.
+    /// **The data sources ride beside the entries, not among them** (DB-03): outside the total,
+    /// outside the window, and outside 'matching' — a narrowed listing that dropped them would
+    /// read as a project with none, and a refused one is the reason its tables are failing.
     #[test]
-    fn source_catalogs_are_named_beside_the_entries() {
+    fn data_sources_are_named_beside_the_entries_with_what_the_engine_answered() {
         let entries = vec![CatalogEntry::Table {
             name: "people".into(),
             format: "csv".into(),
             sources: vec!["people.csv".into()],
             reg: RegState::Ready,
         }];
+        let snapshot = SourcesSnapshot {
+            generation: CatalogGen::default(),
+            registrants: Vec::new(),
+            sources: vec![
+                SourceListing {
+                    name: "pg".into(),
+                    status: Some(RegStatus::Ready),
+                    detail: SourceDetail::Catalog {
+                        catalog: "pg".into(),
+                        schemas: Vec::new(),
+                    },
+                },
+                SourceListing {
+                    name: "lake".into(),
+                    status: Some(RegStatus::Failed {
+                        reason: "This S3 data source needs a region.".into(),
+                    }),
+                    detail: SourceDetail::Store,
+                },
+            ],
+        };
+
         let listed = tables_result(
             entries,
-            vec!["pg".to_string(), "warehouse".to_string()],
+            source_wires(&snapshot),
             Some("nothing matches this"),
             None,
         );
+
         assert_eq!(listed.total, 0, "the filter emptied the entries");
-        assert_eq!(listed.databases, vec!["pg", "warehouse"]);
+        let named: Vec<&str> = listed.sources.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(named, ["pg", "lake"], "the filter did not reach them");
+        assert_eq!(listed.sources[0].catalog.as_deref(), Some("pg"));
+        assert!(matches!(listed.sources[0].state, StateWire::Ready));
+        assert_eq!(
+            listed.sources[1].catalog, None,
+            "an object store has no namespace of its own"
+        );
+        assert!(matches!(listed.sources[1].state, StateWire::Failed));
+        assert_eq!(
+            listed.sources[1].error.as_deref(),
+            Some("This S3 data source needs a region."),
+            "and it carries the engine's own sentence"
+        );
     }
 
     /// A view row carries a preview a reader can tell is one; a saved query's SQL stays

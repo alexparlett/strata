@@ -28,8 +28,8 @@ pub use agent::use_agent_bridge;
 pub use agents::{use_init_agents, Agents, AgentsCtx};
 pub use catalog::{
     catalog_settled, use_catalog, use_catalog_rescan, use_catalog_selection,
-    use_init_catalog_selection, use_init_remote_scans, use_remote_scans, Catalog, CatalogRescan,
-    CatalogSelection, RemoteScans,
+    use_init_catalog_selection, use_init_remote_scans, use_registrations, use_remote_scans,
+    Catalog, CatalogRescan, CatalogSelection, RegistrationsCtx, RemoteScans,
 };
 /// Only tests name these: they stand the catalog's context signals up by hand, where the window
 /// goes through `use_init_catalog` / `use_init_catalog_rescan`. Production code reaches
@@ -76,7 +76,10 @@ pub use persist::ProjectFile;
 pub use persist::{
     persisted_defs, use_init_faults, use_report, FaultsCtx, PersistFaults, ReportCtx,
 };
-pub use project::{FaultKind, ProjChan, ProjectState, Reg};
+/// The engine's half of a catalog row, composed by hand — see [`Answered`](project::Answered).
+#[cfg(test)]
+pub use project::Answered;
+pub use project::{FaultKind, ProjChan, ProjectState};
 /// The catalog rows themselves. A test that builds a store **inline** names these, which is what
 /// this codebase asks for instead of bending a signature to be testable (the command palette's
 /// index is tested exactly this way). A data source's row is not among them: nothing outside the

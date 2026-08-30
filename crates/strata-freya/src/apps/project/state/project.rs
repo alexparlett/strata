@@ -1,8 +1,14 @@
 //! The per-window **Project** store (Radio): the open project's catalog — the *save
 //! targets* (state-arch §2). Each row wraps a pure persisted def ([`TableDef`] /
-//! [`ViewDef`]) with what engine registration *learned* about it ([`Reg`]), so the
-//! durable and the derived can't blur: `defs()` is a projection, not a clone-and-hope,
-//! and invalid combinations (a Ready row carrying an error) are unrepresentable.
+//! [`ViewDef`]) with what engine registration *learned* about it, so the durable and the
+//! derived can't blur: `defs()` is a projection, not a clone-and-hope.
+//!
+//! **Whether a def registered is not here.** That is an outcome the engine decided, so the
+//! engine retains it ([`Registrations`](strata_engine::Registrations)) and a row is the def
+//! this store holds *joined* with that answer — the desired state is the store's authority,
+//! the observed state is the engine's, and neither is copied into the other. What a row keeps
+//! is only what registration **learned**: a table's [`TableMeta`], a view's [`ViewInfo`], both
+//! absent until one has landed and dropped again by a failure, which learns nothing.
 //!
 //! Identity: **views and tables are addressed by name** — that is their engine/SQL
 //! identity (one shared namespace). **Saved queries are addressed by `id`** — their
@@ -31,7 +37,7 @@ use std::path::PathBuf;
 use freya::radio::RadioChannel;
 use strata_core::project::{self as project_io, name_ord, ProjectDefs};
 use strata_engine::register::view_order;
-use strata_engine::{TableMeta, ViewMeta};
+use strata_engine::{RegStatus, Registrations, TableMeta, ViewMeta};
 use strata_model::{CatalogKind, ColumnInfo, SavedQuery, SourceDef, TableDef, ViewDef};
 use uuid::Uuid;
 
@@ -59,61 +65,14 @@ pub enum ProjChan {
 
 impl RadioChannel<ProjectState> for ProjChan {}
 
-/// What the engine has said about a def so far. One value, so a row can't be `Ready`
-/// and carry an error at once, and "loaded but never answered" is a first-class state.
-pub enum Reg<T> {
-    /// Awaiting the engine's answer (fresh load, or a def just (re)written).
-    Loading,
-    /// Registered — carrying what registration learned.
-    Ready(T),
-    /// The engine refused it (missing file, bad path, SQL that didn't plan). The def
-    /// still exists — there's just nothing working behind it.
-    Failed(String),
-}
-
-impl<T> Reg<T> {
-    /// The landed answer, if any.
-    pub fn ready(&self) -> Option<&T> {
-        match self {
-            Reg::Ready(t) => Some(t),
-            _ => None,
-        }
-    }
-
-    /// The failure, if any — the sidebar's problem badge.
-    pub fn error(&self) -> Option<&str> {
-        match self {
-            Reg::Failed(e) => Some(e),
-            _ => None,
-        }
-    }
-}
-
-/// One data source: its persisted def + whether its object store went in (W7).
-///
-/// `Reg<()>` and not `Reg<Something>` because connecting genuinely learns nothing —
-/// a store is *registered*, not inferred, so there is no answer to carry. What the
-/// three states mean is the whole value: `Loading` while the pass is out, `Ready` once
-/// the bucket is reachable, `Failed` with what to fix (no region, a profile the
-/// credential chain does not answer for). That is the sidebar pane's status dot.
-pub struct SourceRow {
-    pub def: SourceDef,
-    pub reg: Reg<()>,
-}
-
-impl SourceRow {
-    fn new(def: SourceDef) -> Self {
-        Self {
-            def,
-            reg: Reg::Loading,
-        }
-    }
-}
-
-/// One catalog table: its persisted def + registration state.
+/// One catalog table: its persisted def + what registering it learned.
 pub struct TableRow {
     pub def: TableDef,
-    pub reg: Reg<TableMeta>,
+    /// What the last successful registration inferred — columns and the free row count. `None`
+    /// until one lands, and `None` again after a refusal, which infers nothing. **Whether the
+    /// table is registered right now is not this field**: that is
+    /// [`Registrations`](strata_engine::Registrations)'s to answer, and a row asks it by name.
+    pub meta: Option<TableMeta>,
     /// The profile scan the user has asked for on this table, if any (P3-09).
     ///
     /// A **request**, not a result — the scan's facts live in the freya-query cache under this
@@ -127,7 +86,7 @@ impl TableRow {
     fn new(def: TableDef) -> Self {
         Self {
             def,
-            reg: Reg::Loading,
+            meta: None,
             profile: None,
         }
     }
@@ -135,18 +94,24 @@ impl TableRow {
     /// The row's summary label ("6 cols · 2 partitions") — derived, never stored. Read by the
     /// sidebar rows and by the command palette's TABLES rows, so both say the same thing about
     /// a table.
-    pub fn meta_label(&self) -> String {
-        match &self.reg {
-            Reg::Ready(m) if self.def.partition_cols.is_empty() => {
+    ///
+    /// `status` is the engine's answer for this row, from the join. It decides the two labels
+    /// that are not counts, and it is asked **before** the columns: a table that registered and
+    /// then failed still holds the shape the earlier pass inferred, and a row that answered "6
+    /// cols" about a def the engine has just refused would be the one lie this join could tell.
+    pub fn meta_label(&self, status: Option<&RegStatus>) -> String {
+        match (status, &self.meta) {
+            (None, _) => "loading…".into(),
+            (Some(RegStatus::Failed { .. }), _) => "failed".into(),
+            (Some(RegStatus::Ready), None) => "loading…".into(),
+            (Some(RegStatus::Ready), Some(m)) if self.def.partition_cols.is_empty() => {
                 format!("{} cols", m.columns.len())
             }
-            Reg::Ready(m) => format!(
+            (Some(RegStatus::Ready), Some(m)) => format!(
                 "{} cols · {} partitions",
                 m.columns.len(),
                 self.def.partition_cols.len()
             ),
-            Reg::Loading => "loading…".into(),
-            Reg::Failed(_) => "failed".into(),
         }
     }
 }
@@ -174,10 +139,12 @@ pub struct ViewInfo {
     pub view_deps: Vec<String>,
 }
 
-/// One catalog view: its persisted def + registration state.
+/// One catalog view: its persisted def + what creating it learned.
 pub struct ViewRow {
     pub def: ViewDef,
-    pub reg: Reg<ViewInfo>,
+    /// What the last successful creation learned — see [`ViewInfo`], and [`TableRow::meta`] for
+    /// why whether it is *registered* is not here.
+    pub info: Option<ViewInfo>,
     /// The profile scan asked for on this view — see [`TableRow::profile`]. A view is where a
     /// scan buys the most: it has no files under it, so it reports nothing for free.
     pub profile: Option<ScanId>,
@@ -187,7 +154,7 @@ impl ViewRow {
     fn new(def: ViewDef) -> Self {
         Self {
             def,
-            reg: Reg::Loading,
+            info: None,
             profile: None,
         }
     }
@@ -204,11 +171,12 @@ pub struct ProjectState {
     /// source paths resolve against. Always set: opening a project that can't be
     /// canonicalized is an unrecoverable error, not a rootless fallback.
     pub root: PathBuf,
-    /// The sources the project reads through. Kept sorted by address like every other section is
-    /// sorted by name; **identity is the data source's own name**, which is what a landing answer
-    /// is addressed by. Two data sources may share an address (`s3://lake` read two ways, one
-    /// server reached as two roles) and are then simply neighbours in the sort.
-    pub sources: Vec<SourceRow>,
+    /// The sources the project reads through — **the defs and nothing else**, connecting
+    /// learning nothing a row could carry. Kept sorted by address like every other section is
+    /// sorted by name; **identity is the data source's own name**, which is what an engine
+    /// answer is addressed by. Two data sources may share an address (`s3://lake` read two ways,
+    /// one server reached as two roles) and are then simply neighbours in the sort.
+    pub sources: Vec<SourceDef>,
     pub tables: Vec<TableRow>,
     pub views: Vec<ViewRow>,
     pub saved_queries: Vec<SavedQuery>,
@@ -217,9 +185,9 @@ pub struct ProjectState {
 /// One def the engine refused — a row of the Problems drawer's **Project** tab.
 ///
 /// Kept as a projection rather than a stored list, because a registration failure already *is*
-/// live state: `Reg::Failed` on the row. Re-deriving it is what makes the drawer retract the row
-/// the moment a re-scan fixes the def, with nothing to invalidate — the same property the SQL
-/// diagnostics have, reached a different way.
+/// live state: the engine's own answer for the def, joined onto its row. Re-deriving it is what
+/// makes the drawer retract the row the moment a re-scan fixes the def, with nothing to
+/// invalidate — the same property the SQL diagnostics have, reached a different way.
 #[derive(Clone, PartialEq, Debug)]
 pub struct RegistrationFault {
     /// What kind of def it is — the row says which rather than making the user infer it from
@@ -272,27 +240,40 @@ impl ProjectState {
     ///
     /// Saved queries can't appear: they are stored strings that are never registered, so there is
     /// no engine answer for them to have failed.
-    pub fn registration_faults(&self) -> Vec<RegistrationFault> {
-        let sources = self.sources.iter().filter_map(|r| {
-            r.reg.error().map(|why| RegistrationFault {
-                kind: FaultKind::Source,
-                name: r.def.named(),
+    ///
+    /// The refusals are the **engine's**, joined onto this store's rows by name: the drawer
+    /// lists the project's own defs, in the project's own order, and says about each one what the
+    /// engine last said. Walking the ledger instead would list a name whose def this store no
+    /// longer holds.
+    pub fn registration_faults(&self, registrations: &Registrations) -> Vec<RegistrationFault> {
+        let fault = |kind: FaultKind, name: String, why: Option<&str>| {
+            why.map(|why| RegistrationFault {
+                kind,
+                name,
                 why: why.to_string(),
             })
+        };
+        let sources = self.sources.iter().filter_map(|def| {
+            let name = def.named();
+            fault(
+                FaultKind::Source,
+                name.clone(),
+                registrations.sources.problem(&name),
+            )
         });
         let tables = self.tables.iter().filter_map(|r| {
-            r.reg.error().map(|why| RegistrationFault {
-                kind: FaultKind::Table,
-                name: r.def.name.clone(),
-                why: why.to_string(),
-            })
+            fault(
+                FaultKind::Table,
+                r.def.name.clone(),
+                registrations.workspace.problem(&r.def.name),
+            )
         });
         let views = self.views.iter().filter_map(|r| {
-            r.reg.error().map(|why| RegistrationFault {
-                kind: FaultKind::View,
-                name: r.def.name.clone(),
-                why: why.to_string(),
-            })
+            fault(
+                FaultKind::View,
+                r.def.name.clone(),
+                registrations.workspace.problem(&r.def.name),
+            )
         });
         sources.chain(tables).chain(views).collect()
     }
@@ -304,30 +285,29 @@ impl ProjectState {
     /// scope strip, where the list itself is built only when the Project scope is actually on
     /// screen. Going through the list would clone two `String`s per failed def just to drop them
     /// again a line later.
-    pub fn registration_fault_count(&self) -> usize {
-        self.sources
+    pub fn registration_fault_count(&self, registrations: &Registrations) -> usize {
+        let workspace = self
+            .tables
             .iter()
-            .filter(|r| r.reg.error().is_some())
-            .count()
-            + self
-                .tables
-                .iter()
-                .filter(|r| r.reg.error().is_some())
-                .count()
-            + self
-                .views
-                .iter()
-                .filter(|r| r.reg.error().is_some())
-                .count()
+            .map(|r| r.def.name.as_str())
+            .chain(self.views.iter().map(|r| r.def.name.as_str()))
+            .filter(|name| registrations.workspace.problem(name).is_some())
+            .count();
+        let sources = self
+            .sources
+            .iter()
+            .filter(|def| registrations.sources.problem(&def.named()).is_some())
+            .count();
+        workspace + sources
     }
 
-    /// The store for a project loaded (or scaffolded) from `root` — every row starts
-    /// `Loading`, awaiting registration.
+    /// The store for a project loaded (or scaffolded) from `root` — the defs, with nothing
+    /// learned about any of them until the registration pass answers.
     pub fn from_defs(defs: ProjectDefs, root: PathBuf) -> Self {
         Self {
             name: defs.name,
             root,
-            sources: defs.sources.into_iter().map(SourceRow::new).collect(),
+            sources: defs.sources,
             tables: defs.tables.into_iter().map(TableRow::new).collect(),
             views: defs.views.into_iter().map(ViewRow::new).collect(),
             saved_queries: defs.saved_queries,
@@ -339,7 +319,7 @@ impl ProjectState {
     pub fn defs(&self) -> ProjectDefs {
         ProjectDefs {
             name: self.name.clone(),
-            sources: self.sources.iter().map(|r| r.def.clone()).collect(),
+            sources: self.sources.clone(),
             tables: self.tables.iter().map(|r| r.def.clone()).collect(),
             views: self.views.iter().map(|r| r.def.clone()).collect(),
             saved_queries: self.saved_queries.clone(),
@@ -404,26 +384,6 @@ impl ProjectState {
         ))
     }
 
-    /// Land a connected object store on its row (W7).
-    ///
-    /// Addressed by the data source's **name** and **not** by its address, for the reason the name
-    /// is the identity at all: two data sources may share an address, and an address-keyed lookup
-    /// would land both answers on whichever row came first and leave the other `Loading` for the
-    /// life of the window, with no error anywhere to say so.
-    pub fn source_registered(&mut self, name: &str) {
-        if let Some(c) = self.sources.iter_mut().find(|c| c.def.named() == name) {
-            c.reg = Reg::Ready(());
-        }
-    }
-
-    /// Land a data source the engine refused on its row — what to fix, in the pane's tooltip.
-    /// Addressed like [`source_registered`](Self::source_registered).
-    pub fn source_failed(&mut self, name: &str, error: String) {
-        if let Some(c) = self.sources.iter_mut().find(|c| c.def.named() == name) {
-            c.reg = Reg::Failed(error);
-        }
-    }
-
     /// Land a table registration answer on its row.
     ///
     /// The one funnel every table answer arrives through — project open, a catalog re-scan
@@ -435,48 +395,25 @@ impl ProjectState {
     /// own spelling. An `INSERT`'s row-count refresh names the table the *planner* resolved
     /// (ED-05), which folds an unquoted identifier while the def keeps whatever was typed.
     pub fn table_registered(&mut self, name: &str, meta: TableMeta) {
+        self.land_table(name, Some(meta));
+    }
+
+    /// Land a **refused** table registration: the row keeps its def and drops what an earlier
+    /// pass had inferred, a refusal having learned nothing. Why it was refused is the engine's
+    /// ([`Registrations`]), not a second copy here.
+    pub fn table_failed(&mut self, name: &str) {
+        self.land_table(name, None);
+    }
+
+    /// What a table registration answer leaves on its row, either way — see
+    /// [`table_registered`](Self::table_registered).
+    fn land_table(&mut self, name: &str, meta: Option<TableMeta>) {
         if let Some(r) = self
             .tables
             .iter_mut()
             .find(|r| Self::same_name(&r.def.name, name))
         {
-            r.reg = Reg::Ready(meta);
-            r.profile = None;
-        }
-        self.invalidate_readers(name);
-    }
-
-    /// Land a **re-read** of a table's own facts — [`table_registered`](Self::table_registered)
-    /// for an answer that did not come from a registration (ED-05's `INSERT`).
-    ///
-    /// Skipped when a scan pass has claimed the row, which `reset_rows` says by putting it back
-    /// to `Loading`: that pass re-registers against whatever is on disk *now* and will land its
-    /// own answer, and a re-read that started earlier would otherwise overwrite it with the state
-    /// from before — silently undoing a re-scan the user asked for. The check and the write share
-    /// one write guard, which the pass also has to take, so they cannot interleave.
-    ///
-    /// Two re-reads racing each other still land last-writer-wins, and the loser can be the older
-    /// answer. That is a count one write behind until the next statement, refresh or open — the
-    /// same staleness the request-dropping path had before it, self-correcting, and not worth a
-    /// per-row sequence number.
-    pub fn table_reread(&mut self, name: &str, meta: TableMeta) {
-        let claimed = self
-            .tables
-            .iter()
-            .any(|r| Self::same_name(&r.def.name, name) && matches!(r.reg, Reg::Loading));
-        if !claimed {
-            self.table_registered(name, meta);
-        }
-    }
-
-    /// Land a failed table registration on its row.
-    pub fn table_failed(&mut self, name: &str, error: String) {
-        if let Some(r) = self
-            .tables
-            .iter_mut()
-            .find(|r| Self::same_name(&r.def.name, name))
-        {
-            r.reg = Reg::Failed(error);
+            r.meta = meta;
             r.profile = None;
         }
         self.invalidate_readers(name);
@@ -533,33 +470,29 @@ impl ProjectState {
                     .any(|v| Self::same_name(&v.def.name, a) && !Self::same_name(&v.def.name, name))
             })
             .collect();
-        if let Some(v) = self.views.iter_mut().find(|v| v.def.name == name) {
-            v.reg = Reg::Ready(ViewInfo {
+        self.land_view(
+            name,
+            Some(ViewInfo {
                 columns: meta.columns,
                 deps: meta.tables,
                 remote_deps: meta.remote,
                 view_deps,
-            });
-            v.profile = None;
-        }
+            }),
+        );
     }
 
-    /// Land a failed view creation on its row.
-    pub fn view_failed(&mut self, name: &str, error: String) {
+    /// Land a **refused** view creation: the row drops what an earlier creation learned, for
+    /// [`table_failed`](Self::table_failed)'s reason.
+    pub fn view_failed(&mut self, name: &str) {
+        self.land_view(name, None);
+    }
+
+    /// What a view creation answer leaves on its row, either way.
+    fn land_view(&mut self, name: &str, info: Option<ViewInfo>) {
         if let Some(v) = self.views.iter_mut().find(|v| v.def.name == name) {
-            v.reg = Reg::Failed(error);
+            v.info = info;
             v.profile = None;
         }
-    }
-
-    /// A table's problem, if any — the engine refused its def (missing file, bad path).
-    ///
-    /// Takes a row rather than `&self` because a table's validity is entirely local: it
-    /// is the answer already landed on the row. An **unanswered** row is not a broken one,
-    /// so `Loading` reports nothing — otherwise a re-scan would flash a triangle over
-    /// every table while it retried them.
-    pub fn table_problem(row: &TableRow) -> Option<String> {
-        row.reg.error().map(str::to_owned)
     }
 
     /// A view's problem, if any:
@@ -587,12 +520,12 @@ impl ProjectState {
     /// why it is flagged as *left invalid*. It is also why validity is derived from `deps`
     /// rather than by re-issuing `CREATE OR REPLACE VIEW`: a re-plan catches a directly
     /// missing base table but a view-of-a-view masks it behind the same live `Arc`.
-    pub fn view_problem(&self, row: &ViewRow) -> Option<String> {
-        let info = match &row.reg {
-            Reg::Failed(e) => return Some(e.clone()),
-            Reg::Loading => return None,
-            Reg::Ready(info) => info,
-        };
+    pub fn view_problem(&self, row: &ViewRow, registrations: &Registrations) -> Option<String> {
+        let answers = &registrations.workspace;
+        if let Some(why) = answers.problem(&row.def.name) {
+            return Some(why.to_string());
+        }
+        let info = row.info.as_ref()?;
         info.deps.iter().find_map(|dep| {
             match self
                 .tables
@@ -600,7 +533,7 @@ impl ProjectState {
                 .find(|t| Self::same_name(&t.def.name, dep))
             {
                 None => Some(format!("Reads {dep}, which is no longer in the catalog.")),
-                Some(t) if matches!(t.reg, Reg::Failed(_)) => {
+                Some(t) if answers.problem(&t.def.name).is_some() => {
                     Some(format!("Reads {dep}, which failed to load."))
                 }
                 Some(_) => None,
@@ -698,7 +631,7 @@ impl ProjectState {
             .iter()
             .filter(|v| !Self::same_name(&v.def.name, name))
             .filter(|v| {
-                let Some(info) = v.reg.ready() else {
+                let Some(info) = v.info.as_ref() else {
                     return false;
                 };
                 match kind {
@@ -711,77 +644,6 @@ impl ProjectState {
             })
             .map(|v| v.def.name.clone())
             .collect()
-    }
-
-    /// Reset every data source row to `Loading` — the start of a whole-catalog re-scan
-    /// (W7). Same reasoning as [`reload_tables`](Self::reload_tables): mid-pass the store
-    /// has no verdict, so keeping the old one would make `Failed` mean two things.
-    ///
-    /// Data sources are re-connected on ↻ and *not* on a single table's Refresh, because a
-    /// re-connect is exactly what fixes the case ↻ exists for — the user runs `aws sso
-    /// login`, or fills in the region, and presses it.
-    pub fn reload_sources(&mut self) {
-        for c in &mut self.sources {
-            c.reg = Reg::Loading;
-        }
-    }
-
-    /// Reset every table row to `Loading` — the start of a catalog re-scan. The defs are
-    /// untouched; only what the engine last said is dropped, because that is the truth: mid-re-scan
-    /// the store has no verdict on this row, and keeping the old error here would make `Failed`
-    /// mean two different things.
-    ///
-    /// Display continuity is the *sidebar's* problem, not the store's, and it solves it without
-    /// lying: the row's status slot goes on showing the last verdict it had until a new one lands
-    /// (see `views/sidebar/catalog/entry.rs`), so ↻ on a broken row doesn't blink its triangle off
-    /// and back on. Un-flagging it here would have been the blink; keeping the error here would
-    /// have been a claim we can't make.
-    pub fn reload_tables(&mut self) {
-        for t in &mut self.tables {
-            t.reg = Reg::Loading;
-        }
-    }
-
-    /// Reset every view row to `Loading` — the view half of a re-scan.
-    ///
-    /// Views are re-created after the tables land, and the reason is subtle enough to be worth
-    /// stating: a view captures each base table **by `Arc`** in the plan it stores at `CREATE
-    /// VIEW` time, and the table's *name* is never re-resolved at query time (verified against
-    /// DataFusion 54 for D10/D11). So re-registering `orders` does not break a view over it —
-    /// worse, the view keeps scanning the *old* provider with the *old* inferred schema. Only
-    /// re-issuing `CREATE OR REPLACE VIEW` re-plans it against what the re-scan just found.
-    ///
-    /// That is a *refresh*, not a validity check: a view-of-a-view masks a missing table behind
-    /// the still-live inner `Arc`, which is why P3-04 derives validity from `deps` instead.
-    pub fn reload_views(&mut self) {
-        for v in &mut self.views {
-            v.reg = Reg::Loading;
-        }
-    }
-
-    /// Reset **one** table row to `Loading` — the start of a row's own Refresh (P3-06). Same
-    /// reasoning as [`reload_tables`](Self::reload_tables), scoped to the row the user asked
-    /// about; every other row keeps the verdict it already has.
-    ///
-    /// Case-insensitively, like [`remove_table`](Self::remove_table): the name reaching a re-scan
-    /// is not always a def's own spelling, because a request can come from the engine, which
-    /// answers under the planner's identity (see [`table_registered`](Self::table_registered)).
-    pub fn reload_table(&mut self, name: &str) {
-        if let Some(t) = self
-            .tables
-            .iter_mut()
-            .find(|t| Self::same_name(&t.def.name, name))
-        {
-            t.reg = Reg::Loading;
-        }
-    }
-
-    /// Reset **one** view row to `Loading` — the views a single-table Refresh re-creates
-    /// ([`views_to_refresh`](Self::views_to_refresh)).
-    pub fn reload_view(&mut self, name: &str) {
-        if let Some(v) = self.views.iter_mut().find(|v| v.def.name == name) {
-            v.reg = Reg::Loading;
-        }
     }
 
     /// Every view a **Refresh** of the table `name` must re-create, in dependency order.
@@ -800,10 +662,11 @@ impl ProjectState {
     ///   case Refresh most needs to serve is exactly that: the user fixes a path, refreshes the
     ///   row, and the views that couldn't plan over it come back. Re-planning is cheap and
     ///   idempotent, so trying is strictly better than leaving them broken.
-    pub fn views_to_refresh(&self, name: &str) -> Vec<String> {
+    pub fn views_to_refresh(&self, name: &str, registrations: &Registrations) -> Vec<String> {
         let mut views = self.dependent_views(CatalogKind::Table, name);
         for v in &self.views {
-            if matches!(v.reg, Reg::Failed(_)) && !views.iter().any(|n| n == &v.def.name) {
+            let failing = registrations.workspace.problem(&v.def.name).is_some();
+            if failing && !views.iter().any(|n| n == &v.def.name) {
                 views.push(v.def.name.clone());
             }
         }
@@ -821,7 +684,7 @@ impl ProjectState {
             self.views
                 .iter()
                 .find(|v| Self::same_name(&v.def.name, name))
-                .and_then(|v| v.reg.ready())
+                .and_then(|v| v.info.as_ref())
                 .map(|info| info.view_deps.clone())
                 .unwrap_or_default()
         })
@@ -948,11 +811,11 @@ impl ProjectState {
     /// dropping it is `Sources::disconnect`, owed by the gesture that knows both names.
     pub fn upsert_source(&mut self, def: SourceDef) {
         let name = def.named();
-        self.sources.retain(|c| c.def.named() != name);
-        let at = self.sources.partition_point(|c| {
-            name_ord(c.def.setting("address"), def.setting("address")).is_lt()
-        });
-        self.sources.insert(at, SourceRow::new(def));
+        self.sources.retain(|c| c.named() != name);
+        let at = self
+            .sources
+            .partition_point(|c| name_ord(c.setting("address"), def.setting("address")).is_lt());
+        self.sources.insert(at, def);
     }
 
     /// Save a data source that was **renamed**: the row moves, and every table reading through it
@@ -980,25 +843,21 @@ impl ProjectState {
         }
     }
 
-    /// Edit a data source's def **in place**, keeping the row's `Reg` — the schemas picker's
-    /// write, and the only one here that does not reset a row to `Loading`.
+    /// Edit a data source's def **in place** — the schemas picker's write.
     ///
     /// Legitimate exactly because the field it exists for is **display-only**: registration
     /// exposes every schema a data source can reach and the def's own `schemas` scopes what
     /// Strata shows, so what the last pass answered about this data source is still true after
-    /// the write. Going through [`upsert_source`](Self::upsert_source) instead would
-    /// replace the row with a fresh `Reg::Loading` that only a whole-catalog re-scan could
-    /// answer: a permanent spinner over a change that touched no engine state.
+    /// the write, and nothing here asks the engine to answer again.
     ///
     /// `edit` must not move the def's identity — the row keeps its slot and its key, so a URL or
     /// address change here would leave the list sorted wrong and the engine registered under a
     /// URL no def names. That edit is the data source editor's, and it goes through `upsert`.
-    ///
     pub fn update_source_def(&mut self, name: &str, edit: impl FnOnce(&mut SourceDef)) {
-        let Some(row) = self.sources.iter_mut().find(|c| c.def.named() == name) else {
+        let Some(def) = self.sources.iter_mut().find(|c| c.named() == name) else {
             return;
         };
-        edit(&mut row.def);
+        edit(def);
     }
 
     /// Forget the data source called `name` — the store half of the pane's Forget. Hands back the
@@ -1008,14 +867,73 @@ impl ProjectState {
     /// here: those fold, because a table or a view name is one the user may also write in SQL.
     /// A data source is addressed by gesture rather than by typing — the callers pass back the
     /// spelling they read off the row — so there is no second spelling to reconcile with.
-    pub fn remove_source(&mut self, name: &str) -> Option<(usize, SourceRow)> {
-        let at = self.sources.iter().position(|c| c.def.named() == name)?;
+    pub fn remove_source(&mut self, name: &str) -> Option<(usize, SourceDef)> {
+        let at = self.sources.iter().position(|c| c.named() == name)?;
         Some((at, self.sources.remove(at)))
     }
 
-    /// Put a row back where [`remove_source`](Self::remove_source) took it from.
-    pub fn restore_source(&mut self, at: usize, row: SourceRow) {
-        self.sources.insert(at.min(self.sources.len()), row);
+    /// Put a def back where [`remove_source`](Self::remove_source) took it from.
+    pub fn restore_source(&mut self, at: usize, def: SourceDef) {
+        self.sources.insert(at.min(self.sources.len()), def);
+    }
+}
+
+/// **The engine's half of a catalog row, composed by hand**: what the ledger says about each
+/// name, without an engine to answer for it.
+///
+/// Here rather than in one test module because five surfaces render this join — the tree, the
+/// palette, the inspector, the Problems drawer and the two editor windows — and each of them has
+/// to be able to put a def into every state the ledger can report it in.
+#[cfg(test)]
+#[derive(Clone, Default)]
+pub struct Answered {
+    workspace: std::collections::BTreeMap<String, RegStatus>,
+    sources: std::collections::BTreeMap<String, RegStatus>,
+}
+
+#[cfg(test)]
+impl Answered {
+    pub fn ready(mut self, name: &str) -> Self {
+        self.workspace.insert(name.to_string(), RegStatus::Ready);
+        self
+    }
+
+    pub fn failed(mut self, name: &str, why: &str) -> Self {
+        self.workspace.insert(name.to_string(), refused(why));
+        self
+    }
+
+    /// Take a name back out — a def the engine has not answered for, which is what a project
+    /// open looks like before the pass reaches it and what the ledger's *absence* means.
+    pub fn unanswered(mut self, name: &str) -> Self {
+        self.workspace.remove(name);
+        self
+    }
+
+    pub fn source_ready(mut self, name: &str) -> Self {
+        self.sources.insert(name.to_string(), RegStatus::Ready);
+        self
+    }
+
+    pub fn source_failed(mut self, name: &str, why: &str) -> Self {
+        self.sources.insert(name.to_string(), refused(why));
+        self
+    }
+
+    pub fn read(&self) -> Registrations {
+        let stamp = strata_engine::CatalogGen::default();
+        Registrations {
+            workspace: strata_engine::Answers::recorded(self.workspace.clone(), stamp),
+            sources: strata_engine::Answers::recorded(self.sources.clone(), stamp),
+            generation: stamp,
+        }
+    }
+}
+
+#[cfg(test)]
+fn refused(why: &str) -> RegStatus {
+    RegStatus::Failed {
+        reason: why.to_string(),
     }
 }
 
@@ -1023,7 +941,7 @@ impl ProjectState {
 mod tests {
     use super::*;
     use strata_engine::sources::postgres::Pg;
-    use strata_engine::SourceKind;
+    use strata_engine::{Answers, CatalogGen, SourceKind};
     use strata_model::{SourceDef, SourceFormat, TableOrigin};
 
     fn table_def(name: &str) -> TableDef {
@@ -1063,7 +981,7 @@ mod tests {
                 rows: Some(10),
             },
         );
-        p.table_failed("users", "no such file".into());
+        p.table_failed("users");
         p.view_registered(
             "orders_daily",
             ViewMeta {
@@ -1076,48 +994,35 @@ mod tests {
         p
     }
 
-    /// A re-scan drops what the engine last said and nothing else: every row goes back to
-    /// `Loading` — including the one that **failed**, which is the case ↻ most needs to serve
-    /// (the user fixed the path and pressed refresh; keeping the stale error would read as if
-    /// nothing was retried).
-    #[test]
-    fn reloading_resets_every_registration_state_including_failures() {
-        let mut p = settled();
-        assert!(p.tables[0].reg.ready().is_some());
-        assert_eq!(p.tables[1].reg.error(), Some("no such file"));
-        assert!(p.views[0].reg.ready().is_some());
-
-        p.reload_tables();
-        p.reload_views();
-
-        assert!(p.tables.iter().all(|t| matches!(t.reg, Reg::Loading)));
-        assert!(p.views.iter().all(|v| matches!(v.reg, Reg::Loading)));
+    /// What the engine answered about [`settled`]'s defs.
+    fn answered() -> Answered {
+        Answered::default()
+            .ready("orders")
+            .failed("users", "no such file")
+            .ready("orders_daily")
     }
 
-    /// The defs are the *project*; a re-scan only re-asks the engine about them. Nothing
-    /// persisted may move — otherwise ↻ would be a mutation of the project file's contents.
+    /// **A row keeps only what registration learned, and a refusal learned nothing.** The
+    /// verdict itself is not here at all — it is the engine's, joined on by name — so the store
+    /// has no state that can disagree with it, and the defs are untouched either way.
     #[test]
-    fn reloading_leaves_the_defs_untouched() {
+    fn a_row_keeps_what_was_learned_and_a_refusal_drops_it() {
         let mut p = settled();
+        assert!(p.tables[0].meta.is_some(), "the settled table's shape");
+        assert!(
+            p.tables[1].meta.is_none(),
+            "the refused one learned nothing"
+        );
+        assert!(p.views[0].info.is_some());
         let before = p.defs();
 
-        p.reload_tables();
-        p.reload_views();
+        p.table_failed("orders");
+        p.view_failed("orders_daily");
 
-        let after = p.defs();
-        assert_eq!(before.name, after.name);
-        assert_eq!(
-            before.tables.iter().map(|t| &t.name).collect::<Vec<_>>(),
-            after.tables.iter().map(|t| &t.name).collect::<Vec<_>>()
-        );
-        assert_eq!(before.tables[0].paths, after.tables[0].paths);
-        assert_eq!(
-            before.tables[0].partition_cols,
-            after.tables[0].partition_cols
-        );
-        assert_eq!(before.views[0].sql, after.views[0].sql);
-        assert_eq!(before.saved_queries.len(), after.saved_queries.len());
-        assert_eq!(before.saved_queries[0].id, after.saved_queries[0].id);
+        assert!(p.tables[0].meta.is_none(), "dropped, not kept stale");
+        assert!(p.views[0].info.is_none());
+        assert_eq!(before.tables[0].paths, p.defs().tables[0].paths);
+        assert_eq!(before.views[0].sql, p.defs().views[0].sql);
     }
 
     /// Def identity is `same_name`, not `==`. The engine folds unquoted identifiers, so
@@ -1150,12 +1055,10 @@ mod tests {
         assert_eq!(p.tables.len(), 1);
     }
 
-    /// A landing answer replaces `Loading` in place — the second half of the round trip, so
-    /// the reset isn't a one-way door into a permanently unanswered catalog.
+    /// A landing answer lands on the row it names and on no other.
     #[test]
-    fn a_reloaded_row_lands_its_new_answer() {
+    fn a_landing_answer_lands_on_its_own_row() {
         let mut p = settled();
-        p.reload_tables();
 
         p.table_registered(
             "users",
@@ -1166,36 +1069,12 @@ mod tests {
         );
 
         assert_eq!(p.tables[1].def.name, "users");
-        assert_eq!(p.tables[1].reg.ready().and_then(|m| m.rows), Some(3));
-        assert!(matches!(p.tables[0].reg, Reg::Loading));
-    }
-
-    /// **A re-read never overwrites a scan pass's answer** (ED-05). An `INSERT`'s row-count
-    /// re-read runs outside the scan driver's claim, so a `↻` pressed while it is in flight would
-    /// otherwise be silently undone: the pass re-registers against what is on disk now, and the
-    /// older read lands on top of it. A row back at `Loading` is the pass saying it has claimed
-    /// this row, and that is what the re-read stands down for.
-    #[test]
-    fn a_re_read_stands_down_for_a_scan_that_claimed_the_row() {
-        let mut p = settled();
-        let rows = |p: &ProjectState, at: usize| p.tables[at].reg.ready().and_then(|m| m.rows);
-        let meta = |n| TableMeta {
-            columns: Vec::new(),
-            rows: Some(n),
-        };
-
-        p.table_reread("users", meta(9));
-        assert_eq!(rows(&p, 1), Some(9));
-
-        p.reload_table("users");
-        p.table_reread("users", meta(1));
-        assert!(
-            matches!(p.tables[1].reg, Reg::Loading),
-            "the row is still the pass's to answer"
+        assert_eq!(p.tables[1].meta.as_ref().and_then(|m| m.rows), Some(3));
+        assert_eq!(
+            p.tables[0].meta.as_ref().and_then(|m| m.rows),
+            Some(10),
+            "its neighbour is untouched"
         );
-
-        p.table_registered("users", meta(12));
-        assert_eq!(rows(&p, 1), Some(12));
     }
 
     fn view_meta(deps: &[&str]) -> ViewMeta {
@@ -1208,26 +1087,23 @@ mod tests {
     }
 
     /// A table says what the engine said, and *only* when the engine has refused it. The
-    /// unanswered case is the one worth pinning: a re-scan resets every row to `Loading`, and
-    /// treating that as a problem would put a triangle on the whole catalog while it retried.
+    /// unanswered case is the one worth pinning: a def the ledger has no entry for is one no
+    /// pass has reached, and treating that as a problem would put a triangle on the whole
+    /// catalog at every open.
     #[test]
     fn a_table_is_invalid_only_once_registration_has_actually_failed() {
-        let p = settled();
+        let answers = answered().read();
 
-        assert_eq!(ProjectState::table_problem(&p.tables[0]), None, "Ready");
+        assert_eq!(answers.workspace.problem("orders"), None, "registered");
         assert_eq!(
-            ProjectState::table_problem(&p.tables[1]).as_deref(),
+            answers.workspace.problem("users"),
             Some("no such file"),
-            "Failed carries the engine's own reason"
+            "refused, carrying the engine's own reason"
         );
-
-        let mut p = p;
-        p.reload_tables();
-        assert!(
-            p.tables
-                .iter()
-                .all(|t| ProjectState::table_problem(t).is_none()),
-            "an unanswered row is not a broken one"
+        assert_eq!(
+            Registrations::default().workspace.problem("users"),
+            None,
+            "an unanswered def is not a broken one"
         );
     }
 
@@ -1236,10 +1112,13 @@ mod tests {
     #[test]
     fn a_view_reports_the_failure_the_engine_gave_it() {
         let mut p = settled();
-        p.view_failed("orders_daily", "Schema error: No field named x".into());
+        p.view_failed("orders_daily");
+        let answers = answered()
+            .failed("orders_daily", "Schema error: No field named x")
+            .read();
 
         assert_eq!(
-            p.view_problem(&p.views[0]).as_deref(),
+            p.view_problem(&p.views[0], &answers).as_deref(),
             Some("Schema error: No field named x")
         );
     }
@@ -1250,12 +1129,17 @@ mod tests {
     #[test]
     fn a_view_over_a_dropped_table_is_invalid() {
         let mut p = settled();
-        assert_eq!(p.view_problem(&p.views[0]), None, "healthy to begin with");
+        let answers = answered().read();
+        assert_eq!(
+            p.view_problem(&p.views[0], &answers),
+            None,
+            "healthy to begin with"
+        );
 
         p.remove_table("orders");
 
         assert_eq!(
-            p.view_problem(&p.views[0]).as_deref(),
+            p.view_problem(&p.views[0], &answers).as_deref(),
             Some("Reads orders, which is no longer in the catalog.")
         );
     }
@@ -1265,41 +1149,37 @@ mod tests {
     #[test]
     fn a_view_over_a_failed_table_is_invalid() {
         let mut p = settled();
-        p.table_failed("orders", "No such file or directory (os error 2)".into());
+        p.table_failed("orders");
+        let answers = answered()
+            .failed("orders", "No such file or directory (os error 2)")
+            .read();
 
         assert_eq!(
-            p.view_problem(&p.views[0]).as_deref(),
+            p.view_problem(&p.views[0], &answers).as_deref(),
             Some("Reads orders, which failed to load.")
         );
     }
 
-    /// A dep that is merely *unanswered* is not a problem. Mid-re-scan every table is
-    /// `Loading` for a moment, and flagging then would strobe the whole VIEWS section.
+    /// A dep the engine has not answered for is not a problem. At project open that is every
+    /// table for a moment, and flagging then would strobe the whole VIEWS section.
     #[test]
-    fn a_view_whose_base_table_is_still_loading_is_not_flagged() {
-        let mut p = settled();
-        p.reload_tables();
+    fn a_view_whose_base_table_has_not_been_answered_for_is_not_flagged() {
+        let p = settled();
+        let answers = answered().unanswered("orders").read();
 
-        assert_eq!(p.view_problem(&p.views[0]), None);
+        assert_eq!(p.view_problem(&p.views[0], &answers), None);
     }
 
     /// Nothing is stored, so nothing has to be invalidated: the answer follows the catalog.
     /// Re-register the table and the view is simply valid again on the next read.
     #[test]
     fn a_views_validity_heals_when_its_base_table_comes_back() {
-        let mut p = settled();
-        p.table_failed("orders", "gone".into());
-        assert!(p.view_problem(&p.views[0]).is_some());
+        let p = settled();
+        assert!(p
+            .view_problem(&p.views[0], &answered().failed("orders", "gone").read())
+            .is_some());
 
-        p.table_registered(
-            "orders",
-            TableMeta {
-                columns: Vec::new(),
-                rows: Some(10),
-            },
-        );
-
-        assert_eq!(p.view_problem(&p.views[0]), None);
+        assert_eq!(p.view_problem(&p.views[0], &answered().read()), None);
     }
 
     /// Deps are transitive base tables (the planner inlines a view-of-a-view at creation), so
@@ -1322,7 +1202,8 @@ mod tests {
             .find(|v| v.def.name == "orders_weekly")
             .expect("the nested view is in the catalog");
         assert_eq!(
-            p.view_problem(outer).as_deref(),
+            p.view_problem(outer, &answered().ready("orders_weekly").read())
+                .as_deref(),
             Some("Reads orders, which is no longer in the catalog.")
         );
     }
@@ -1425,7 +1306,7 @@ mod tests {
     #[test]
     fn a_view_is_never_listed_as_its_own_dependent() {
         let mut p = settled();
-        p.views[0].reg = Reg::Ready(ViewInfo {
+        p.views[0].info = Some(ViewInfo {
             columns: Vec::new(),
             deps: Vec::new(),
             remote_deps: Vec::new(),
@@ -1492,7 +1373,7 @@ mod tests {
         let mut p = settled();
         assert_eq!(p.dependent_views(CatalogKind::Table, "orders").len(), 1);
 
-        p.reload_views();
+        p.views[0].info = None;
 
         assert!(p.dependent_views(CatalogKind::Table, "orders").is_empty());
     }
@@ -1510,30 +1391,6 @@ mod tests {
         );
     }
 
-    /// A row's Refresh touches **that row**, and the whole point is that nothing else moves:
-    /// its neighbour keeps the verdict it already had, so the pane doesn't read as a full
-    /// re-scan when the user asked about one table.
-    #[test]
-    fn refreshing_one_table_leaves_every_other_rows_verdict_alone() {
-        let mut p = settled();
-
-        p.reload_table("orders");
-
-        assert!(
-            matches!(p.tables[0].reg, Reg::Loading),
-            "`orders` is asked again"
-        );
-        assert_eq!(
-            p.tables[1].reg.error(),
-            Some("no such file"),
-            "`users` still says what it said"
-        );
-        assert!(
-            p.views[0].reg.ready().is_some(),
-            "and the views are untouched"
-        );
-    }
-
     /// The headline: refreshing a table re-creates the views that **read** it. A view's plan
     /// captured the old provider by `Arc`, so leaving it alone would leave it scanning the
     /// files the refresh just replaced — silently, with the old schema.
@@ -1547,7 +1404,7 @@ mod tests {
         p.view_registered("user_signups", view_meta(&["users"]));
 
         assert_eq!(
-            p.views_to_refresh("orders"),
+            p.views_to_refresh("orders", &answered().ready("user_signups").read()),
             vec!["orders_daily".to_string()],
             "the reader of `orders`, not the reader of `users`"
         );
@@ -1569,7 +1426,7 @@ mod tests {
         );
 
         assert_eq!(
-            p.views_to_refresh("orders"),
+            p.views_to_refresh("orders", &answered().ready("a_orders_weekly").read()),
             vec!["orders_daily".to_string(), "a_orders_weekly".to_string()],
             "the view that is read is re-created before the view that reads it"
         );
@@ -1585,9 +1442,12 @@ mod tests {
             name: "user_signups".into(),
             sql: "SELECT * FROM users".into(),
         });
-        p.view_failed("user_signups", "table 'users' not found".into());
+        p.view_failed("user_signups");
+        let answers = answered()
+            .failed("user_signups", "table 'users' not found")
+            .read();
 
-        let refreshed = p.views_to_refresh("orders");
+        let refreshed = p.views_to_refresh("orders", &answers);
         assert!(
             refreshed.contains(&"user_signups".to_string()),
             "a broken view is retried even though it never recorded a dep: {refreshed:?}"
@@ -1633,7 +1493,7 @@ mod tests {
     #[test]
     fn refresh_order_keeps_views_that_have_not_answered_yet() {
         let mut p = settled();
-        p.reload_views();
+        p.views[0].info = None;
 
         let names: Vec<String> = p.views.iter().map(|v| v.def.name.clone()).collect();
         assert_eq!(p.refresh_order(names.clone()), names);
@@ -1699,7 +1559,7 @@ mod tests {
         );
 
         p.request_profile(CatalogKind::Table, "orders");
-        p.table_failed("orders", "no such file".into());
+        p.table_failed("orders");
         assert_eq!(p.profile_scan(CatalogKind::Table, "orders"), None);
 
         p.request_profile(CatalogKind::View, "orders_daily");
@@ -1778,7 +1638,16 @@ mod tests {
         );
         p.view_registered("orders_daily", view_meta(&["orders"]));
 
-        assert_eq!(p.view_problem(&p.views[0]), None);
+        assert_eq!(
+            p.view_problem(
+                &p.views[0],
+                &Answered::default()
+                    .ready("Orders")
+                    .ready("orders_daily")
+                    .read()
+            ),
+            None
+        );
     }
 
     /// Two data sources over **one bucket** — the pair every data source lookup has to tell apart,
@@ -1854,17 +1723,17 @@ mod tests {
     fn remove_source_matches_the_name_and_not_the_address() {
         let mut p = two_stores_one_bucket();
 
-        let (at, row) = p.remove_source("lake2").expect("the GCS data source");
-        assert_eq!(row.def.named(), "lake2");
+        let (at, def) = p.remove_source("lake2").expect("the GCS data source");
+        assert_eq!(def.named(), "lake2");
         assert_eq!(
-            p.sources.iter().map(|c| c.def.named()).collect::<Vec<_>>(),
+            p.sources.iter().map(SourceDef::named).collect::<Vec<_>>(),
             ["lake"],
             "the S3 data source over the same bucket is untouched"
         );
 
-        p.restore_source(at, row);
+        p.restore_source(at, def);
         assert_eq!(
-            p.sources.iter().map(|c| c.def.named()).collect::<Vec<_>>(),
+            p.sources.iter().map(SourceDef::named).collect::<Vec<_>>(),
             ["lake", "lake2"]
         );
     }
@@ -1895,9 +1764,8 @@ mod tests {
             name: "depot".into(),
             ..p.sources
                 .iter()
-                .find(|c| c.def.named() == "lake")
+                .find(|c| c.named() == "lake")
                 .expect("the S3 data source")
-                .def
                 .clone()
         };
         p.rename_source("lake", renamed);
@@ -1920,16 +1788,15 @@ mod tests {
             "nor did a local one gain a data source"
         );
         assert!(
-            p.sources.iter().any(|c| c.def.named() == "depot")
-                && !p.sources.iter().any(|c| c.def.named() == "lake"),
-            "the row itself moved"
+            p.sources.iter().any(|c| c.named() == "depot")
+                && !p.sources.iter().any(|c| c.named() == "lake"),
+            "the def itself moved"
         );
     }
 
     #[test]
     fn upsert_source_replaces_the_name_and_sorts_by_it() {
         let mut p = two_stores_one_bucket();
-        p.source_registered("lake");
 
         p.upsert_source(SourceDef {
             kind: "gcs".into(),
@@ -1945,19 +1812,17 @@ mod tests {
         let gcs = p
             .sources
             .iter()
-            .find(|c| c.def.named() == "lake2")
+            .find(|c| c.named() == "lake2")
             .expect("the GCS data source");
-        assert_eq!(gcs.def.kind, "gcs", "…and it carries what was saved");
+        assert_eq!(gcs.kind, "gcs", "…and it carries what was saved");
         assert_eq!(
-            gcs.def.config.get("auth").map(String::as_str),
+            gcs.config.get("auth").map(String::as_str),
             Some("anonymous")
         );
-        let s3 = p
-            .sources
-            .iter()
-            .find(|c| c.def.named() == "lake")
-            .expect("the S3 data source over the same bucket");
-        assert!(matches!(s3.reg, Reg::Ready(())));
+        assert!(
+            p.sources.iter().any(|c| c.named() == "lake"),
+            "the S3 data source over the same bucket is left alone"
+        );
         p.upsert_source(SourceDef {
             config: [("address".to_string(), "acme".into())]
                 .into_iter()
@@ -1967,37 +1832,9 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(
-            p.sources.iter().map(|c| c.def.named()).collect::<Vec<_>>(),
+            p.sources.iter().map(SourceDef::named).collect::<Vec<_>>(),
             ["acme", "lake2", "lake"],
             "sorted by the name (`name_ord`'s own order), which is what a source is addressed by"
-        );
-    }
-
-    /// A saved data source goes back to `Loading`: the def it now holds has not been registered,
-    /// so the row must not go on showing the verdict the *previous* def earned.
-    #[test]
-    fn upsert_source_awaits_its_own_registration() {
-        let mut p = two_stores_one_bucket();
-        p.source_failed("lake", "This S3 data source needs a region.".into());
-
-        p.upsert_source(SourceDef {
-            kind: "s3".into(),
-            name: "lake".into(),
-            config: [("region", "eu-west-2")]
-                .into_iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-            ..Default::default()
-        });
-
-        let row = p
-            .sources
-            .iter()
-            .find(|c| c.def.named() == "lake")
-            .expect("the S3 data source");
-        assert!(
-            matches!(row.reg, Reg::Loading),
-            "the old verdict is dropped"
         );
     }
 
@@ -2016,10 +1853,30 @@ mod tests {
     fn a_refused_source_leads_the_project_faults() {
         let mut p = two_stores_one_bucket();
         p.upsert_table(table_def("orders"));
-        p.table_failed("orders", "No suitable object store found".into());
-        p.source_failed("lake", "This S3 data source needs a region.".into());
+        p.table_failed("orders");
+        let answers = Registrations {
+            workspace: Answers::recorded(
+                [(
+                    "orders".to_string(),
+                    RegStatus::Failed {
+                        reason: "No suitable object store found".into(),
+                    },
+                )],
+                CatalogGen::default(),
+            ),
+            sources: Answers::recorded(
+                [(
+                    "lake".to_string(),
+                    RegStatus::Failed {
+                        reason: "This S3 data source needs a region.".into(),
+                    },
+                )],
+                CatalogGen::default(),
+            ),
+            ..Default::default()
+        };
 
-        let faults = p.registration_faults();
+        let faults = p.registration_faults(&answers);
         assert_eq!(
             faults
                 .iter()
@@ -2029,7 +1886,7 @@ mod tests {
         );
         assert_eq!(faults[0].why, "This S3 data source needs a region.");
         assert_eq!(
-            p.registration_fault_count(),
+            p.registration_fault_count(&answers),
             faults.len(),
             "the count the rail badge reads is the length of the list the drawer renders"
         );
@@ -2040,8 +1897,9 @@ mod tests {
     #[test]
     fn an_unanswered_source_is_not_a_fault() {
         let p = two_stores_one_bucket();
-        assert!(p.registration_faults().is_empty());
-        assert_eq!(p.registration_fault_count(), 0);
+        let none = Registrations::default();
+        assert!(p.registration_faults(&none).is_empty());
+        assert_eq!(p.registration_fault_count(&none), 0);
     }
 
     /// A **database** data source def, for the two questions only a database raises here.
@@ -2061,12 +1919,11 @@ mod tests {
         }
     }
 
-    /// **The schemas picker's write keeps the row's verdict.** Going through `upsert_source`
-    /// instead would drop a fresh `Reg::Loading` on a data source that is still connected, and
-    /// nothing short of a whole-catalog re-scan would ever answer it — a permanent spinner over a
-    /// change that touched no engine state.
+    /// **The schemas picker edits the def and nothing else.** The row it draws is that def
+    /// joined with what the engine answered, and this write asks the engine nothing — which is
+    /// legitimate exactly because the field is display-only.
     #[test]
-    fn editing_a_source_def_in_place_keeps_its_registration() {
+    fn editing_a_source_def_in_place_touches_only_that_def() {
         let mut p = ProjectState::from_defs(
             ProjectDefs {
                 name: "test".into(),
@@ -2075,19 +1932,13 @@ mod tests {
             },
             PathBuf::from("/tmp/strata-schemas-write"),
         );
-        let name = p.sources[0].def.named();
-        p.source_registered(&name);
+        let name = p.sources[0].named();
 
         p.update_source_def(&name, |def| {
             def.schemas = vec!["public".into(), "warehouse".into()];
         });
 
-        let row = &p.sources[0];
-        assert!(
-            matches!(row.reg, Reg::Ready(())),
-            "the verdict is untouched"
-        );
-        assert_eq!(row.def.schemas, ["public", "warehouse"]);
+        assert_eq!(p.sources[0].schemas, ["public", "warehouse"]);
         assert_eq!(p.sources.len(), 1, "edited in place, not inserted");
     }
 }

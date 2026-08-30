@@ -27,7 +27,8 @@ use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
 use strata_engine::secrets::SecretProvider;
 use strata_engine::{
-    DataSource, Engine, Field, SourceInfo, SourceKind, SourceMode, SourceSetting, Sourced, When,
+    DataSource, Engine, Field, Registrations, SourceInfo, SourceKind, SourceMode, SourceSetting,
+    Sourced, When,
 };
 use strata_model::{SecretRef, Secrets, SourceDef};
 
@@ -213,6 +214,7 @@ fn runner(tag: &'static str, target: SourceTarget, draft: SourceDraft) -> (Testi
         move |r| {
             r.provide_root_context(engine);
             r.provide_root_context(|| State::create(CatalogState::Cold));
+            r.provide_root_context(|| State::create(Registrations::default()));
             let rescan = r.provide_root_context(|| State::create(ScanRequest::default()));
             r.provide_root_context(|| State::create(Log::default()));
             r.provide_root_context(|| State::create(PersistFaults::default()));
@@ -288,8 +290,8 @@ fn source_draft() -> SourceDraft {
 }
 
 /// **Save writes the def, asks for the pass, and then waits.** It does not claim success: the
-/// window settles on the row the pass answers, so the status here is `Connecting` and the store's
-/// row is back to `Loading`.
+/// window settles on the answer the pass gives, so the status here is `Connecting`, stamped with
+/// the generation it asked at.
 #[test]
 fn saving_writes_the_def_and_waits_for_the_pass() {
     let (mut runner, (ctx, project, rescan)) = runner("save", SourceTarget::New, source_draft());
@@ -301,13 +303,16 @@ fn saving_writes_the_def_and_waits_for_the_pass() {
         .peek()
         .sources
         .iter()
-        .map(|c| c.def.named())
+        .map(SourceDef::named)
         .collect();
     assert_eq!(names, ["old_lake", "warehouse"], "sorted by name");
-    assert_eq!(
-        *ctx.status.peek(),
-        Status::Connecting("warehouse".into()),
-        "the window is waiting on its own row, not claiming it connected"
+    assert!(
+        matches!(
+            &*ctx.status.peek(),
+            Status::Connecting { name, .. } if name == "warehouse"
+        ),
+        "the window is waiting on its own answer, not claiming it connected: {:?}",
+        *ctx.status.peek()
     );
     assert_eq!(rescan.peek().seq, 1, "one pass asked for");
     assert_eq!(*ctx.target.peek(), SourceTarget::Edit("warehouse".into()));
@@ -340,7 +345,7 @@ fn an_edit_that_renames_leaves_no_row_behind() {
         .peek()
         .sources
         .iter()
-        .map(|c| c.def.named())
+        .map(SourceDef::named)
         .collect();
     assert_eq!(names, ["old_lake", "depot"], "the old name's row is gone");
 }

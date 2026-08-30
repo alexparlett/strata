@@ -87,11 +87,11 @@ editor buffer lives in the store, inside the tab.
 |-------|------|-----------|-------|
 | **`AppConfig`** (`state/config.rs`) | Radio (**global**, `RadioStation::create_global`) | yes (`config.prefs.json`) | the machine-global config: user `Settings`, the recent-projects list, and the set of projects with a window open. Channels = audiences (`ConfigChan::{Settings, Recents, Open}`), so opening a project doesn't wake theme readers. Created once in `main`, shared into every window root (`use_share_config`). **One** write path — `write_config` mutates, notifies, and persists; disk is a startup input, never re-read to answer a question. The persisted open-set is *taken* at startup (it is last run's ledger, not live truth) and rebuilt by each window's `use_claim_open`. |
 | **`SessionState`** (`apps/project/state/session.rs`) | Radio (per-window) | yes (snapshot, §5) | the open tabs (each a `QueryTab` owning its `CodeEditorData`, request, view mode, chart encoding, diagnostics), strip order, active, the reopen stack, the panel **layout**, and a throwaway `scratch` buffer (§3) |
-| **`ProjectState`** (`apps/project/state/project.rs`) | Radio (per-window) | yes (`project.json`) | catalog rows: pure defs (`TableDef`/`ViewDef`/`SavedQuery`/`SourceDef`) each wrapped with registration state (`Reg<T>`: Loading/Ready/Failed) — the *save targets*, plus each row's profile **request** (§6b). Identity: views/tables by **name** (their SQL identity, one shared namespace, compared case-insensitively); saved queries by stable **`id: Uuid`**; data sources by **name**, which is their identity and nothing derives it. Defs persist; `Reg` never does. Channels = `ProjChan`, one per catalog section. |
+| **`ProjectState`** (`apps/project/state/project.rs`) | Radio (per-window) | yes (`project.json`) | catalog rows: pure defs (`TableDef`/`ViewDef`/`SavedQuery`/`SourceDef`) each carrying what registration **learned** about it (a table's `TableMeta`, a view's `ViewInfo`, absent until one lands and absent again after a refusal) — the *save targets*, plus each row's profile **request** (§6b). **Whether a def registered is not here**: that outcome is the engine's, retained by it and read as `Registrations`, and a row is the def joined with it (§6c). Identity: views/tables by **name** (their SQL identity, one shared namespace, compared case-insensitively); saved queries by stable **`id: Uuid`**; data sources by **name**, which is their identity and nothing derives it. Only the defs persist. Channels = `ProjChan`, one per catalog section. |
 | **`History`** (`state/history.rs`) | context `State<History>` | yes (`.strata/history.jsonl`) | the query-history satellite (§8) |
 | **`Log`** (`state/log.rs`) | context `State<Log>` | no | the window's event record (§8) |
 | **`Agents`** (`state/agents.rs`) | context `State<Agents>` | no | what each connected agent is doing (§8) |
-| **Catalog signals** (`state/catalog.rs`) | context `State<T>` | no | the inspected column (`CatalogSelection` — a `ColRef` whose owner is a workspace entry *or* a remote relation), the scan gate (`Catalog`), the ↻ re-scan request (`CatalogRescan`), and the profile requests for relations with no catalog row (`RemoteScans`, §6b) |
+| **Catalog signals** (`state/catalog.rs`) | context `State<T>` | no | the inspected column (`CatalogSelection` — a `ColRef` whose owner is a workspace entry *or* a remote relation), the scan gate (`Catalog`), the window's view of the engine's registration ledger (`RegistrationsCtx`, §6c), the ↻ re-scan request (`CatalogRescan`), and the profile requests for relations with no catalog row (`RemoteScans`, §6b) |
 | **Query layer** | freya-query | no | results / pages / plan / explain / chart / profiles — Runs keyed by a per-press nonce, snapshot reads by `(SnapshotId, …)` (see `SNAPSHOT_SPEC.md`) |
 | **Engine handle** (`EngineCtx`, `contexts/engine_ctx.rs`) | context | — | the direct-call engine facade (`Arc<Engine>`, Deref) + the tab-close cleanup hook (§7) |
 | **`MenuState`** (`menu.rs`) | `State::create_global` | — | the menubar's `MenuHandles` (handles, not state — §10) |
@@ -446,8 +446,9 @@ unmounts and remounts mid-run from re-executing the press. The mirror stays for 
 > cached second copy would be two sources of truth. (Two of the four grounds originally listed
 > moved with the provider layer, and neither weakens the rule: result snapshots no longer "would appear" —
 > `engine::providers` filters `__snap_*` out of every enumeration — and `information_schema` now
-> defaults **on** rather than off. The `Reg::Failed` ground is the one introspection can never
-> answer, and it is the one that settles it.)
+> defaults **on** rather than off. The refused-def ground is the one introspection can never
+> answer, and it is the one that settles it — though *whether* a def was refused is the engine's
+> own record now (§6c); what introspection could never produce is the **row**, which is the def.)
 > DDL mutations therefore call the engine and then the store's own methods
 > (`upsert_view` / `remove_table` / …) on the matching `ProjChan`, and subscribers re-render —
 > nothing refetches. A typed statement's effect arrives the same way, as a `StoreEffect` the
@@ -476,7 +477,7 @@ use_profile(engine, &target, scan) -> UseQuery<ProfileEntry>   // the ONE place 
   request** (DB-07): `state/catalog.rs`'s `RemoteScans`, a `BTreeMap<RemoteRef, ScanId>` on a
   context `State`. The rule generalizes rather than being excepted — whoever owns the surface
   holds the request — and nothing is minted into the store for it. Invalidation is a
-  reconciliation: entries whose source is no longer `Reg::Ready` are dropped, which covers a
+  reconciliation: entries whose source the engine no longer answers `Ready` for are dropped, which covers a
   Forget and a whole-catalog ↻ without either being noticed specially. `ProfileTarget` is what
   says which storage backs a given ask, and every `ProfileActions` method takes one.
 - **`stale_time(MAX)` + `clean_time(MAX)`.** A settled scan must never re-execute itself, and
@@ -491,6 +492,32 @@ use_profile(engine, &target, scan) -> UseQuery<ProfileEntry>   // the ONE place 
   `Lifecycle::profiles`, superseded by dispatch, aborted by `register` / `create_view` /
   `drop_view` / `deregister`, and counted by the **window**-close confirm but not the per-tab
   `is_running` probe.
+
+### 6c. Registration outcomes — the engine's record, rendered here
+
+Whether a def registered is not this window's to decide, so it is not this window's to store. The
+engine retains what it answered for each def (`RegStatus::{Ready, Failed { reason }}`, stamped
+with the `CatalogGen` it was answered at) and hands it over as one value,
+`Catalog::registrations()`. A catalog row is the **join**: the def from `ProjectState`, the
+verdict from that read.
+
+- **One read, held once.** `RegistrationsCtx` (`state/catalog.rs`) is a context `State` carrying
+  the engine's whole answer, so a walk over the rows costs no engine call and every row on screen
+  describes the same instant. It is taken again exactly where the engine has just answered: the
+  registration pass's fold, per outcome (`settle_reg`), so rows settle one at a time as they did
+  when the status lived on them; the statement fold (`catalog_settled`, beside adopting the
+  generation); and the scan claim's release, which covers a pass that was cancelled part-way.
+- **Absence is the unanswered state.** A def no pass has reached has no entry — there is no
+  engine-side `Pending`, because "not yet" is a fact about the pass rather than about the def.
+  What the user sees while waiting is the scan claim's own affordance (the row's held verdict and
+  the spinner's hold-back, `sidebar/catalog/row.rs`), never a status the app wrote.
+- **A gesture waits on its own answer.** Configure's Save and the data source editor's Save record
+  the generation they asked at and wait for an entry stamped past it
+  (`Answers::answered_since`). An edited def still carries `Ready` from the pass before, so a
+  status read alone would close the window over a registration that had not happened.
+- **The same record, two reads.** A data source's verdict also rides the sources snapshot
+  (`SourceListing::status`), which is what a reader with no window holds — the engine's own
+  `catalog_names`, and the agent's `list_tables`.
 
 ---
 
@@ -718,8 +745,9 @@ crates/strata-freya/src/
       mod.rs          typed re-exports
       session.rs      SessionState + QueryTab + Stamp + ProblemGroup (layout is a field here)
       channel.rs      Chan (10 variants) + the derive_channel fan-ins (§3)
-      project.rs      ProjectState + ProjChan + Reg<T> rows — THE catalog (§6's note)
-      catalog.rs      context signals: CatalogSelection · Catalog (scan gate) · CatalogRescan
+      project.rs      ProjectState + ProjChan + the def rows — THE catalog (§6's note)
+      catalog.rs      context signals: CatalogSelection · Catalog (scan gate) ·
+                      RegistrationsCtx (the engine's ledger, §6c) · CatalogRescan
       diagnostics.rs  use_diagnostics — the one validation driver (§9)
       history.rs      the query-history satellite (.strata/history.jsonl, §8)
       log.rs          the event-log satellite + use_run_logging (§8)

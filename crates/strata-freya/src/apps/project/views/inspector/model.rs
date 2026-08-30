@@ -18,11 +18,11 @@ use std::time::SystemTime;
 
 use strata_core::util::{ago, fmt_int};
 use strata_engine::profile::CatalogProfile;
-use strata_engine::RemoteRelation;
+use strata_engine::{Registrations, RemoteRelation};
 use strata_model::{CatalogKind, ColRef, ColumnInfo, Kind, RemoteRef, Stat, StatKey};
 
 use crate::apps::project::query::{ProfileTarget, ScanId};
-use crate::apps::project::state::{ProjectState, Reg};
+use crate::apps::project::state::ProjectState;
 
 /// Display order for the facts box.
 ///
@@ -145,6 +145,7 @@ pub enum Inspected {
 /// up wearing a table's facts.
 pub fn inspect(
     project: &ProjectState,
+    registrations: &Registrations,
     col: &ColRef,
     kind: CatalogKind,
     name: &str,
@@ -154,13 +155,16 @@ pub fn inspect(
         kind,
         name: name.to_string(),
     };
+    let refused = registrations.workspace.problem(name);
     match kind {
-        CatalogKind::View => match project.views.iter().find(|v| v.def.name == name) {
-            None => Inspected::Gone(gone_owner(name)),
-            Some(row) => match &row.reg {
-                Reg::Loading => Inspected::Loading,
-                Reg::Failed(e) => Inspected::Failed(e.clone()),
-                Reg::Ready(info) => facts(
+        CatalogKind::View => {
+            let Some(row) = project.views.iter().find(|v| v.def.name == name) else {
+                return Inspected::Gone(gone_owner(name));
+            };
+            match (refused, &row.info) {
+                (Some(why), _) => Inspected::Failed(why.to_string()),
+                (None, None) => Inspected::Loading,
+                (None, Some(info)) => facts(
                     col,
                     target,
                     &info.columns,
@@ -169,14 +173,16 @@ pub fn inspect(
                     true,
                     scan,
                 ),
-            },
-        },
-        _ => match project.tables.iter().find(|t| t.def.name == name) {
-            None => Inspected::Gone(gone_owner(name)),
-            Some(row) => match &row.reg {
-                Reg::Loading => Inspected::Loading,
-                Reg::Failed(e) => Inspected::Failed(e.clone()),
-                Reg::Ready(meta) => facts(
+            }
+        }
+        _ => {
+            let Some(row) = project.tables.iter().find(|t| t.def.name == name) else {
+                return Inspected::Gone(gone_owner(name));
+            };
+            match (refused, &row.meta) {
+                (Some(why), _) => Inspected::Failed(why.to_string()),
+                (None, None) => Inspected::Loading,
+                (None, Some(meta)) => facts(
                     col,
                     target,
                     &meta.columns,
@@ -185,8 +191,8 @@ pub fn inspect(
                     false,
                     scan,
                 ),
-            },
-        },
+            }
+        }
     }
 }
 
@@ -541,7 +547,7 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field};
     use strata_arrow::column_info;
     use strata_core::project::ProjectDefs;
-    use strata_engine::{TableMeta, ViewMeta};
+    use strata_engine::{Answers, CatalogGen, RegStatus, TableMeta, ViewMeta};
     use strata_model::{ColOwner, TableDef, TableOrigin, ViewDef};
 
     use super::*;
@@ -653,13 +659,20 @@ mod tests {
     }
 
     /// The panel's own resolution of a workspace selection — the kind and name come out of the
-    /// owner exactly as the inspector takes them out of it.
+    /// owner exactly as the inspector takes them out of it. The engine has answered nothing,
+    /// which is the ordinary case: what the panel draws then is whatever the row learned.
     fn look(project: &ProjectState, col: &ColRef) -> Inspected {
+        looked(project, &Registrations::default(), col)
+    }
+
+    /// The same, against a ledger the test composed — for the two states that are the engine's
+    /// answer rather than the row's.
+    fn looked(project: &ProjectState, registrations: &Registrations, col: &ColRef) -> Inspected {
         let ColOwner::Entry { kind, name } = &col.owner else {
             panic!("a workspace selection");
         };
         let scan = project.profile_scan(*kind, name);
-        inspect(project, col, *kind, name, scan)
+        inspect(project, registrations, col, *kind, name, scan)
     }
 
     fn column(project: &ProjectState, col: &ColRef) -> ColumnFacts {
@@ -820,15 +833,29 @@ mod tests {
             "the row is there; the column the schema used to have is not"
         );
 
-        p.reload_tables();
-        assert!(matches!(
-            look(&p, &sel(CatalogKind::Table, "events", &["amount"])),
-            Inspected::Loading
-        ));
+        p.table_failed("events");
+        assert!(
+            matches!(
+                look(&p, &sel(CatalogKind::Table, "events", &["amount"])),
+                Inspected::Loading
+            ),
+            "a row with nothing learned and no answer yet is simply waiting"
+        );
 
-        p.table_failed("events", "No such file or directory (os error 2)".into());
+        let refused = Registrations {
+            workspace: Answers::recorded(
+                [(
+                    "events".to_string(),
+                    RegStatus::Failed {
+                        reason: "No such file or directory (os error 2)".into(),
+                    },
+                )],
+                CatalogGen::default(),
+            ),
+            ..Default::default()
+        };
         assert!(matches!(
-            look(&p, &sel(CatalogKind::Table, "events", &["amount"])),
+            looked(&p, &refused, &sel(CatalogKind::Table, "events", &["amount"])),
             Inspected::Failed(e) if e == "No such file or directory (os error 2)"
         ));
     }

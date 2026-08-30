@@ -12,7 +12,7 @@ use crate::sources::source::SourceInfo;
 use crate::sources::store::s3;
 use crate::sources::{self, RemoteRelation, SchemaVisibility, SourceDetail, SourcesSnapshot};
 use crate::sql::{DatabaseSym, RelationSym, SchemaSym};
-use crate::{fold_ident, Dependents, Engine, EngineError, CATALOG};
+use crate::{fold_ident, Dependents, Engine, EngineError, RegStatus, CATALOG};
 
 /// This engine's data sources, from [`Engine::sources`].
 ///
@@ -63,8 +63,12 @@ impl Sources<'_> {
             .map_err(|e| EngineError::task("connect", e))?;
         if engine.source_defs.resolve(&name).is_none() {
             self.disconnect(&name);
+        } else {
+            let generation = engine.generation.bump();
+            engine
+                .ledger
+                .note_source(&name, RegStatus::of(&settled), generation);
         }
-        engine.generation.bump();
         settled.map_err(EngineError::from)
     }
 
@@ -90,6 +94,7 @@ impl Sources<'_> {
             name,
         );
         engine.source_defs.forget(name);
+        engine.ledger.forget_source(name);
         engine.generation.bump();
     }
 
@@ -105,9 +110,9 @@ impl Sources<'_> {
     pub fn listing(self) -> SourcesSnapshot {
         let engine = self.engine;
         sources::snapshot(
-            &engine.ctx,
             &engine.registrants,
             &engine.live,
+            &engine.ledger,
             &engine.source_defs.all(),
             engine.generation.current(),
         )

@@ -5,8 +5,8 @@
 //! stay wrong until something fixes them, which is precisely what the Queries scope's rows are
 //! and what an event-log row is not.
 //!
-//! - **Defs the engine refused.** A projection of `Reg::Failed` off the catalog store
-//!   ([`ProjectState::registration_faults`]), so it is re-derived like a diagnostic: a re-scan
+//! - **Defs the engine refused.** A projection of the engine's ledger over the catalog store's
+//!   own rows ([`ProjectState::registration_faults`]), re-derived like a diagnostic: a re-scan
 //!   that fixes the def retracts the row with nothing to invalidate. Until now this condition
 //!   was visible only as a triangle on one catalog row, plus an event that scrolled away — so a
 //!   project whose sidebar you had not scrolled to could be broken with nothing saying so.
@@ -29,10 +29,13 @@
 use freya::clipboard::Clipboard;
 use freya::prelude::*;
 use freya::radio::use_radio;
+use strata_engine::Registrations;
 
 use super::super::{DrawerBody, DrawerEmpty, DrawerTheme};
 use super::{PAD, ROW_HEIGHT, ROW_INSET};
-use crate::apps::project::state::{FaultKind, FaultsCtx, PersistFaults, ProjChan, ProjectState};
+use crate::apps::project::state::{
+    use_registrations, FaultKind, FaultsCtx, PersistFaults, ProjChan, ProjectState,
+};
 use crate::components::badge::Badge;
 use crate::components::icon::{Icon, IconName};
 use crate::components::metrics::SP_3;
@@ -83,14 +86,18 @@ impl ProblemTag {
 /// Write faults lead deliberately: a def the engine refused is a fault in what the user asked
 /// for, where a file that will not write is a fault in the app's ability to keep *anything* they
 /// ask for — including the fix for the row below it.
-pub fn project_problems(project: &ProjectState, faults: &PersistFaults) -> Vec<ProjectProblem> {
+pub fn project_problems(
+    project: &ProjectState,
+    registrations: &Registrations,
+    faults: &PersistFaults,
+) -> Vec<ProjectProblem> {
     let writes = faults.rows().into_iter().map(|(file, why)| ProjectProblem {
         subject: file.file_name().to_string(),
         why,
         tag: ProblemTag::NotSaved,
     });
     let regs = project
-        .registration_faults()
+        .registration_faults(registrations)
         .into_iter()
         .map(|f| ProjectProblem {
             subject: f.name,
@@ -112,10 +119,11 @@ impl Component for Project {
         let tables = use_radio::<ProjectState, ProjChan>(ProjChan::Tables);
         let views = use_radio::<ProjectState, ProjChan>(ProjChan::Views);
         let faults = use_consume::<FaultsCtx>();
+        let registrations = use_registrations();
 
         let _ = sources.read();
         let _ = views.read();
-        let rows = project_problems(&tables.read(), &faults.read());
+        let rows = project_problems(&tables.read(), &registrations.read(), &faults.read());
 
         let el: Element = match rows.is_empty() {
             true => DrawerEmpty::new(IconName::Check, "No project problems")
@@ -228,8 +236,12 @@ impl Component for CopyProblem {
 ///
 /// Every row here is an error: a def the engine refused has nothing behind it, and a file that
 /// will not write is not a warning about a possible future.
-pub fn project_error_count(project: &ProjectState, faults: &PersistFaults) -> usize {
-    project.registration_fault_count() + faults.len()
+pub fn project_error_count(
+    project: &ProjectState,
+    registrations: &Registrations,
+    faults: &PersistFaults,
+) -> usize {
+    project.registration_fault_count(registrations) + faults.len()
 }
 
 #[cfg(test)]
@@ -238,6 +250,7 @@ mod tests {
     use crate::apps::project::state::ProjectFile;
     use std::path::PathBuf;
     use strata_core::project::ProjectDefs;
+    use strata_engine::{Answers, CatalogGen, RegStatus};
     use strata_model::{SourceFormat, TableDef, TableOrigin};
 
     fn table(name: &str) -> TableDef {
@@ -262,18 +275,34 @@ mod tests {
         ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-project-problems"))
     }
 
-    /// A def the engine refused becomes a row; one still `Loading`, or registered, does not.
-    /// `Loading` is the case worth pinning — a project mid-scan must not flash every row it has
-    /// not answered for yet as a problem.
+    /// The engine refusing `orders` — the other half of the row, which is where a refusal lives.
+    fn refused() -> Registrations {
+        Registrations {
+            workspace: Answers::recorded(
+                [(
+                    "orders".to_string(),
+                    RegStatus::Failed {
+                        reason: "No files found".into(),
+                    },
+                )],
+                CatalogGen::default(),
+            ),
+            ..Default::default()
+        }
+    }
+
+    /// A def the engine refused becomes a row; one it has not answered for, or registered, does
+    /// not. The unanswered case is the one worth pinning — a project mid-scan must not flash
+    /// every def it has not reached yet as a problem.
     #[test]
     fn only_refused_defs_are_problems() {
-        let mut s = store();
-        s.table_failed("orders", "No files found".into());
+        let s = store();
 
-        let rows = s.registration_faults();
+        let rows = s.registration_faults(&refused());
         assert_eq!(rows.len(), 1, "one refused def: {rows:?}");
         assert_eq!(rows[0].name, "orders");
         assert_eq!(rows[0].why, "No files found");
+        assert!(s.registration_faults(&Registrations::default()).is_empty());
     }
 
     /// The two families land in one list, **write faults first** — a file that will not write is
@@ -281,12 +310,11 @@ mod tests {
     /// registration row below it.
     #[test]
     fn write_faults_lead_the_list() {
-        let mut s = store();
-        s.table_failed("orders", "No files found".into());
+        let s = store();
         let mut faults = PersistFaults::default();
         faults.fault(ProjectFile::Defs, "Permission denied".into());
 
-        let rows = project_problems(&s, &faults);
+        let rows = project_problems(&s, &refused(), &faults);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].subject, "project.json");
         assert!(matches!(rows[0].tag, ProblemTag::NotSaved));
@@ -298,14 +326,13 @@ mod tests {
     /// same list — asserted here so a future row kind can't be listed and not counted.
     #[test]
     fn the_count_is_the_list() {
-        let mut s = store();
-        s.table_failed("orders", "No files found".into());
+        let s = store();
         let mut faults = PersistFaults::default();
         faults.fault(ProjectFile::Session, "Read-only file system".into());
 
         assert_eq!(
-            project_error_count(&s, &faults),
-            project_problems(&s, &faults).len()
+            project_error_count(&s, &refused(), &faults),
+            project_problems(&s, &refused(), &faults).len()
         );
     }
 
@@ -313,8 +340,9 @@ mod tests {
     #[test]
     fn a_clean_project_has_no_problems() {
         let s = store();
+        let none = Registrations::default();
         let faults = PersistFaults::default();
-        assert!(project_problems(&s, &faults).is_empty());
-        assert_eq!(project_error_count(&s, &faults), 0);
+        assert!(project_problems(&s, &none, &faults).is_empty());
+        assert_eq!(project_error_count(&s, &none, &faults), 0);
     }
 }

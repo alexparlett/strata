@@ -59,7 +59,7 @@ impl Component for Footer {
         let platform = use_hook(Platform::get);
 
         let status = ctx.status.read().clone();
-        let registering = matches!(status, Status::Registering(_));
+        let registering = matches!(status, Status::Registering { .. });
         let creating = status.holds_window();
         let busy = status.busy();
         let scanning = catalog.read().is_scanning();
@@ -195,7 +195,7 @@ fn name_clash(ctx: ConfigureCtx, project: RadioStation<ProjectState, ProjChan>) 
 /// that stayed enabled would then write a def naming a data source that is gone.
 fn missing_source(ctx: ConfigureCtx, sources: Radio<ProjectState, ProjChan>) -> Option<String> {
     let url = ctx.draft.read().store()?.to_string();
-    let known = sources.read().sources.iter().any(|c| c.def.named() == url);
+    let known = sources.read().sources.iter().any(|c| c.named() == url);
     (!known).then(|| {
         format!("'{url}' is not a data source in this project. Choose one, or add it back.")
     })
@@ -215,6 +215,7 @@ fn save(
         create_internal_table(ctx, engine, to);
         return;
     }
+    let asked_at = engine.catalog().generation();
     let root = project.peek().root.clone();
     let def = ctx.draft.peek().def(&root);
     let renamed_from = ctx
@@ -240,7 +241,10 @@ fn save(
                 .into(),
         ));
     } else {
-        ctx.status.set(Status::Registering(name.clone()));
+        ctx.status.set(Status::Registering {
+            name: name.clone(),
+            asked_at,
+        });
     }
     {
         let mut target = ctx.target;
@@ -285,6 +289,7 @@ fn create_internal_table(mut ctx: ConfigureCtx, engine: EngineCtx, to: Settle) {
     let Some(sql) = ctx.draft.peek().create_statement() else {
         return;
     };
+    let asked_at = engine.catalog().generation();
     let name = ctx.draft.peek().name.trim().to_string();
     ctx.status.set(Status::Creating(name.clone()));
     spawn(async move {
@@ -293,7 +298,7 @@ fn create_internal_table(mut ctx: ConfigureCtx, engine: EngineCtx, to: Settle) {
         match engine.ws(ws).run(tag, sql, INTERNAL_PAGE_SIZE).await {
             Ok(RunOutcome::Statement(report)) => {
                 if settle(to, &engine, &report) {
-                    ctx.status.set(Status::Registering(name));
+                    ctx.status.set(Status::Registering { name, asked_at });
                 } else {
                     ctx.status.set(Status::Failed(
                         "The table was created, but the project file could not be written, so \
