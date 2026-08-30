@@ -702,7 +702,14 @@ fn removing_a_secret_from_this_machine_is_not_declaring_the_source_has_none() {
 }
 
 /// **This machine's answer is not the def's**: a def that expects a secret says one is expected,
-/// not that this machine holds one.
+/// not that this machine holds one — and where this machine holds none, that is an **error**
+/// naming the fix rather than a shrug.
+///
+/// The absent arm used to read *"No password is stored on this machine."* and ask for nothing,
+/// because the key is declared `required: false`. That is true of the declaration and beside the
+/// point for a def that recorded a slot: this source was saved with a password, so the next
+/// connect fails on exactly this. Saving is still allowed — the error is a preview of the data
+/// source row's failure, not a second gate in front of it.
 #[test]
 fn a_secret_row_says_what_this_machine_holds() {
     let mut draft = source_draft();
@@ -718,13 +725,24 @@ fn a_secret_row_says_what_this_machine_holds() {
         ),
         (
             SecretProbe::Absent,
-            "No password is stored on this machine.",
+            "This data source was saved with a password and none is stored on this machine. \
+             Connecting fails until you enter it here.",
         ),
     ] {
         probes.set([("password".to_string(), answer)].into_iter().collect());
         settle(&mut runner);
         assert!(shows(&runner, said), "{said:?}: {:?}", texts(&runner));
     }
+
+    assert_eq!(
+        ctx.draft.peek().blocker(),
+        None,
+        "and the error does not block Save"
+    );
+    assert!(
+        ctx.draft.peek().secrets.contains_key("password"),
+        "nor does an empty box over it forget what the def was saved with"
+    );
 }
 
 /// **A declared choice is a `Select` over the words the kind gave**, so a value it would refuse is

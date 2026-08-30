@@ -24,12 +24,13 @@ use crate::components::form::{
 };
 use crate::components::icon::IconName;
 use crate::components::metrics::SP_3;
+use crate::components::tones::tones;
 use crate::components::tool_button::ToolButton;
 use crate::components::typography::{Control, MonoValue, Prose};
 
 use super::{qualifier, NARROW_WIDTH};
 
-/// The gap between the two presses under a secret box.
+/// The gap between the sentence under a secret box and the press below it.
 const TOOL_GAP: f32 = SP_3;
 
 /// Every row a source has: the handle, then the kind's declared keys in the order it declared
@@ -263,13 +264,13 @@ impl Component for TextKey {
 ///
 /// The settings window's API-key marker is honest because it minted the reference when it stored
 /// one; a committed expectation says nothing about the machine reading it, so this row reports
-/// the mount probe ([`SecretRow`]) instead. The two clearing gestures are kept apart for the
-/// same reason: *remove from this machine* is local, while *this data source uses no …* edits the
-/// shared def and would break the colleague who has one.
+/// the mount probe ([`SecretRow`]) instead. Its one press is local for the same reason: *remove
+/// from this machine* leaves the def's expectation standing, so a colleague keeps their own.
 ///
-/// They stack rather than sitting side by side, because both are offered at once and their two
-/// sentences are wider than this window at its minimum size — and a torin child paints outside
-/// its box rather than clipping.
+/// **The tone is the row's own answer, not a second judgement** ([`SecretRow::fault`]): the
+/// sentence is painted in the error tone exactly where it is describing something wrong — a def
+/// that recorded a secret over a machine that has no entry for it — and in the hint colour
+/// wherever it is simply stating what is true here.
 ///
 /// The box's buffer and the window's map are **mirrored rather than shared**, because a
 /// `ValueField` binds one `State<String>` while the window holds a value per declared key; both
@@ -295,11 +296,11 @@ impl Component for SecretField {
 
     fn render(&self) -> impl IntoElement {
         let form = form_theme();
+        let tones = tones();
         let ctx = use_consume::<SourceCtx>();
         let mut revealed = use_state(|| false);
         let name = self.declared.key;
         let noun = noun(&self.declared);
-        let required = self.declared.required;
 
         let stored = ctx
             .secret_values
@@ -332,7 +333,6 @@ impl Component for SecretField {
             }
             let expects = typed
                 || SecretRow::of(
-                    required,
                     ctx.secret_expected.read().contains(name),
                     false,
                     ctx.secret_removed.read().contains(name),
@@ -356,7 +356,6 @@ impl Component for SecretField {
         });
 
         let row = SecretRow::of(
-            self.declared.required,
             ctx.secret_expected.read().contains(name),
             ctx.secret_values
                 .read()
@@ -405,7 +404,10 @@ impl Component for SecretField {
                     .spacing(SP_3)
                     .child(
                         Prose::new(row.note(&noun))
-                            .color(form.hint_color)
+                            .color(match row.fault() {
+                                true => tones.error,
+                                false => form.hint_color,
+                            })
                             .width(Size::fill())
                             .wrap(),
                     )
