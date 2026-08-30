@@ -246,10 +246,11 @@ impl DataSource for S3 {
                 let secret = read(&secrets, def, SECRET_KEY, SECRET_ENV)
                     .await?
                     .ok_or_else(|| {
-                        let request = secret_slot(def, SECRET_KEY, SECRET_ENV);
+                        let fixes = secret_slot(def, SECRET_KEY, SECRET_ENV)
+                            .map(|request| request.fixes())
+                            .unwrap_or_default();
                         format!(
-                            "This S3 data source has no secret access key on this machine. {}",
-                            request.fixes()
+                            "This S3 data source has no secret access key on this machine. {fixes}"
                         )
                     })?;
                 let token = read(&secrets, def, SESSION_TOKEN, TOKEN_ENV).await?;
@@ -290,7 +291,11 @@ async fn read(
     key: &str,
     env: &'static [&'static str],
 ) -> Result<Option<Secret>, String> {
-    let request = secret_slot(def, key, env);
+    // A def that expects no secret for `key` has none stored anywhere: there is no slot to ask
+    // about, which is the same answer as an empty one.
+    let Some(request) = secret_slot(def, key, env) else {
+        return Ok(None);
+    };
     let secrets = Arc::clone(secrets);
     tokio::task::spawn_blocking(move || secrets.secret(&request))
         .await

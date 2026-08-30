@@ -14,10 +14,10 @@
 //! working: they are listed, queried and forgotten exactly as before, and only *editing* one is
 //! withheld ([`crate::apps::project::views::sidebar::catalog::menu`] parks it).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use strata_engine::{Field, SourceInfo, SourceSetting, When};
-use strata_model::{check_catalog, SourceDef};
+use strata_model::{check_catalog, SecretRef, Secrets, SourceDef};
 
 /// What this window is editing: a new data source, or an existing one by
 /// [`named`](SourceDef::named).
@@ -82,8 +82,15 @@ pub enum SecretRow {
     },
     /// Expected, and this machine holds it.
     Stored,
-    /// Expected, and this machine does not — a colleague opening a shared project.
+    /// Expected, this machine does not hold it, and the kind **requires** one: nothing can
+    /// connect until it is entered here.
     Missing,
+    /// Expected, this machine does not hold it, and the kind does **not** require one.
+    ///
+    /// States the fact and asks for nothing: a key declared `required: false` is one a data
+    /// source may simply not have, so an empty box is not a gap to be filled. Distinct from
+    /// [`Missing`](Self::Missing), which is the same absence where the kind does require one.
+    Optional,
     /// Expected, and this machine's entry is being removed at Save. Other machines keep theirs,
     /// which is the whole difference from [`Unused`](Self::Unused).
     Removing,
@@ -94,7 +101,13 @@ pub enum SecretRow {
 impl SecretRow {
     /// What the def expects with the box empty, whether anything is typed, whether a removal is
     /// pending, and what the keystore said.
-    pub fn of(expected: bool, typed: bool, removed: bool, probe: &SecretProbe) -> Self {
+    pub fn of(
+        required: bool,
+        expected: bool,
+        typed: bool,
+        removed: bool,
+        probe: &SecretProbe,
+    ) -> Self {
         if typed {
             return Self::Typed;
         }
@@ -106,10 +119,30 @@ impl SecretRow {
             true => match probe {
                 SecretProbe::Asking => Self::Asking,
                 SecretProbe::Stored => Self::Stored,
-                SecretProbe::Absent => Self::Missing,
                 SecretProbe::Refused(why) => Self::Refused(why.clone()),
+                // **The declaration decides whether emptiness is an answer.** A key the kind
+                // does not require is one a data source may simply not have, so nothing is
+                // demanded and nothing has to be pressed: an empty box with nothing behind it
+                // says what it looks like it says.
+                SecretProbe::Absent if required => Self::Missing,
+                SecretProbe::Absent => Self::Optional,
             },
         }
+    }
+
+    /// Whether Save should keep the def's expectation of this secret.
+    ///
+    /// The one place the box's empty state is interpreted, because it means two things and only
+    /// this value can tell them apart: with something stored here it means *leave it alone* (a
+    /// stored secret is never rendered, so empty is its resting state), and with nothing stored
+    /// and nothing required it means *there is none*.
+    ///
+    /// True for every arm but [`Unused`](Self::Unused), which is the def already saying there is
+    /// none: an expectation is dropped by an act of the user, never by this machine's keystore
+    /// happening to be empty. Opening a shared def on a machine with no entry and saving it
+    /// untouched must leave the def exactly as it was.
+    pub fn keeps_expectation(&self) -> bool {
+        !matches!(self, Self::Unused { .. })
     }
 
     /// The line under the box, each arm about **this machine** — the half a committed def cannot
@@ -134,9 +167,12 @@ impl SecretRow {
                 format!("A {noun} is stored on this machine. Type a new one to replace it.")
             }
             Self::Missing => format!(
-                "This data source expects a {noun} and none is stored on this machine. Enter it \
+                "This data source needs a {noun} and none is stored on this machine. Enter it \
                  here."
             ),
+            Self::Optional => {
+                format!("No {noun} is stored on this machine.")
+            }
             Self::Removing => format!(
                 "The {noun} stored on this machine is removed when you save. This data source \
                  still expects one, so other machines keep theirs."
@@ -149,13 +185,6 @@ impl SecretRow {
     /// Whether **Remove from this machine** is offered: there has to be an entry here to remove.
     pub fn offers_removal(&self) -> bool {
         matches!(self, Self::Stored)
-    }
-
-    /// Whether **This data source uses no …** is offered — wherever one is still expected,
-    /// including while the keystore is asked or refusing, since the press edits the def rather
-    /// than this machine.
-    pub fn offers_disuse(&self) -> bool {
-        !matches!(self, Self::Typed | Self::Unused { .. })
     }
 }
 
@@ -202,7 +231,7 @@ pub struct SourceDraft {
     pub config: BTreeMap<String, String>,
     /// Which of the kind's secret-typed keys this data source has a value for — the def's
     /// expectation, which no control writes directly (the window's own slots derive it).
-    pub secrets: BTreeSet<String>,
+    pub secrets: BTreeMap<String, SecretRef>,
     pub schemas: Vec<String>,
     pub read_only: bool,
 }
@@ -244,7 +273,12 @@ impl SourceDraft {
             settings,
             name: def.named(),
             config: def.config.clone(),
-            secrets: def.secrets.clone(),
+            secrets: def
+                .secrets
+                .keys()
+                .into_iter()
+                .filter_map(|key| Some((key.clone(), def.secret_slot(key)?)))
+                .collect(),
             schemas: def.schemas.clone(),
             read_only: def.read_only,
         }
@@ -294,12 +328,12 @@ impl SourceDraft {
     /// value is trimmed here rather than on the way in.
     pub fn def(&self) -> SourceDef {
         let mut config = BTreeMap::new();
-        let mut secrets = BTreeSet::new();
+        let mut secrets = BTreeMap::new();
         for declared in self.settings {
             match declared.field {
                 Field::Secret => {
-                    if self.secrets.contains(declared.key) {
-                        secrets.insert(declared.key.to_string());
+                    if let Some(slot) = self.secrets.get(declared.key) {
+                        secrets.insert(declared.key.to_string(), slot.clone());
                     }
                 }
                 _ => {
@@ -315,7 +349,7 @@ impl SourceDraft {
             kind: self.kind.trim().to_string(),
             name: self.named(),
             config,
-            secrets,
+            secrets: Secrets::Filed(secrets),
             schemas: self.schemas.clone(),
             read_only: self.read_only,
         }
@@ -348,7 +382,7 @@ impl SourceDraft {
             .iter()
             .filter(|declared| declared.required && self.shows(declared))
             .find(|declared| match declared.field {
-                Field::Secret => !self.secrets.contains(declared.key),
+                Field::Secret => !self.secrets.contains_key(declared.key),
                 _ => self.value(declared.key).trim().is_empty(),
             })
             .map(|declared| format!("This data source has no {}.", noun(declared)))
@@ -480,7 +514,10 @@ mod tests {
             .into_iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect(),
-            secrets: BTreeSet::from(["password".to_string()]),
+            secrets: Secrets::Filed(BTreeMap::from([(
+                "password".to_string(),
+                SecretRef::mint(),
+            )])),
             schemas: vec!["public".into(), "analytics".into()],
             read_only: false,
         };
@@ -686,7 +723,7 @@ mod tests {
         draft.set("address", "  db.internal:5432/analytics  ".into());
         draft.name = " warehouse ".into();
         draft.set("user", " reader ".into());
-        draft.secrets.insert("password".into());
+        draft.secrets.insert("password".into(), SecretRef::mint());
         draft.read_only = false;
 
         let def = draft.def();
@@ -697,10 +734,7 @@ mod tests {
             source.config.get("user").map(String::as_str),
             Some("reader")
         );
-        assert!(
-            source.secrets.contains("password"),
-            "carried, never trimmed"
-        );
+        assert!(source.secrets.expects("password"), "carried, never trimmed");
         assert!(!source.read_only, "and so is the write opt-in");
     }
 
@@ -711,8 +745,9 @@ mod tests {
     fn a_secret_row_reports_this_machine_rather_than_the_def() {
         use SecretProbe as P;
 
-        let row =
-            |expected, typed, removed, probe: &P| SecretRow::of(expected, typed, removed, probe);
+        let row = |expected, typed, removed, probe: &P| {
+            SecretRow::of(true, expected, typed, removed, probe)
+        };
 
         assert_eq!(
             row(false, false, false, &P::Absent),
@@ -722,7 +757,7 @@ mod tests {
         assert_eq!(
             row(true, false, false, &P::Absent),
             SecretRow::Missing,
-            "expected, and this machine has none"
+            "required, expected, and this machine has none"
         );
         assert_eq!(row(true, false, false, &P::Asking), SecretRow::Asking);
         assert_eq!(
@@ -755,15 +790,14 @@ mod tests {
         };
         assert!(SecretRow::Missing
             .note(&noun(&other))
-            .contains("expects a secret access key"));
+            .contains("needs a secret access key"));
     }
 
-    /// **The two clearing gestures are not the same gesture.** *Remove from this machine* leaves
-    /// the expectation standing so a colleague keeps their own secret; *this data source uses no
-    /// …* edits the shared def.
+    /// **Removing a secret from this machine is not saying the data source has none.** The
+    /// expectation stands, so a colleague keeps their own secret.
     #[test]
     fn removing_a_secret_locally_is_not_declaring_the_source_has_none() {
-        let removing = SecretRow::of(true, false, true, &SecretProbe::Stored);
+        let removing = SecretRow::of(true, true, false, true, &SecretProbe::Stored);
         assert_eq!(removing, SecretRow::Removing);
         assert!(
             removing
@@ -773,7 +807,7 @@ mod tests {
             removing.note("password")
         );
 
-        let unused = SecretRow::of(false, false, true, &SecretProbe::Stored);
+        let unused = SecretRow::of(true, false, false, true, &SecretProbe::Stored);
         assert_eq!(unused, SecretRow::Unused { forgetting: true });
         assert!(
             unused.note("password").contains("without a password"),
@@ -782,36 +816,66 @@ mod tests {
         );
     }
 
-    /// **Neither press is offered where it would mean nothing**, and neither is a dead end.
+    /// **An empty box is an answer wherever the kind does not require one** (EA-25/26 follow-up).
+    ///
+    /// The declaration already said so — Postgres declares `required: false` on its password —
+    /// and the renderer used to ignore it: absence read as [`Missing`](SecretRow::Missing), a
+    /// demand, escapable only through a *This data source uses no password* control that looked
+    /// like a sentence. The control is gone; `required` decides.
     #[test]
-    fn the_secret_presses_are_offered_where_they_do_something() {
+    fn an_optional_secret_is_answered_by_leaving_the_box_empty() {
+        use SecretProbe as P;
+
+        let optional = SecretRow::of(false, true, false, false, &P::Absent);
+        assert_eq!(optional, SecretRow::Optional);
+        assert!(
+            !optional.note("password").contains("Enter it"),
+            "an optional secret asks for nothing: {}",
+            optional.note("password")
+        );
+        assert!(
+            optional.keeps_expectation(),
+            "and an absence on this machine never edits a shared def"
+        );
+
+        assert_eq!(
+            SecretRow::of(true, true, false, false, &P::Absent),
+            SecretRow::Missing,
+            "a key the kind requires still asks for one"
+        );
+    }
+
+    /// **An empty box never drops a secret this machine is holding**, whatever the kind requires.
+    ///
+    /// A stored secret is not rendered, so empty is its resting state: reading that as "there is
+    /// none" would forget every password on every Save.
+    #[test]
+    fn an_empty_box_over_a_stored_secret_keeps_it() {
+        use SecretProbe as P;
+
+        for probe in [P::Stored, P::Asking, P::Refused("locked".into())] {
+            let row = SecretRow::of(false, true, false, false, &probe);
+            assert!(
+                row.keeps_expectation(),
+                "{row:?}: nothing here established that there is no secret"
+            );
+        }
+    }
+
+    /// **Remove from this machine is offered where there is something to remove**, and nowhere
+    /// else.
+    #[test]
+    fn the_secret_press_is_offered_where_it_does_something() {
         assert!(SecretRow::Stored.offers_removal());
         for row in [
             SecretRow::Typed,
             SecretRow::Missing,
+            SecretRow::Optional,
             SecretRow::Removing,
             SecretRow::Asking,
             SecretRow::Unused { forgetting: false },
         ] {
             assert!(!row.offers_removal(), "{row:?}: nothing here to remove");
         }
-
-        for row in [
-            SecretRow::Stored,
-            SecretRow::Missing,
-            SecretRow::Removing,
-            SecretRow::Asking,
-            SecretRow::Refused("locked".into()),
-        ] {
-            assert!(row.offers_disuse(), "{row:?}: a secret is still expected");
-        }
-        assert!(
-            !SecretRow::Unused { forgetting: false }.offers_disuse(),
-            "already the answer"
-        );
-        assert!(
-            !SecretRow::Typed.offers_disuse(),
-            "a box with a secret in it is not the place to say there is none"
-        );
     }
 }

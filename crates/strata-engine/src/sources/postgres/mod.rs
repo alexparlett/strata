@@ -75,13 +75,9 @@ impl DataSource for Pg {
         secrets: Arc<dyn SecretProvider>,
     ) -> Result<Sourced, String> {
         let settings = PgSettings::read(&def.config)?;
-        let passwords = match def.secrets.contains(PASSWORD) {
-            false => None,
-            true => {
-                let request = secret_slot(def, PASSWORD, PASSWORD_ENV);
-                Some(Arc::new(SecretPassword { request, secrets }) as Arc<dyn PasswordProvider>)
-            }
-        };
+        let passwords = secret_slot(def, PASSWORD, PASSWORD_ENV).map(|request| {
+            Arc::new(SecretPassword { request, secrets }) as Arc<dyn PasswordProvider>
+        });
         let pool = build_pool(def, &settings, passwords).await?;
         Ok(Sourced::Catalog(Arc::new(PgCatalog {
             pool: Arc::new(pool),

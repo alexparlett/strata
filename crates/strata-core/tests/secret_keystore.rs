@@ -18,6 +18,7 @@
 //! build left behind. Persistence across a restart, and the signed `.app` reading its own
 //! items, are manual checks — no test binary can stand in for either.
 
+use strata_core::secret::Keystore;
 use strata_core::secret::{open_keystore, Secret, SecretRef};
 
 /// Removes the credential however the test ends, so a failed assertion does not leave an

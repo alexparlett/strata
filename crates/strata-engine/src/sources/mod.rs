@@ -58,7 +58,7 @@ use super::secrets::{SecretProvider, SecretRequest};
 use crate::policy::{Locality, TargetFacts};
 use crate::statements::Remote;
 use crate::CatalogGen;
-use strata_core::secret::{migrate_derived, Secret, SecretRef};
+use strata_core::secret::{Keystore, Secret, SecretRef};
 
 /// The keystore slot one of `conn`'s secrets lives in — **the one place the derivation is
 /// written**, so a save's put, a source's read and a Forget's delete cannot address different
@@ -71,18 +71,26 @@ use strata_core::secret::{migrate_derived, Secret, SecretRef};
 /// needed, which is what keeps a machine-local id out of the committed `project.json`.
 ///
 /// `None` for a provider that is not a source.
-pub fn secret_slot(conn: &SourceDef, key: &str, env: &'static [&'static str]) -> SecretRequest {
-    SecretRequest {
+pub fn secret_slot(
+    conn: &SourceDef,
+    key: &str,
+    env: &'static [&'static str],
+) -> Option<SecretRequest> {
+    Some(SecretRequest {
         family: format!("{}-{key}", conn.kind.trim()),
         source: conn.named(),
+        slot: conn.secret_slot(key)?,
         env,
-    }
+    })
 }
 
-/// The keystore entry one of `conn`'s secrets is written to and deleted from — [`secret_slot`]'s
-/// key, for the writes this module performs on a save.
-pub(crate) fn secret_ref(conn: &SourceDef, key: &str) -> SecretRef {
-    secret_slot(conn, key, &[]).key()
+/// The keystore entry one of `conn`'s secrets is written to and deleted from.
+///
+/// The def's own recorded slot — see [`Secrets`](strata_model::Secrets). `None` where the def
+/// expects no secret for `key`, which is the caller's cue that there is nothing to write or
+/// clear.
+pub(crate) fn secret_ref(conn: &SourceDef, key: &str) -> Option<SecretRef> {
+    conn.secret_slot(key)
 }
 
 /// Store `value` as one of `conn`'s secrets on this machine, or clear it when it is empty.
@@ -96,7 +104,25 @@ pub(crate) fn secret_ref(conn: &SourceDef, key: &str) -> SecretRef {
 /// If the keystore refused, in words suitable for display. A caller reports it and does not
 /// save — never answers it by writing the secret somewhere else.
 pub fn put_secret(conn: &SourceDef, key: &str, value: &str) -> Result<(), String> {
-    let slot = secret_ref(conn, key);
+    let Some(slot) = secret_ref(conn, key) else {
+        return Ok(());
+    };
+    match Secret::new(value) {
+        Some(secret) => slot.put(&secret).map_err(|e| e.to_string()),
+        None => slot.delete().map_err(|e| e.to_string()),
+    }
+}
+
+/// Store `value` in the keystore slot `slot`, or clear it when `value` is empty.
+///
+/// The slot-addressed form, for a caller that already resolved which entry it means — the data
+/// source editor's save, which plans its writes against **both** defs so a key the save drops is
+/// still cleared from the slot the previous def named.
+///
+/// # Errors
+///
+/// If the keystore refused, in words suitable for display.
+pub fn put_secret_at(slot: &SecretRef, value: &str) -> Result<(), String> {
     match Secret::new(value) {
         Some(secret) => slot.put(&secret).map_err(|e| e.to_string()),
         None => slot.delete().map_err(|e| e.to_string()),
@@ -113,7 +139,10 @@ pub fn put_secret(conn: &SourceDef, key: &str, value: &str) -> Result<(), String
 ///
 /// If the keystore refused.
 pub fn forget_secret(conn: &SourceDef, key: &str) -> Result<(), String> {
-    secret_ref(conn, key).delete().map_err(|e| e.to_string())
+    match secret_ref(conn, key) {
+        Some(slot) => slot.delete().map_err(|e| e.to_string()),
+        None => Ok(()),
+    }
 }
 
 /// Forget every secret `conn` holds on this machine — the Forget gesture's keystore half, and
@@ -126,28 +155,8 @@ pub fn forget_secret(conn: &SourceDef, key: &str) -> Result<(), String> {
 ///
 /// If the keystore refused.
 pub fn forget_secrets(conn: &SourceDef) -> Result<(), String> {
-    for key in &conn.secrets {
+    for key in conn.secrets.keys() {
         forget_secret(conn, key)?;
-    }
-    Ok(())
-}
-
-/// Move every secret `was` holds to the slots `now` derives — what a **rename** owes, because the
-/// slot is derived from the name.
-///
-/// Beside the derivation on purpose: that a moved name moves the entry is a fact about how the
-/// slot is composed, and nothing that composes no slot should have to know it. A no-op where the
-/// name did not move.
-///
-/// # Errors
-///
-/// If the keystore refused.
-pub fn migrate_secrets(was: &SourceDef, now: &SourceDef) -> Result<(), String> {
-    if was.named() == now.named() {
-        return Ok(());
-    }
-    for key in &now.secrets {
-        migrate_derived(&secret_ref(was, key), &secret_ref(now, key)).map_err(|e| e.to_string())?;
     }
     Ok(())
 }

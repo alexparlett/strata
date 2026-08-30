@@ -13,6 +13,7 @@ mod profile;
 mod query_error;
 mod results;
 mod schema;
+mod secret;
 mod session;
 mod source;
 
@@ -30,8 +31,9 @@ pub use profile::CatalogProfile;
 pub use query_error::QueryError;
 pub use results::{Cell, PageQuery, QueryOutput, SnapshotId};
 pub use schema::{ChartRole, ColumnInfo, Kind, Stat, StatKey};
+pub use secret::SecretRef;
 pub use session::{
     expanded_drawer_h, DrawerTab, Layout, Origin, ProblemsTab, ResultsView, RightPane,
     SessionSnapshot, SidebarPane, TabId, TabSnapshot, WindowGeom,
 };
-pub use source::{check_catalog, check_catalog_name, SourceDef, WORKSPACE_CATALOG};
+pub use source::{check_catalog, check_catalog_name, Secrets, SourceDef, WORKSPACE_CATALOG};

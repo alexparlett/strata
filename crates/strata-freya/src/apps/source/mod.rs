@@ -67,6 +67,7 @@ use freya::winit::platform::macos::WindowAttributesExtMacOS;
 use freya::winit::window::WindowId;
 use std::collections::{BTreeMap, BTreeSet};
 use strata_core::config::Command;
+use strata_core::secret::Keystore;
 use strata_engine::sources::secret_slot;
 use strata_engine::Field;
 
@@ -224,20 +225,6 @@ impl SourceCtx {
         next.insert(key.to_string());
         removed.set(next);
     }
-
-    /// **This data source uses no …**: the same local delete, plus the edit to the *shared* def
-    /// that says nothing should ever expect one again.
-    pub fn disuse_secret(self, key: &str) {
-        self.forget_secret_here(key);
-        let mut expected = self.secret_expected;
-        let mut next = expected.peek().clone();
-        next.remove(key);
-        expected.set(next);
-        let key = key.to_string();
-        self.edit(move |draft| {
-            draft.secrets.remove(&key);
-        });
-    }
 }
 
 /// The data source editor window: the canvas's 480 × 588 frame, with the title bar drawn by
@@ -355,7 +342,7 @@ impl App for SourceApp {
                         }),
                 };
                 SourceCtx {
-                    secret_expected: State::create(draft.secrets.clone()),
+                    secret_expected: State::create(draft.secrets.keys().cloned().collect()),
                     draft: State::create(draft),
                     target: State::create(target),
                     status: State::create(Status::Idle),
@@ -413,7 +400,7 @@ fn probe_secrets(ctx: SourceCtx) {
             .settings
             .iter()
             .filter(|declared| declared.field == Field::Secret)
-            .filter(|declared| draft.secrets.contains(declared.key))
+            .filter(|declared| draft.secrets.contains_key(declared.key))
             .map(|declared| declared.key)
             .collect()
     };
@@ -429,7 +416,11 @@ fn probe_secrets(ctx: SourceCtx) {
             .collect(),
     );
     for key in asking {
-        let slot = secret_slot(&def, key, &[]);
+        // The def records the slot, so a key it expects always has one; a key it does not is
+        // never probed (`asking` is built from the def's own expectations).
+        let Some(slot) = secret_slot(&def, key, &[]) else {
+            continue;
+        };
         spawn(async move {
             let read = offload(move || slot.key().get()).await;
             let answer = match read {

@@ -29,7 +29,7 @@ use strata_engine::secrets::SecretProvider;
 use strata_engine::{
     DataSource, Engine, Field, SourceInfo, SourceKind, SourceMode, SourceSetting, Sourced, When,
 };
-use strata_model::SourceDef;
+use strata_model::{SecretRef, Secrets, SourceDef};
 
 use super::views::{Footer, SourceBody};
 use super::{SecretProbe, SourceCtx, SourceDraft, SourceTarget, Status};
@@ -220,7 +220,7 @@ fn runner(tag: &'static str, target: SourceTarget, draft: SourceDraft) -> (Testi
                 RadioStation::<ProjectState, ProjChan>::create(project(&root))
             });
             let ctx = r.provide_root_context(|| SourceCtx {
-                secret_expected: State::create(draft.secrets.clone()),
+                secret_expected: State::create(draft.secrets.keys().cloned().collect()),
                 draft: State::create(draft.clone()),
                 target: State::create(target.clone()),
                 status: State::create(Status::Idle),
@@ -626,7 +626,7 @@ fn a_declared_secret_is_an_expectation_in_the_def_and_a_value_on_this_machine() 
     ctx.set_secret("password", "hunter2".into());
     settle(&mut runner);
     assert!(
-        ctx.draft.peek().secrets.contains("password"),
+        ctx.draft.peek().secrets.contains_key("password"),
         "typing one is what makes the def expect one"
     );
     assert!(shows(
@@ -643,20 +643,23 @@ fn a_declared_secret_is_an_expectation_in_the_def_and_a_value_on_this_machine() 
     ctx.set_secret("password", String::new());
     settle(&mut runner);
     assert!(
-        !ctx.draft.peek().secrets.contains("password"),
+        !ctx.draft.peek().secrets.contains_key("password"),
         "and clearing the box puts back what the def said, rather than leaving a committed \
          expectation nothing holds"
     );
 }
 
-/// **The two clearing gestures are two presses, and only one of them edits the def.** Made
-/// casually on a machine with no entry, "this data source uses no password" breaks the colleague
-/// who has one, so it is never what a removal does. The press names the key, off its declared
-/// label, so a source with two credentials offers two distinguishable presses.
+/// **Remove from this machine does not say the data source has none.** The expectation stands,
+/// so a colleague who holds a password keeps working; what changes is this machine.
+///
+/// It used to be one of *two* presses, the other being "This data source uses no password" — a
+/// def edit that broke exactly that colleague, offered as a bold sentence that did not look like
+/// a control. It is gone: the password key is declared `required: false`, so an absent one is
+/// simply no password, and this press composes into that.
 #[test]
 fn removing_a_secret_from_this_machine_is_not_declaring_the_source_has_none() {
     let mut draft = source_draft();
-    draft.secrets.insert("password".into());
+    draft.secrets.insert("password".into(), SecretRef::mint());
     let (mut runner, (ctx, ..)) = runner(
         "secret-forget",
         SourceTarget::Edit("warehouse".into()),
@@ -683,19 +686,15 @@ fn removing_a_secret_from_this_machine_is_not_declaring_the_source_has_none() {
 
     click_lowest(&mut runner, "Remove from this machine");
     assert!(
-        ctx.draft.peek().secrets.contains("password"),
+        ctx.draft.peek().secrets.contains_key("password"),
         "the data source still expects one, so other machines keep theirs"
     );
     assert!(ctx.secret_removed.peek().contains("password"));
 
-    click_lowest(&mut runner, "This data source uses no password");
     assert!(
-        !ctx.draft.peek().secrets.contains("password"),
-        "this one is a def edit, and it is the only one that is"
-    );
-    assert!(
-        ctx.secret_removed.peek().contains("password"),
-        "and it drops this machine's entry too, which nothing would name again"
+        !shows(&runner, "This data source uses no password"),
+        "and there is no second press that edits the shared def: {:?}",
+        texts(&runner)
     );
 }
 
@@ -704,7 +703,7 @@ fn removing_a_secret_from_this_machine_is_not_declaring_the_source_has_none() {
 #[test]
 fn a_secret_row_says_what_this_machine_holds() {
     let mut draft = source_draft();
-    draft.secrets.insert("password".into());
+    draft.secrets.insert("password".into(), SecretRef::mint());
     let (mut runner, (ctx, ..)) = runner("secret-probe", SourceTarget::New, draft);
     let mut probes = ctx.secret_probes;
 
@@ -714,10 +713,11 @@ fn a_secret_row_says_what_this_machine_holds() {
             SecretProbe::Stored,
             "A password is stored on this machine. Type a new one to replace it.",
         ),
+        // Postgres declares its password `required: false`, so an absence is stated and
+        // nothing is demanded — see `an_optional_secret_is_answered_by_leaving_the_box_empty`.
         (
             SecretProbe::Absent,
-            "This data source expects a password and none is stored on this machine. Enter it \
-             here.",
+            "No password is stored on this machine.",
         ),
     ] {
         probes.set([("password".to_string(), answer)].into_iter().collect());
@@ -761,7 +761,10 @@ fn a_stored_source_def_survives_the_form_untouched() {
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect(),
-        secrets: BTreeSet::from(["password".to_string()]),
+        secrets: Secrets::Filed(BTreeMap::from([(
+            "password".to_string(),
+            SecretRef::mint(),
+        )])),
         schemas: vec!["public".into()],
         read_only: false,
     };

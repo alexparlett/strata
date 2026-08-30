@@ -26,6 +26,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::secret::SecretRef;
 use serde::{Deserialize, Serialize};
 
 /// One project-scoped source: which kind serves it, what it is called, and how that kind was
@@ -48,12 +49,14 @@ pub struct SourceDef {
     /// own business, and this crate has no registry to ask.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub config: BTreeMap<String, String>,
-    /// Which of the kind's secret-typed keys this source has a value for — the **expectation**,
-    /// never a reference and never a value. The values live in this machine's keystore, or arrive
-    /// through the kind's own environment convention, so a colleague pulling the project gets "no
-    /// entry on this machine, here is the fix" rather than silence.
-    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
-    pub secrets: BTreeSet<String>,
+    /// Which of the kind's secret-typed keys this source has a value for, and **the keystore slot
+    /// each is filed under** — never a value. The values live in this machine's keystore, or
+    /// arrive through the kind's own environment convention, so a colleague pulling the project
+    /// gets "no entry on this machine, here is the fix" rather than silence.
+    ///
+    /// The slot is recorded rather than inferred, and that is the point: see [`Secrets`].
+    #[serde(default, skip_serializing_if = "Secrets::is_empty")]
+    pub secrets: Secrets,
     /// The namespaces this source **shows**: `DataGrip`'s "N of M schemas" choice.
     ///
     /// Display only, never a filter the engine applies — registration exposes every namespace the
@@ -80,14 +83,170 @@ impl Default for SourceDef {
             kind: String::new(),
             name: String::new(),
             config: BTreeMap::new(),
-            secrets: BTreeSet::new(),
+            secrets: Secrets::default(),
             schemas: Vec::new(),
             read_only: true,
         }
     }
 }
 
+/// Where each of a source's secrets is filed.
+///
+/// **The slot is a stored fact.** It used to be derived from the def — `Uuid::new_v5` over
+/// `"{kind}-{key}:{name}"` — which meant deriving it from two things the user can change, while
+/// the entry it addresses lives somewhere no migration can reach. Renaming a data source moved
+/// the slot on every machine, and only the machine doing the renaming could move its own keystore
+/// entry to follow: every colleague was left with a stranded password and a form that could not
+/// tell that from never having had one. Changing the kind stranded it silently even locally,
+/// since the rename hook compared names. A recorded ref survives both.
+///
+/// It does not reintroduce what derivation was for. The objection was to a *minted* ref being
+/// rewritten by every colleague who entered their own password. A ref written once — when the
+/// secret is first filed — is never rewritten: a colleague entering their own password writes
+/// their own keystore entry under the id already in the file.
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Secrets {
+    /// A key, and the slot it is filed under. What every save writes.
+    Filed(BTreeMap<String, SecretRef>),
+    /// A def written before the slot was recorded: keys only, each still addressing the slot the
+    /// old derivation gives. Read on load, adopted once, and never written again.
+    Derived(BTreeSet<String>),
+}
+
+impl Default for Secrets {
+    fn default() -> Self {
+        Secrets::Filed(BTreeMap::new())
+    }
+}
+
+impl Secrets {
+    /// Whether this source was saved with no secrets at all.
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Secrets::Filed(filed) => filed.is_empty(),
+            Secrets::Derived(keys) => keys.is_empty(),
+        }
+    }
+
+    /// The keys a secret is expected for, in order.
+    pub fn keys(&self) -> Vec<&String> {
+        match self {
+            Secrets::Filed(filed) => filed.keys().collect(),
+            Secrets::Derived(keys) => keys.iter().collect(),
+        }
+    }
+
+    /// Whether a secret is expected for `key`.
+    pub fn expects(&self, key: &str) -> bool {
+        match self {
+            Secrets::Filed(filed) => filed.contains_key(key),
+            Secrets::Derived(keys) => keys.contains(key),
+        }
+    }
+
+    /// Whether every slot is recorded — false for a def still on the old derivation, which
+    /// [`SourceDef::adopt_secret_slots`] is what settles.
+    pub fn is_filed(&self) -> bool {
+        matches!(self, Secrets::Filed(_))
+    }
+}
+
 impl SourceDef {
+    /// The keystore slot `key`'s secret is filed under, or `None` if this source expects none.
+    ///
+    /// The one place a slot is resolved, so nothing else has to know whether this def records its
+    /// slots or is still on the old derivation.
+    pub fn secret_slot(&self, key: &str) -> Option<SecretRef> {
+        match &self.secrets {
+            Secrets::Filed(filed) => filed.get(key).cloned(),
+            Secrets::Derived(keys) => keys
+                .contains(key)
+                .then(|| SecretRef::derived(&self.secret_family(key), &self.named())),
+        }
+    }
+
+    /// The family half of the old derivation — `"{kind}-{key}"`. Only [`secret_slot`] and the
+    /// adoption need it; it is not an identity anything else should compose.
+    ///
+    /// [`secret_slot`]: Self::secret_slot
+    fn secret_family(&self, key: &str) -> String {
+        format!("{}-{key}", self.kind.trim())
+    }
+
+    /// Record a slot for every secret this def expects, answering the moves an adopting caller
+    /// owes the keystore as `(old, new)` pairs.
+    ///
+    /// **Load-time, once.** A def already recording its slots answers nothing and is left alone.
+    /// One written before them mints a ref per key and reports the old derived slot beside it, so
+    /// the caller can move whatever this machine has under it — and a machine holding nothing
+    /// simply moves nothing, which is the ordinary case for a colleague.
+    pub fn adopt_secret_slots(&mut self) -> Vec<(SecretRef, SecretRef)> {
+        let Secrets::Derived(keys) = &self.secrets else {
+            return Vec::new();
+        };
+        let mut moves = Vec::new();
+        let mut filed = BTreeMap::new();
+        for key in keys.clone() {
+            let was = SecretRef::derived(&self.secret_family(&key), &self.named());
+            let now = SecretRef::mint();
+            moves.push((was, now.clone()));
+            filed.insert(key, now);
+        }
+        self.secrets = Secrets::Filed(filed);
+        moves
+    }
+
+    /// File `key`'s secret under a freshly minted slot, or answer the one it already has.
+    ///
+    /// Minting here rather than at save is what makes the ref *write-once*: a def that already
+    /// records a slot keeps it, so entering a new password overwrites this machine's entry rather
+    /// than moving every machine's.
+    pub fn secret_slot_or_mint(&mut self, key: &str) -> SecretRef {
+        if let Some(held) = self.secret_slot(key) {
+            return held;
+        }
+        let minted = SecretRef::mint();
+        let mut filed = match std::mem::take(&mut self.secrets) {
+            Secrets::Filed(filed) => filed,
+            Secrets::Derived(keys) => keys
+                .into_iter()
+                .map(|held| {
+                    let slot = SecretRef::derived(
+                        &format!("{}-{held}", self.kind.trim()),
+                        self.name.trim(),
+                    );
+                    (held, slot)
+                })
+                .collect(),
+        };
+        filed.insert(key.to_string(), minted.clone());
+        self.secrets = Secrets::Filed(filed);
+        minted
+    }
+
+    /// Stop expecting a secret for `key`, answering the slot it was filed under so the caller can
+    /// clear this machine's entry.
+    pub fn forget_secret(&mut self, key: &str) -> Option<SecretRef> {
+        let slot = self.secret_slot(key)?;
+        let mut filed = match std::mem::take(&mut self.secrets) {
+            Secrets::Filed(filed) => filed,
+            Secrets::Derived(keys) => keys
+                .into_iter()
+                .map(|held| {
+                    let at = SecretRef::derived(
+                        &format!("{}-{held}", self.kind.trim()),
+                        self.name.trim(),
+                    );
+                    (held, at)
+                })
+                .collect(),
+        };
+        filed.remove(key);
+        self.secrets = Secrets::Filed(filed);
+        Some(slot)
+    }
+
     /// What this source is called, trimmed — the handle every surface addresses it by.
     pub fn named(&self) -> String {
         self.name.trim().to_string()
@@ -157,3 +316,102 @@ pub fn check_catalog(catalog: &str) -> Result<(), String> {
 /// name may not be ([`check_catalog`]). Here rather than in the engine that registers it, because
 /// both crates need it: `strata_engine::CATALOG` reads it.
 pub const WORKSPACE_CATALOG: &str = "strata";
+
+#[cfg(test)]
+mod slot_tests {
+    use super::*;
+
+    fn pg(name: &str, secrets: Secrets) -> SourceDef {
+        SourceDef {
+            kind: "postgres".into(),
+            name: name.into(),
+            secrets,
+            ..Default::default()
+        }
+    }
+
+    /// **A def written before slots were recorded still resolves its secret**, through the old
+    /// derivation and nothing else.
+    #[test]
+    fn a_pre_ref_def_resolves_through_the_old_derivation() {
+        let def = pg(
+            "pg",
+            Secrets::Derived(BTreeSet::from(["password".to_string()])),
+        );
+        assert_eq!(
+            def.secret_slot("password"),
+            Some(SecretRef::derived("postgres-password", "pg"))
+        );
+        assert_eq!(def.secret_slot("token"), None);
+        assert!(!def.secrets.is_filed());
+    }
+
+    /// **Adoption records a slot per key and says which entry to move onto it**, once.
+    ///
+    /// The old slot is reported beside the new one because only the caller can move a keystore
+    /// entry, and a def already recording its slots answers nothing — so a second open does no
+    /// keystore work at all.
+    #[test]
+    fn adoption_mints_a_slot_and_names_the_entry_to_move() {
+        let mut def = pg(
+            "pg",
+            Secrets::Derived(BTreeSet::from(["password".to_string()])),
+        );
+        let moves = def.adopt_secret_slots();
+
+        assert_eq!(moves.len(), 1);
+        let (was, now) = &moves[0];
+        assert_eq!(was, &SecretRef::derived("postgres-password", "pg"));
+        assert_eq!(def.secret_slot("password").as_ref(), Some(now));
+        assert!(def.secrets.is_filed());
+
+        assert!(
+            def.adopt_secret_slots().is_empty(),
+            "a def that records its slots has nothing left to adopt"
+        );
+    }
+
+    /// **A recorded slot survives a rename and a change of kind**, which is the whole point: the
+    /// derivation moved with both, and only the machine making the change could move its own
+    /// keystore entry to follow.
+    #[test]
+    fn a_recorded_slot_outlives_the_identity_it_was_minted_under() {
+        let mut def = pg("pg", Secrets::default());
+        let slot = def.secret_slot_or_mint("password");
+
+        let renamed = SourceDef {
+            name: "warehouse".into(),
+            ..def.clone()
+        };
+        assert_eq!(renamed.secret_slot("password"), Some(slot.clone()));
+
+        let rekinded = SourceDef {
+            kind: "mysql".into(),
+            ..def.clone()
+        };
+        assert_eq!(rekinded.secret_slot("password"), Some(slot.clone()));
+
+        assert_eq!(
+            def.secret_slot_or_mint("password"),
+            slot,
+            "and minting is write-once, so a second secret overwrites this machine's entry \
+             rather than moving every machine's"
+        );
+    }
+
+    /// **Both shapes read from the file**, and only the recorded one is ever written back.
+    #[test]
+    fn a_pre_ref_file_still_parses() {
+        let old: SourceDef =
+            serde_json::from_str(r#"{"kind":"postgres","name":"pg","secrets":["password"]}"#)
+                .expect("a pre-ref def");
+        assert!(old.secrets.expects("password"));
+        assert!(!old.secrets.is_filed());
+
+        let json = serde_json::to_string(&pg("pg", Secrets::default())).expect("serialize");
+        assert!(
+            !json.contains("secrets"),
+            "a source with none writes no key at all: {json}"
+        );
+    }
+}

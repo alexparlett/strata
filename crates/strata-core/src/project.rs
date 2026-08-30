@@ -23,6 +23,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{from_str, to_string, to_string_pretty};
+
+use crate::secret::migrate_derived;
 use strata_model::{HistoryEntry, SavedQuery, SessionSnapshot, SourceDef, TableDef, ViewDef};
 use uuid::Uuid;
 
@@ -133,7 +135,39 @@ pub fn load_defs(root: &Path) -> Result<ProjectDefs, String> {
     defs.views.sort_by(|a, b| name_ord(&a.name, &b.name));
     defs.saved_queries
         .sort_by(|a, b| name_ord(&a.name, &b.name));
+    if adopt_secret_slots(&mut defs) {
+        save_defs(root, &defs)?;
+    }
     Ok(defs)
+}
+
+/// Record a keystore slot for every source still on the **derived** one, moving this machine's
+/// entry to it. Answers whether anything moved, which is what makes the load rewrite the file.
+///
+/// Once per project, on the first open after the slot became a stored fact. A def written before
+/// that addressed its secret through `Uuid::new_v5` over its own `(kind, name)` — so a rename
+/// moved the slot everywhere while only the renaming machine could move its entry to follow, and
+/// every colleague was left with a stranded password indistinguishable from never having had one.
+///
+/// **Best-effort about the keystore, deliberately.** A machine with no entry under the old slot
+/// is the ordinary case — a colleague who never entered the password — and it must still get the
+/// recorded ref, or it would adopt again on every open. A keystore that *refuses* is logged and
+/// the ref is still recorded, for the same reason: the alternative is a project that will not
+/// open because a keychain is locked.
+fn adopt_secret_slots(defs: &mut ProjectDefs) -> bool {
+    let mut adopted = false;
+    for source in &mut defs.sources {
+        for (was, now) in source.adopt_secret_slots() {
+            adopted = true;
+            if let Err(e) = migrate_derived(&was, &now) {
+                tracing::warn!(
+                    "could not move the stored secret for '{}' to its recorded slot: {e}",
+                    source.name
+                );
+            }
+        }
+    }
+    adopted
 }
 
 /// Write the defs into `root`'s `.strata/` dir, creating it and tidying it

@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::{env, fmt};
 
-use strata_core::secret::{Secret, SecretRef};
+use strata_core::secret::{Keystore, Secret, SecretRef};
 
 /// What one secret is wanted for.
 ///
@@ -28,17 +28,21 @@ pub struct SecretRequest {
     /// The data source the secret belongs to, by its own name — which is what a fix asks the
     /// user to open, and what moving the name has to move the entry to.
     pub source: String,
+    /// The keystore slot this request addresses — the def's own recorded one.
+    pub slot: SecretRef,
     /// The environment variables this source conventionally reads, in the order it reads them.
     pub env: &'static [&'static str],
 }
 
 impl SecretRequest {
-    /// The keystore slot this request addresses.
+    /// The keystore slot this request addresses — the def's own, recorded when the secret was
+    /// first filed.
     ///
-    /// Derived from the family and the data source rather than stored, so the committed
-    /// `project.json` carries no machine-local id and each machine's keystore holds its own entry.
+    /// Read off the def rather than re-derived from it: the slot used to be
+    /// `Uuid::new_v5("{kind}-{key}:{name}")`, so a rename moved it on every machine while only
+    /// the renaming one could move its keystore entry to follow.
     pub fn key(&self) -> SecretRef {
-        SecretRef::derived(&self.family, &self.source)
+        self.slot.clone()
     }
 
     /// Both places this secret could have come from, for the sentence a miss produces.
@@ -219,6 +223,7 @@ mod tests {
         SecretRequest {
             family: "postgres-password".into(),
             source: "orders".into(),
+            slot: SecretRef::mint(),
             env: &["STRATA_TEST_PGPASSWORD"],
         }
     }
@@ -293,13 +298,19 @@ mod tests {
         let id = SecretRequest {
             family: "s3-access_key_id".into(),
             source: "acme-lake".into(),
+            slot: SecretRef::mint(),
             env: &[],
         };
         let secret = SecretRequest {
             family: "s3-secret_access_key".into(),
+            slot: SecretRef::mint(),
             ..id.clone()
         };
-        assert_ne!(id.key(), secret.key());
+        assert_ne!(
+            id.key(),
+            secret.key(),
+            "each key is filed under its own recorded slot"
+        );
         let held = MemSecrets::new().with(id.key(), Secret::new("AKIA").unwrap());
         assert_eq!(held.secret(&secret), Ok(None));
     }

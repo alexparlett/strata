@@ -15,6 +15,7 @@
 
 use freya::prelude::*;
 use strata_engine::{Field, SourceInfo, SourceSetting};
+use strata_model::SecretRef;
 
 use crate::apps::source::model::{noun, SecretProbe, SecretRow};
 use crate::apps::source::SourceCtx;
@@ -298,6 +299,7 @@ impl Component for SecretField {
         let mut revealed = use_state(|| false);
         let name = self.declared.key;
         let noun = noun(&self.declared);
+        let required = self.declared.required;
 
         let stored = ctx
             .secret_values
@@ -328,10 +330,30 @@ impl Component for SecretField {
             if typed {
                 ctx.keep_secret(name);
             }
-            let expects = typed || ctx.secret_expected.read().contains(name);
+            // Through the row, because only it can read an empty box: with a secret stored here
+            // empty means leave it, and with nothing stored and nothing required it means there
+            // is none (`SecretRow::keeps_expectation`).
+            let expects = typed
+                || SecretRow::of(
+                    required,
+                    ctx.secret_expected.read().contains(name),
+                    false,
+                    ctx.secret_removed.read().contains(name),
+                    ctx.secret_probes
+                        .read()
+                        .get(name)
+                        .unwrap_or(&SecretProbe::Absent),
+                )
+                .keeps_expectation();
             ctx.edit(move |draft| match expects {
                 true => {
-                    draft.secrets.insert(name.to_string());
+                    // Minted the first time a key becomes expected and kept for the
+                    // life of the def: a ref is written once, so entering a new password
+                    // overwrites this machine's entry rather than moving every machine's.
+                    draft
+                        .secrets
+                        .entry(name.to_string())
+                        .or_insert_with(SecretRef::mint);
                 }
                 false => {
                     draft.secrets.remove(name);
@@ -340,6 +362,7 @@ impl Component for SecretField {
         });
 
         let row = SecretRow::of(
+            self.declared.required,
             ctx.secret_expected.read().contains(name),
             ctx.secret_values
                 .read()
@@ -404,14 +427,6 @@ impl Component for SecretField {
                                         ctx.forget_secret_here(name);
                                     })
                                     .child(Control::new("Remove from this machine"))
-                            }))
-                            .maybe_child(row.offers_disuse().then(|| {
-                                Button::new()
-                                    .flat()
-                                    .on_press(move |_: Event<PressEventData>| {
-                                        ctx.disuse_secret(name);
-                                    })
-                                    .child(Control::new(format!("This data source uses no {noun}")))
                             })),
                     ),
             ))

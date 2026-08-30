@@ -31,8 +31,8 @@ use freya::radio::{use_radio_station, RadioStation};
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use strata_engine::sources::{forget_secret, forget_secrets, migrate_secrets, put_secret};
-use strata_model::{check_catalog_name, SourceDef};
+use strata_engine::sources::put_secret_at;
+use strata_model::{check_catalog_name, SecretRef, SourceDef};
 
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::{log_event, use_report, LogLevel, ReportCtx};
@@ -208,16 +208,11 @@ fn catalog_clash(ctx: SourceCtx, project: RadioStation<ProjectState, ProjChan>) 
 /// the engine's — this says only which of these things happened to which box.
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum SecretOp {
-    /// The data source was renamed, so its secrets move with it.
-    Rename,
-    /// A value was typed into `key`'s box.
-    Put { key: String, value: String },
-    /// *Remove from this machine*, or the "uses no …" edit, for one declared key.
-    Forget { key: String },
-    /// Everything the **previous** def kept here: a data source that is no longer a source, or one
-    /// whose kind moved — in which case nothing would ever name the old slots again, since the
-    /// family is the kind.
-    ForgetAll,
+    /// A value was typed into a box, bound for the slot its key is filed under.
+    Put { slot: SecretRef, value: String },
+    /// *Remove from this machine*, for one declared key — or a key this save drops, whose slot
+    /// only the **previous** def still names.
+    Forget { slot: SecretRef },
 }
 
 /// Plan a save of `next` over `previous`, the def as this window opened it.
@@ -240,23 +235,39 @@ fn secret_ops(
     let was = previous.filter(|def| !def.secrets.is_empty());
 
     let mut ops = Vec::new();
-    match was.map(|def| def.kind.trim()) {
-        Some(kind) if kind != next.kind.trim() => ops.push(SecretOp::ForgetAll),
-        _ if was.is_some_and(|def| def.named() != next.named()) => ops.push(SecretOp::Rename),
-        _ => {}
-    }
 
-    let mut keys: BTreeSet<&str> = next.secrets.iter().map(String::as_str).collect();
+    // **A rename owes the keystore nothing.** The slot is recorded in the def, so it travels with
+    // the def rather than being re-derived from a name that just moved — which is what used to
+    // strand a colleague's password on every rename they pulled.
+    let mut keys: BTreeSet<&str> = next
+        .secrets
+        .keys()
+        .into_iter()
+        .map(String::as_str)
+        .collect();
+    keys.extend(
+        was.iter()
+            .flat_map(|def| def.secrets.keys())
+            .map(String::as_str),
+    );
     keys.extend(typed.keys().map(String::as_str));
     keys.extend(removed.iter().map(String::as_str));
     for key in keys {
+        // A key the save drops — the kind changed and no longer declares it, or the box was
+        // cleared — is filed under the slot the *previous* def named, and nothing else ever will.
+        let Some(slot) = next
+            .secret_slot(key)
+            .or_else(|| was.and_then(|def| def.secret_slot(key)))
+        else {
+            continue;
+        };
         match typed.get(key).map(|value| value.trim()).unwrap_or_default() {
-            "" if removed.contains(key) => ops.push(SecretOp::Forget {
-                key: key.to_string(),
-            }),
+            "" if removed.contains(key) || !next.secrets.expects(key) => {
+                ops.push(SecretOp::Forget { slot });
+            }
             "" => {}
             value => ops.push(SecretOp::Put {
-                key: key.to_string(),
+                slot,
                 value: value.to_string(),
             }),
         }
@@ -267,21 +278,11 @@ fn secret_ops(
 /// Carry `ops` out in order, stopping at the first refusal. Blocking, so it runs on a worker; a
 /// keystore that refuses is reported and the save does not happen, never answered by writing the
 /// secret somewhere else.
-fn run_secret_ops(
-    ops: &[SecretOp],
-    previous: Option<&SourceDef>,
-    next: &SourceDef,
-) -> Result<(), String> {
+fn run_secret_ops(ops: &[SecretOp]) -> Result<(), String> {
     for op in ops {
         match op {
-            SecretOp::Rename => {
-                if let Some(was) = previous {
-                    migrate_secrets(was, next)?;
-                }
-            }
-            SecretOp::Put { key, value } => put_secret(next, key, value)?,
-            SecretOp::Forget { key } => forget_secret(next, key)?,
-            SecretOp::ForgetAll => forget_secrets(previous.unwrap_or(next))?,
+            SecretOp::Put { slot, value } => put_secret_at(slot, value)?,
+            SecretOp::Forget { slot } => put_secret_at(slot, "")?,
         }
     }
     Ok(())
@@ -333,7 +334,7 @@ fn save(
 
     ctx.status.set(Status::Storing);
     spawn(async move {
-        let landed = offload(move || run_secret_ops(&ops, previous.as_ref(), &def)).await;
+        let landed = offload(move || run_secret_ops(&ops)).await;
         match landed {
             Some(Ok(())) => commit(ctx, project, rescan, engine, report),
             Some(Err(why)) => ctx.status.set(Status::Failed(format!(
@@ -407,7 +408,7 @@ fn commit(
 mod tests {
     use std::collections::BTreeMap;
 
-    use strata_model::SourceDef;
+    use strata_model::{Secrets, SourceDef};
 
     use super::*;
 
@@ -419,8 +420,25 @@ mod tests {
                 .collect(),
             name: name.into(),
             kind: kind.into(),
-            secrets: BTreeSet::from(["password".to_string()]),
+            secrets: Secrets::Filed(BTreeMap::from([(
+                "password".to_string(),
+                SecretRef::derived("fixture", name),
+            )])),
             ..Default::default()
+        }
+    }
+
+    /// A source with two credentials, so a plan can be asked to keep them apart.
+    fn two_credentials(name: &str) -> SourceDef {
+        SourceDef {
+            secrets: Secrets::Filed(BTreeMap::from([
+                ("password".to_string(), SecretRef::derived("fixture", name)),
+                (
+                    "token".to_string(),
+                    SecretRef::derived("fixture-token", name),
+                ),
+            ])),
+            ..source(name, "db:5432/analytics", "test")
         }
     }
 
@@ -492,55 +510,65 @@ mod tests {
         );
     }
 
-    /// **A rename moves the entries, and the move comes before the put.** The slot is derived from
-    /// the data source's name, so renaming one moves it; run the other way round, a save that
-    /// renamed *and* typed a new value would carry the old one over it.
+    /// **A rename owes the keystore nothing**, which is what recording the slot bought.
+    ///
+    /// The ref travels in the def, so the renamed source reads the entry it already had. It used
+    /// to be derived from the name: a rename moved the slot on every machine while only the
+    /// renaming one could move its own entry to follow, so every colleague who pulled the rename
+    /// was left with a password under an id nothing would name again.
     #[test]
-    fn a_rename_moves_the_entries_before_anything_lands_on_the_new_slots() {
+    fn a_rename_plans_no_keystore_work_at_all() {
         let old = source("warehouse", "db:5432/analytics", "test");
-        let new = source("depot", "db:5432/analytics", "test");
+        let renamed = SourceDef {
+            name: "depot".into(),
+            ..old.clone()
+        };
         assert_eq!(
-            secret_ops(Some(&old), &new, &BTreeMap::new(), &BTreeSet::new()),
-            [SecretOp::Rename]
+            secret_ops(Some(&old), &renamed, &BTreeMap::new(), &BTreeSet::new()),
+            [],
+            "the slot is in the def, so nothing moves"
         );
         assert_eq!(
             secret_ops(
                 Some(&old),
-                &new,
+                &renamed,
                 &typed(&[("password", "hunter2")]),
                 &BTreeSet::new()
             ),
-            [
-                SecretOp::Rename,
-                SecretOp::Put {
-                    key: "password".into(),
-                    value: "hunter2".into()
-                }
-            ]
-        );
-
-        let moved_address = source("warehouse", "db:5433/analytics", "test");
-        assert_eq!(
-            secret_ops(
-                Some(&old),
-                &moved_address,
-                &BTreeMap::new(),
-                &BTreeSet::new()
-            ),
-            [],
-            "the address moved and the name did not, so the slot did not move"
+            [SecretOp::Put {
+                slot: old.secret_slot("password").expect("a filed slot"),
+                value: "hunter2".into()
+            }],
+            "and a value typed during a rename lands on the slot the def already names"
         );
     }
 
-    /// **A moved kind is a moved family, so the old slots are dropped rather than migrated.** The
-    /// keystore family is `{kind}-{key}`, and nothing would ever name the old one again.
+    /// **A key the save no longer expects is cleared from the slot the previous def named**, and
+    /// nothing else is.
+    ///
+    /// The kind changing is the case that produces one: `def()` projects through the *new* kind's
+    /// declaration, so a credential it does not declare drops out of the map. The old slot is the
+    /// only name that entry ever had, so the previous def is what has to be asked for it.
     #[test]
-    fn a_moved_kind_forgets_what_the_old_kind_kept_here() {
+    fn a_dropped_key_is_cleared_from_the_slot_the_previous_def_named() {
         let old = source("warehouse", "db:5432/analytics", "test");
-        let moved = source("warehouse", "db:5432/analytics", "other");
+        let dropped = SourceDef {
+            secrets: Secrets::default(),
+            ..old.clone()
+        };
         assert_eq!(
-            secret_ops(Some(&old), &moved, &BTreeMap::new(), &BTreeSet::new()),
-            [SecretOp::ForgetAll]
+            secret_ops(Some(&old), &dropped, &BTreeMap::new(), &BTreeSet::new()),
+            [SecretOp::Forget {
+                slot: old.secret_slot("password").expect("a filed slot")
+            }]
+        );
+
+        let same_key = source("warehouse", "db:5432/analytics", "other");
+        assert_eq!(
+            secret_ops(Some(&old), &same_key, &BTreeMap::new(), &BTreeSet::new()),
+            [],
+            "a kind that declares the same key keeps the entry: the slot is the def's now, not \
+             the kind's"
         );
     }
 
@@ -558,7 +586,7 @@ mod tests {
                 &BTreeSet::new()
             ),
             [SecretOp::Put {
-                key: "password".into(),
+                slot: def.secret_slot("password").expect("a filed slot"),
                 value: "hunter2".into()
             }]
         );
@@ -570,29 +598,30 @@ mod tests {
                 &removed(&["password"])
             ),
             [SecretOp::Put {
-                key: "password".into(),
+                slot: def.secret_slot("password").expect("a filed slot"),
                 value: "hunter2".into()
             }],
             "typing over a pending removal is the secret you meant"
         );
+        let both = two_credentials("warehouse");
         assert_eq!(
             secret_ops(
-                Some(&def),
-                &def,
+                Some(&both),
+                &both,
                 &typed(&[("password", "hunter2"), ("token", "t-1")]),
                 &BTreeSet::new()
             ),
             [
                 SecretOp::Put {
-                    key: "password".into(),
+                    slot: both.secret_slot("password").expect("a filed slot"),
                     value: "hunter2".into()
                 },
                 SecretOp::Put {
-                    key: "token".into(),
+                    slot: both.secret_slot("token").expect("a filed slot"),
                     value: "t-1".into()
                 }
             ],
-            "one op per box, never one for the data source"
+            "one op per box, each on its own slot, never one for the data source"
         );
     }
 
@@ -604,13 +633,13 @@ mod tests {
         assert_eq!(
             secret_ops(Some(&def), &def, &BTreeMap::new(), &removed(&["password"])),
             [SecretOp::Forget {
-                key: "password".into()
+                slot: def.secret_slot("password").expect("a filed slot")
             }],
             "remove from this machine"
         );
 
         let unused = SourceDef {
-            secrets: BTreeSet::new(),
+            secrets: Secrets::default(),
             ..def.clone()
         };
         assert_eq!(
@@ -621,15 +650,18 @@ mod tests {
                 &removed(&["password"])
             ),
             [SecretOp::Forget {
-                key: "password".into()
+                slot: def.secret_slot("password").expect("a filed slot")
             }],
-            "this data source uses no password"
+            "a save that stops expecting one"
         );
 
         assert_eq!(
             secret_ops(Some(&def), &store(), &BTreeMap::new(), &BTreeSet::new()),
-            [SecretOp::ForgetAll],
-            "and a data source that is no longer a source keeps none of them"
+            [SecretOp::Forget {
+                slot: def.secret_slot("password").expect("a filed slot")
+            }],
+            "and a data source that is no longer a source keeps none of them — named one slot at \
+             a time, because the previous def is what still knows where each one is"
         );
     }
 

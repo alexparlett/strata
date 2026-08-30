@@ -32,7 +32,7 @@
 //! built without it has no `PostgreSQL` in its tree, and neither does this.
 #![cfg(feature = "postgres")]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::path::Path;
 use std::sync::Once;
@@ -48,15 +48,14 @@ use strata_core::project::ProjectDefs;
 use strata_engine::profile::{aggregates, profile_sql};
 use strata_engine::register::RegOutcome;
 use strata_engine::sources::postgres::settings::PASSWORD as PASSWORD_KEY;
-use strata_engine::sources::{
-    migrate_secrets, put_secret, SchemaListingView, SchemaVisibility, SourceDetail,
-};
+use strata_engine::sources::{put_secret, SchemaListingView, SchemaVisibility, SourceDetail};
 use strata_engine::{
     sql, Engine, EngineError, RunOutcome, RunTag, SourceDefs, StopReason, StoreEffect, ViewMeta,
     WsId,
 };
 use strata_model::{
-    Cell, CsvRead, SourceDef, SourceFormat, StatKey, TableDef, TableOrigin, ViewDef,
+    Cell, CsvRead, SecretRef, Secrets, SourceDef, SourceFormat, StatKey, TableDef, TableOrigin,
+    ViewDef,
 };
 use testcontainers::runners::AsyncRunner;
 use testcontainers::ContainerAsync;
@@ -165,7 +164,13 @@ fn source(port: u16, catalog: &str, schemas: &[&str]) -> SourceDef {
             ("user".to_string(), USER.to_string()),
             ("sslmode".to_string(), "disable".to_string()),
         ]),
-        secrets: BTreeSet::from([PASSWORD_KEY.to_string()]),
+        // A fixture picks its slot deterministically so every `source(...)` call for one
+        // name addresses the entry a previous call stored. Production mints instead — see
+        // `SourceDef::secret_slot_or_mint`.
+        secrets: Secrets::Filed(BTreeMap::from([(
+            PASSWORD_KEY.to_string(),
+            SecretRef::derived("test-password", catalog),
+        )])),
         schemas: schemas.iter().map(|s| (*s).to_string()).collect(),
         read_only: true,
     }
@@ -1029,15 +1034,18 @@ async fn json_pushdown(engine: &Engine, dir: &Path) {
 /// data source from a second one to the same server. Retiring the old catalog is therefore the
 /// renaming gesture's own `Sources::disconnect`, which is what the data source editor's Save makes.
 ///
-/// The rename goes through [`migrate_secrets`] rather than storing a second password, because
-/// that is what a rename *is* now: the keystore slot is derived from the data source's name, so
-/// moving the name moves the entry, and a rename that skipped this funnel would leave the
-/// data source unable to log in. Last phase of the test, so the old name's empty slot is nobody's
-/// problem afterwards.
+/// **The rename owes the keystore nothing**, which is what recording the slot bought: the ref
+/// travels in the def, so a renamed data source logs in with the password it already had and no
+/// migration runs. It used to be derived from the name, so a rename moved the slot on every
+/// machine while only the renaming one could move its own entry — every colleague pulling the
+/// rename was left unable to log in. Last phase of the test, so the rename is nobody's problem
+/// afterwards.
 async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
     let was = source(port, CATALOG, &["public"]);
-    let renamed = source(port, "warehouse", &["public"]);
-    migrate_secrets(&was, &renamed).expect("this machine's keystore answers");
+    let renamed = SourceDef {
+        name: "warehouse".into(),
+        ..was.clone()
+    };
     engine
         .sources()
         .connect(renamed.clone())

@@ -19,7 +19,7 @@
 use std::collections::BTreeMap;
 
 use strata_core::ai::{Ai, ProviderKind};
-use strata_core::secret::{Secret, SecretError, SecretRef};
+use strata_core::secret::{Keystore, Secret, SecretError, SecretRef};
 
 /// Every key typed in this window and not yet committed.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
