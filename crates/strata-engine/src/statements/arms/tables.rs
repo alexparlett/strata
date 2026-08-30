@@ -136,9 +136,6 @@ async fn create(
         Target::Remote(at) => {
             return materialize(ctx, &at, &cx.live, &input, if_not_exists, or_replace).await
         }
-        // A CTAS makes a table whose data **Strata** owns, spooled into the project. A store
-        // data source's catalog holds tables whose data is a bucket's, so there is nothing for
-        // this statement to create in one: refused by name, in that catalog's own words.
         Target::Store(at) => return Err(in_store(&at.address(), &at.source, WHAT)),
         Target::Nowhere { .. } => return Err(elsewhere(WHAT)),
         Target::Workspace { name } => name,
@@ -436,10 +433,6 @@ pub async fn insert(
                 effect: None,
             });
         }
-        // **The internal gate, answering exactly as it did before the tables moved.** A bucket
-        // table was refused here for not being one Strata stores, and it still is: reaching the
-        // gate through `cx.internal` below would ask the same question of the same name, so this
-        // arm says the same sentence rather than re-deriving it.
         Target::Store(_) => return Err(INSERT_EXTERNAL.into()),
         Target::Nowhere { .. } => return Err(elsewhere(WHAT)),
         Target::Workspace { name } => name.clone(),
@@ -550,9 +543,6 @@ pub async fn drop_table(
     }
     let dependents = dependent_views(ctx, name).await;
 
-    // Out of whichever catalog holds it: a table that reads through a live store data source is
-    // registered in that source's catalog, so `ctx.deregister_table` — which resolves against the
-    // *default* catalog — would take out nothing and report a drop that did not happen.
     let taken = take_table(ctx, name);
     if origin.is_internal() {
         if let Err(e) = tables.discard(&table_slug(name)).await {

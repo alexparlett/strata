@@ -228,17 +228,10 @@ fn secret_ops(
     typed: &BTreeMap<String, String>,
     removed: &BTreeSet<String>,
 ) -> Vec<SecretOp> {
-    // Only a def that actually **holds** something has anything to move or forget. A rename or a
-    // dropped provider is a keystore operation for a data source with secrets and nothing at all
-    // for one without — and planning it anyway sends every such save down the worker path, which
-    // on macOS is a Keychain prompt raised over an empty slot.
     let was = previous.filter(|def| !def.secrets.is_empty());
 
     let mut ops = Vec::new();
 
-    // **A rename owes the keystore nothing.** The slot is recorded in the def, so it travels with
-    // the def rather than being re-derived from a name that just moved — which is what used to
-    // strand a colleague's password on every rename they pulled.
     let mut keys: BTreeSet<&str> = next
         .secrets
         .keys()
@@ -253,8 +246,6 @@ fn secret_ops(
     keys.extend(typed.keys().map(String::as_str));
     keys.extend(removed.iter().map(String::as_str));
     for key in keys {
-        // A key the save drops — the kind changed and no longer declares it, or the box was
-        // cleared — is filed under the slot the *previous* def named, and nothing else ever will.
         let Some(slot) = next
             .secret_slot(key)
             .or_else(|| was.and_then(|def| def.secret_slot(key)))
@@ -501,8 +492,6 @@ mod tests {
             "blank is nothing"
         );
 
-        // A kind that declares no secret has no box to type one into, so the map is empty by
-        // construction — the editor keys it by the settings it drew.
         let s3 = store();
         assert_eq!(
             secret_ops(Some(&s3), &s3, &BTreeMap::new(), &BTreeSet::new()),

@@ -208,8 +208,6 @@ impl Component for SourcePicker {
             let draft = ctx.draft.read();
             (draft.kind.clone(), draft.source.clone())
         };
-        // The kind's own label, not its registry key: the sentence is read by a person, and `gcs`
-        // is what the def is filed under rather than what anyone calls it.
         let label = stores(&engine)
             .into_iter()
             .find(|info| info.kind == kind)

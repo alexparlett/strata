@@ -242,20 +242,13 @@ impl CatalogProvider for StrataCatalogProvider {
 /// that reads through it.
 ///
 /// Registered under the data source's own name while it is live, which is what makes forgetting
-/// one *structural* rather than a warning in a confirm dialog: the catalog comes off the list and
-/// its tables stop resolving with it, instead of a deregistration per table that a failure
-/// half-finishes.
+/// one structural: the catalog comes off the list and its tables stop resolving with it, rather
+/// than a deregistration per table that a failure could half-finish.
 ///
-/// **Def-fed, and it enumerates nothing.** A bucket cannot say what its tables are, so what this
-/// holds is derived from the project's own rows — the same `ListingTable`s
-/// [`register_external`](super::catalog::register_external) has always built, placed here rather
-/// than in the workspace. Catalog-is-the-store is intact: the store answers no question about
-/// membership, the defs do.
-///
-/// **Placement, not a namespace.** Table names stay unique across the whole project, so
-/// `lake.strata.sales` and a bare `sales` are the same name reached two ways — which is why
-/// [`resolve_target`](super::statements::resolve_target) answers `Workspace` for both, and why
-/// this catalog needs no rule of its own about what may be created in it.
+/// It enumerates nothing. A bucket cannot say what its tables are, so what this holds is the
+/// project's own rows — the same `ListingTable`s
+/// [`register_external`](super::catalog::register_external) builds, placed here rather than in
+/// the workspace.
 pub struct StoreCatalogProvider {
     /// The name the data source registered under — what a refusal from here names.
     catalog: String,
@@ -721,7 +714,7 @@ mod tests {
         assert!(ctx.sql("DESCRIBE events").await.is_ok());
     }
 
-    /// **A store data source's catalog is placement, not a namespace** (EA-25 item 3).
+    /// **A store data source's catalog is placement, not a namespace.**
     ///
     /// The five decisions the placement rests on, asked of a registered `StoreCatalogProvider`
     /// with no data source and no network behind it:

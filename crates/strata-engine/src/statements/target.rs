@@ -27,7 +27,7 @@ use crate::{fold_ident, CATALOG, SCHEMA};
 pub enum Target {
     /// The workspace catalog's one schema, under the bare name registration takes.
     Workspace { name: String },
-    /// A table in a **store** data source's catalog (EA-25) — one of the project's own rows,
+    /// A table in a **store** data source's catalog — one of the project's own rows,
     /// whose data is files in a bucket.
     Store(Stored),
     /// A relation inside a live data source's catalog.
@@ -44,9 +44,6 @@ impl Target {
     /// there is nothing there to hold a grant over.
     pub fn locality(&self) -> Option<Locality> {
         match self {
-            // A bucket table is **file-backed and the project's own**, so it holds the local
-            // grant it held when it lived in the workspace catalog. The axis is where the work
-            // happens, not which catalog resolves the name: nothing about it is a server's.
             Target::Workspace { .. } | Target::Store(_) => Some(Locality::Local),
             Target::Remote(_) => Some(Locality::Remote),
             Target::Nowhere { .. } => None,
@@ -201,10 +198,6 @@ pub fn resolve_target(ctx: &SessionContext, name: &TableReference) -> Target {
             name: name.table().to_string(),
         };
     }
-    // A store data source's catalog is **ours**, so it answers here and never falls through to
-    // the database search below: it has one schema like the workspace's, and a name written
-    // against any other resolves to nothing in it — which is `Nowhere`, exactly as
-    // `strata.other.t` already is, rather than a relation on some server.
     if let TableReference::Full {
         catalog, schema, ..
     } = name
@@ -336,7 +329,7 @@ mod tests {
         resolve_target(ctx, &TableReference::parse_str(name))
     }
 
-    /// **A store data source's catalog is its own answer** (EA-25 item 6), and the difference
+    /// **A store data source's catalog is its own answer**, and the difference
     /// between the two helpers is the point of it.
     ///
     /// A bucket table is file-backed and the project's own, so an arm that *manages a def*

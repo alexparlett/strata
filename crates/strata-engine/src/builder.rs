@@ -334,8 +334,6 @@ mod tests {
         SecretRequest {
             family: "postgres-password".into(),
             source: "orders".into(),
-            // Deterministic, so two calls name one slot: the fixture stands in for a def, and a
-            // def's slot is recorded rather than re-minted per read.
             slot: strata_model::SecretRef::derived("postgres-password", "orders"),
             env: &[],
         }

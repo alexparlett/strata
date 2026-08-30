@@ -222,9 +222,6 @@ impl DataSource for S3 {
 
         let endpoint = value("endpoint");
         if !endpoint.is_empty() {
-            // Plain HTTP is derived from the endpoint the user typed rather than offered beside
-            // it: `http://` is already the decision, and a switch for it is a second answer to a
-            // question that has one.
             let allow_http = endpoint.starts_with("http://");
             builder = builder.with_endpoint(endpoint).with_allow_http(allow_http);
         }
@@ -291,8 +288,6 @@ async fn read(
     key: &str,
     env: &'static [&'static str],
 ) -> Result<Option<Secret>, String> {
-    // A def that expects no secret for `key` has none stored anywhere: there is no slot to ask
-    // about, which is the same answer as an empty one.
     let Some(request) = secret_slot(def, key, env) else {
         return Ok(None);
     };

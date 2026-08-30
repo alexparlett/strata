@@ -901,10 +901,6 @@ pub fn plan_deps(ctx: &SessionContext, plan: &datafusion::logical_expr::LogicalP
         match node {
             LogicalPlan::TableScan(scan) => {
                 if scan.source.get_logical_plan().is_none() {
-                    // **Checkability**, not namespace: a bucket table is one of the project's
-                    // own rows placed in its data source's catalog, so it is reconcilable
-                    // against them and belongs in `tables` under its bare name. Only a
-                    // server-enumerated relation, which no row can be found for, is `remote`.
                     match def_backed(ctx, &scan.table_name) {
                         true => tables.insert(scan.table_name.table().to_string()),
                         false => remote.insert(scan.table_name.to_string()),

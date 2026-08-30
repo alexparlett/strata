@@ -478,7 +478,7 @@ async fn registration_race(engine: &Engine, endpoint: &str) {
 /// with a 403 because the rejection case's wrong key arrived mid-run. Sequential phases in a
 /// single test are the fix that does not depend on `--test-threads=1` being remembered, and
 /// they cost one container instead of two.
-/// **A bucket table lives in its data source's catalog** (EA-25 item 3), which is what makes
+/// **A bucket table lives in its data source's catalog**, which is what makes
 /// forgetting the source take its tables with it.
 ///
 /// The four things that follow from the placement, in one run against a real store:
@@ -494,8 +494,7 @@ async fn registration_race(engine: &Engine, endpoint: &str) {
 /// The view is the one thing the placement does **not** change, and the assertion says so: a
 /// view captures the provider `Arc` its plan was built against, so it does not stop resolving
 /// with the catalog. It degrades where it always did, on the object store the forget took off
-/// the session — which is the same sentence a forgotten bucket produced before the tables
-/// moved.
+/// the session, which is where a forgotten bucket's readers degrade.
 #[tokio::test]
 async fn a_bucket_table_lives_in_its_data_sources_catalog() {
     let (_minio, endpoint) = minio().await;
@@ -552,10 +551,6 @@ async fn a_bucket_table_lives_in_its_data_sources_catalog() {
         meta.remote
     );
 
-    // **The statement arms reach a bucket table.** `DROP TABLE` is the one that proved the
-    // placement needs its own `Target` arm rather than being folded into the workspace's: the
-    // arm resolves the name it is handed, and a bare lookup answers "does not exist" about a
-    // table sitting in its data source's catalog.
     let dropped = engine
         .ws(WsId(1))
         .run(RunTag(5), "DROP TABLE regions".into(), 50)

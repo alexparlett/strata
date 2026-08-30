@@ -1809,7 +1809,7 @@ mod tests {
         ProjectState::from_defs(defs, PathBuf::from("/tmp/strata-sources-store-test"))
     }
 
-    /// **A name is unique across the whole project, catalogs notwithstanding** (EA-25 item 3).
+    /// **A name is unique across the whole project, catalogs notwithstanding.**
     ///
     /// A store data source's catalog is *placement*, not a namespace liberalization: a bucket
     /// table's provider lives in its source's catalog, and the name it lives under is still the

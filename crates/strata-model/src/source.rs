@@ -92,18 +92,11 @@ impl Default for SourceDef {
 
 /// Where each of a source's secrets is filed.
 ///
-/// **The slot is a stored fact.** It used to be derived from the def — `Uuid::new_v5` over
-/// `"{kind}-{key}:{name}"` — which meant deriving it from two things the user can change, while
-/// the entry it addresses lives somewhere no migration can reach. Renaming a data source moved
-/// the slot on every machine, and only the machine doing the renaming could move its own keystore
-/// entry to follow: every colleague was left with a stranded password and a form that could not
-/// tell that from never having had one. Changing the kind stranded it silently even locally,
-/// since the rename hook compared names. A recorded ref survives both.
-///
-/// It does not reintroduce what derivation was for. The objection was to a *minted* ref being
-/// rewritten by every colleague who entered their own password. A ref written once — when the
-/// secret is first filed — is never rewritten: a colleague entering their own password writes
-/// their own keystore entry under the id already in the file.
+/// The slot is recorded rather than derived from the def. Deriving it took it from things the
+/// user can change while the keystore entry it addresses sits on machines no edit reaches, so a
+/// rename stranded every colleague's secret; a ref written once when the secret is first filed
+/// survives a rename and a change of kind, and is never rewritten by the colleague who enters
+/// their own value under it.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Secrets {

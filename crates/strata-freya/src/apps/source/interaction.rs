@@ -593,8 +593,6 @@ fn editing_a_source_does_not_clash_with_the_row_it_replaces() {
     }
     settle(&mut runner);
 
-    // The footer holds the station rather than subscribing to it, so this edit is what re-renders
-    // it — and it has to land with the row already stored, or the clash never gets asked about.
     ctx.edit(|draft| draft.set("user", "writer".into()));
     settle(&mut runner);
 
@@ -713,8 +711,6 @@ fn a_secret_row_says_what_this_machine_holds() {
             SecretProbe::Stored,
             "A password is stored on this machine. Type a new one to replace it.",
         ),
-        // Postgres declares its password `required: false`, so an absence is stated and
-        // nothing is demanded — see `an_optional_secret_is_answered_by_leaving_the_box_empty`.
         (
             SecretProbe::Absent,
             "No password is stored on this machine.",

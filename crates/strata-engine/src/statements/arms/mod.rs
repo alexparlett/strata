@@ -127,9 +127,6 @@ pub(crate) fn stamped(
 /// `impl Into<TableReference> for &str` parses, and a name that needed quoting does not survive a
 /// parse, so it would be looked up under a name nothing ever registered.
 pub(crate) async fn existing(ctx: &SessionContext, name: &str) -> Option<TableType> {
-    // Through `def_ref`, because a project name is not always in the workspace catalog: a table
-    // that reads through a live store data source is registered in *that* source's catalog
-    // (EA-25 item 3), and a bare lookup would report an existing table as absent.
     let provider: Arc<dyn TableProvider> = ctx
         .table_provider(def_ref(ctx, &fold_ident(name)))
         .await

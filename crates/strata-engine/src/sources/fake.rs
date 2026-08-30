@@ -451,8 +451,6 @@ mod tests {
             &at,
             fake_schema(),
         );
-        // `WRITABLE` is what the editor offers a read-only toggle on, so a source whose claim and
-        // whose handle disagree either hides a control that works or offers one that cannot.
         match (S::WRITABLE, written) {
             (false, Err(why)) => assert_eq!(
                 why,

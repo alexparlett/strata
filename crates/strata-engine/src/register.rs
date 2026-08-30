@@ -954,9 +954,8 @@ mod tests {
     /// refresh all reach it. A diff that answered "moved" for an unmoved source would tear down
     /// every live one on each of those — dropping a database's pool and its cached listing, and
     /// widening the window where its catalog resolves to nothing — before the pass reconnected
-    /// them anyway. It did: the two sides of the comparison were computed apart, `held()`
-    /// answering an *address* while the caller read a *name*, so the answer was "moved" for every
-    /// source not named after its own address.
+    /// them anyway, which is what a comparison of a *name* against an *address* produced: the
+    /// answer was "moved" for every source not named after its own address.
     ///
     /// Asked of `SourceDefs::moved` rather than through `sync`, deliberately: the additive phase
     /// reconnects every desired source on every pass, and a failed connect takes back whatever it
@@ -975,7 +974,6 @@ mod tests {
             ..Default::default()
         };
 
-        // A name whose address it is *not*, which is every real one and the case that broke.
         let def = at("s3", "lake_s3", "acme-lake");
         engine
             .catalog()

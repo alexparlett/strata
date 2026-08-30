@@ -1,7 +1,7 @@
 //! What a `PostgreSQL` data source is described by: the keys it declares, and how a def's config map
 //! reads as them.
 //!
-//! The address is one of those keys ([`Slot::Address`]), so the whole form is here — including
+//! The address is one of those keys, so the whole form is here — including
 //! the certificate box appearing only under the verifying modes, and the sentence explaining
 //! each row.
 //!
@@ -42,7 +42,7 @@ const SSL: Option<&str> = Some("SSL");
 
 /// Every row a `PostgreSQL` data source has, in the order it has them.
 ///
-/// The address is a declared key like the rest ([`Slot::Address`]) — its value lands on the def's
+/// The address is a declared key like the rest — its value lands in the def's
 /// own field rather than in `config`, and everything else about the row is stated here, so
 /// nothing about a `PostgreSQL` data source is written down in the editor.
 pub const SETTINGS: &[SourceSetting] = &[

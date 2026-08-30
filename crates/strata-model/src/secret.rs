@@ -11,11 +11,9 @@ use uuid::Uuid;
 /// A reference to a secret in the OS keystore: "there is a secret filed under this id", or
 /// absent.
 ///
-/// This is what config carries, what a settings draft diffs, and — since the slot became a
-/// **stored** fact rather than an inferred one — what a [`SourceDef`](crate::SourceDef) records
-/// per secret it was saved with. It is `Clone + PartialEq + Serialize + Deserialize` for exactly
-/// those reasons. It holds no part of the secret and never has: reading one is a keystore call,
-/// which is what keeps the two apart.
+/// This is what config carries, what a settings draft diffs, and what a
+/// [`SourceDef`](crate::SourceDef) records per secret it was saved with. It holds no part of the
+/// secret: reading one is a keystore call, which is what keeps the two apart.
 ///
 /// A consumer mints one per thing-that-has-a-key and keeps it for that thing's life, so an edit
 /// overwrites in place rather than stranding the old entry under an id nobody remembers.
@@ -37,22 +35,12 @@ impl SecretRef {
         Self(Uuid::new_v4())
     }
 
-    /// The reference a **pre-ref** def's secret was filed under, derived from that def's own
-    /// identity: `Uuid::new_v5` over `"{kind}:{name}"`.
+    /// The reference a def's secret was filed under before the slot was recorded, derived from
+    /// that def's own identity: `Uuid::new_v5` over `"{kind}:{name}"`.
     ///
-    /// **Read on load and never written again.** Deriving the slot from the def meant deriving it
-    /// from things the user can change, and the entry lives somewhere no migration can reach:
-    /// renaming a data source moves the slot on *every* machine, while only the machine doing the
-    /// renaming can move its own keystore entry to follow. A colleague pulling the rename was
-    /// left with a stranded password and a form that could not tell that from never having had
-    /// one. A minted ref, recorded in the def, is the same id everywhere and survives both a
-    /// rename and a change of kind.
-    ///
-    /// It does not reintroduce the problem derivation was for. The objection to storing one was a
-    /// *minted* ref being rewritten by every colleague who entered their own password — two
-    /// machines ping-ponging one id through git. A ref written once, when the secret is first
-    /// filed, is never rewritten: a colleague entering their own password writes their own
-    /// keystore under the id already in the file.
+    /// Read when adopting such a def and not otherwise: a derived slot moves with the identity it
+    /// is derived from, which strands the keystore entry on every machine but the one making the
+    /// change.
     pub fn derived(kind: &str, name: &str) -> Self {
         Self(Uuid::new_v5(
             &STRATA_SECRET_NS,

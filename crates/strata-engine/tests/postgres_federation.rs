@@ -164,9 +164,6 @@ fn source(port: u16, catalog: &str, schemas: &[&str]) -> SourceDef {
             ("user".to_string(), USER.to_string()),
             ("sslmode".to_string(), "disable".to_string()),
         ]),
-        // A fixture picks its slot deterministically so every `source(...)` call for one
-        // name addresses the entry a previous call stored. Production mints instead — see
-        // `SourceDef::secret_slot_or_mint`.
         secrets: Secrets::Filed(BTreeMap::from([(
             PASSWORD_KEY.to_string(),
             SecretRef::derived("test-password", catalog),
@@ -1036,10 +1033,9 @@ async fn json_pushdown(engine: &Engine, dir: &Path) {
 ///
 /// **The rename owes the keystore nothing**, which is what recording the slot bought: the ref
 /// travels in the def, so a renamed data source logs in with the password it already had and no
-/// migration runs. It used to be derived from the name, so a rename moved the slot on every
-/// machine while only the renaming one could move its own entry — every colleague pulling the
-/// rename was left unable to log in. Last phase of the test, so the rename is nobody's problem
-/// afterwards.
+/// migration runs. A slot derived from the name moved on every machine while only the renaming
+/// one could move its own entry, leaving every colleague unable to log in. Last phase of the
+/// test, so the rename is nobody's problem afterwards.
 async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
     let was = source(port, CATALOG, &["public"]);
     let renamed = SourceDef {

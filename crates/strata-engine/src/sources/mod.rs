@@ -5,7 +5,7 @@
 //! other: an object store is registered per bucket and answers about *files*, a source is
 //! registered as a catalog and answers about *relations*. What the two share is the data source
 //! def, the `Reg` row it settles onto, the pass's first phase, and the all-or-nothing contract —
-//! which is what puts them under one roof, and what EA-25 turns into one trait.
+//! which is what puts them under one roof and under one trait.
 //!
 //! **This module is the shell, and it knows nothing about any source.** What a source *is* lives
 //! behind [`DataSource`](source::DataSource), keyed by the kind a def names; what is here is
@@ -582,17 +582,9 @@ pub(crate) async fn connect(
 /// worked.
 fn take_back(ctx: &SessionContext, live: &Live, name: &str) {
     match live.take(name) {
-        // A catalog data source's row remembers the name it registered under, which an edit may
-        // have moved off the data source's own.
         Some(previous) => {
             deregister_catalog(ctx, &previous);
         }
-        // A store data source keeps no row here — what it holds is answered by the table defs
-        // read through it — and its catalog is under its own name (EA-25 item 3). Guarded by
-        // the provider's own type, because a name is all this is given and a *refused* data
-        // source must take back only what it registered: a def named after the workspace
-        // catalog is refused by `check_catalog_name`, and deregistering by name alone would
-        // then take the workspace off the session on its way out.
         None if is_store_catalog(ctx, name) => {
             deregister_catalog(ctx, name);
         }
@@ -678,7 +670,7 @@ async fn prepare(
 /// **Both registries, both modes.** A store data source has an object store keyed by its URL and
 /// a catalog under its own name; a catalog data source has only the second. Taking the catalog
 /// out is what makes forgetting a bucket structural: its tables were placed in it, so they stop
-/// resolving with it rather than needing a deregistration each (EA-25 item 3).
+/// resolving with it rather than needing a deregistration each.
 ///
 /// Addressed by the data source's **name**, and silent about doing nothing: a name this engine
 /// never registered anything for is the ordinary case (a source that failed to connect).

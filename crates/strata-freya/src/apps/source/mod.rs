@@ -7,13 +7,6 @@
 //! editor in front of it with nothing here to change — and a provider the registry does not serve
 //! has no form here at all.
 //!
-//! **The object stores are therefore not editable here yet.** `Provider::{S3, Gcs, Http}` are
-//! typed arms with typed settings, which is the one thing a declaration-driven form cannot
-//! render; rather than keep a hand-written dress beside the generic one, they wait for EA-25 to
-//! make them `DataSource`s like any other. Defs already on disk are listed, queried, refreshed
-//! and forgotten exactly as before — only *editing* one is withheld, and the catalog menu parks
-//! that item rather than dropping it, because it is "not this second" and not "never".
-//!
 //! **A window, not a modal**, and the Configure window's shape throughout. The canvas is a
 //! 480 × 588 frame with traffic lights, a drag bar and its own footer, so this is a child window
 //! of the project window that asked, pinned above it ([`crate::platform::data source`]) and
@@ -416,8 +409,6 @@ fn probe_secrets(ctx: SourceCtx) {
             .collect(),
     );
     for key in asking {
-        // The def records the slot, so a key it expects always has one; a key it does not is
-        // never probed (`asking` is built from the def's own expectations).
         let Some(slot) = secret_slot(&def, key, &[]) else {
             continue;
         };

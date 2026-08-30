@@ -441,9 +441,6 @@ impl ConfigureDraft {
             Where::Remote => {
                 if self.source.is_none() {
                     self.source = first_source(sources, &self.kind);
-                    // With no kind chosen yet there is nothing for the TYPE pill to light, so the
-                    // first data source the project has decides it — better than defaulting to a
-                    // kind written down here, which is the knowledge this window stopped holding.
                     if let Some(named) = self.source.as_deref() {
                         if let Some(def) = sources.iter().find(|c| c.named() == named) {
                             self.kind = def.kind.trim().to_string();

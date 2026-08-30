@@ -6,13 +6,6 @@
 //! the engine gains is a kind this form already edits, and a kind it does not serve has no shape
 //! here at all. The same rule the flat `SourceDef` follows one layer down: what a source is
 //! configured by is the source's business.
-//!
-//! **The object stores are not here.** `Provider::{S3, Gcs, Http}` are typed arms with typed
-//! settings, which is the one thing a declaration-driven form cannot render — so rather than
-//! keep a second, hand-written dress beside the generic one, the editor serves registrants only
-//! until EA-25 makes S3, GCS and HTTP `DataSource`s like any other. Defs already on disk keep
-//! working: they are listed, queried and forgotten exactly as before, and only *editing* one is
-//! withheld ([`crate::apps::project::views::sidebar::catalog::menu`] parks it).
 
 use std::collections::BTreeMap;
 
@@ -120,10 +113,6 @@ impl SecretRow {
                 SecretProbe::Asking => Self::Asking,
                 SecretProbe::Stored => Self::Stored,
                 SecretProbe::Refused(why) => Self::Refused(why.clone()),
-                // **The declaration decides whether emptiness is an answer.** A key the kind
-                // does not require is one a data source may simply not have, so nothing is
-                // demanded and nothing has to be pressed: an empty box with nothing behind it
-                // says what it looks like it says.
                 SecretProbe::Absent if required => Self::Missing,
                 SecretProbe::Absent => Self::Optional,
             },
@@ -201,10 +190,7 @@ pub fn noun(key: &SourceSetting) -> String {
 /// key that kind declared.
 ///
 /// **One type, because a data source is one thing.** The address is a declared key like the rest
-/// ([`Slot::Address`]); it simply lands on a typed field rather than in the open map, which is
-/// what [`value`](Self::value) and [`set`](Self::set) route. This is the shape the *def* takes
-/// when `SourceDef` and `SourceDef` collapse (EA-25) — the draft gets there first because it
-/// has no serde to migrate.
+/// and lands in the same map, so nothing here special-cases it.
 ///
 /// **Nothing here is named after a source.** The keys arrive from the registry
 /// ([`SourceInfo::keys`]) and travel with the kind that declared them, so a value typed for one
@@ -226,7 +212,7 @@ pub struct SourceDraft {
     /// by it and `check_catalog` judges it, and a source has no opinion about any of that. A kind
     /// that could omit it could produce an unnameable data source.
     pub name: String,
-    /// A value per declared [`Slot::Config`] key, as typed. Trimmed into the def, never on the
+    /// A value per declared key, as typed. Trimmed into the def, never on the
     /// way in. **No [`Field::Secret`] value is ever here** — those go to this machine's keystore.
     pub config: BTreeMap<String, String>,
     /// Which of the kind's secret-typed keys this data source has a value for — the def's
@@ -291,8 +277,6 @@ impl SourceDraft {
 
     /// What the box for `key` shows: what has been typed, or what the key declares when nothing
     /// has. A key with neither shows nothing, which is what an optional free-text setting is.
-    ///
-    /// Routed by the key's [`Slot`], which is the whole of what a slot means here.
     pub fn value(&self, key: &str) -> String {
         let declared = self.declared(key);
         match self.config.get(key) {
@@ -816,7 +800,7 @@ mod tests {
         );
     }
 
-    /// **An empty box is an answer wherever the kind does not require one** (EA-25/26 follow-up).
+    /// **An empty box is an answer wherever the kind does not require one.**
     ///
     /// The declaration already said so — Postgres declares `required: false` on its password —
     /// and the renderer used to ignore it: absence read as [`Missing`](SecretRow::Missing), a

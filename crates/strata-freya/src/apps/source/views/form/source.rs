@@ -330,9 +330,6 @@ impl Component for SecretField {
             if typed {
                 ctx.keep_secret(name);
             }
-            // Through the row, because only it can read an empty box: with a secret stored here
-            // empty means leave it, and with nothing stored and nothing required it means there
-            // is none (`SecretRow::keeps_expectation`).
             let expects = typed
                 || SecretRow::of(
                     required,
@@ -347,9 +344,6 @@ impl Component for SecretField {
                 .keeps_expectation();
             ctx.edit(move |draft| match expects {
                 true => {
-                    // Minted the first time a key becomes expected and kept for the
-                    // life of the def: a ref is written once, so entering a new password
-                    // overwrites this machine's entry rather than moving every machine's.
                     draft
                         .secrets
                         .entry(name.to_string())

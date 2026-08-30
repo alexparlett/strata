@@ -860,19 +860,11 @@ impl SourceDefs {
     /// Whether `def` would register somewhere other than where this engine currently holds it —
     /// the one question [`sync`](crate::register::sync)'s diff asks about a name it is keeping.
     ///
-    /// **Both sides are computed here**, which is the point of the method existing. They were
-    /// once computed apart — [`held`](Self::held) answered an address while the caller compared a
-    /// *name* — so the answer was "moved" for every source not named after its own address, and
-    /// every sync tore down and reconnected every live one before the pass reconnected them
-    /// anyway.
+    /// Both sides are computed here, and looked up through [`def`](Self::def) so the match folds
+    /// case: a name is a SQL identifier, and comparing the two halves any other way answers
+    /// "moved" for a source that has not, which costs every live source a teardown per pass.
     ///
     /// A name this engine holds nothing for has not moved: there is nothing to take back.
-    ///
-    /// Looked up through [`def`](Self::def), which is the type's one lookup rule and folds case —
-    /// a name is a SQL identifier and `check_catalog_name` lets a source be renamed to one
-    /// differing only in case. An exact `get` here would miss a held `Lake` for a desired `lake`,
-    /// answer "not moved" for an edit that moved both the case and the address, and leave the old
-    /// registration standing.
     pub(crate) fn moved(&self, def: &SourceDef) -> bool {
         self.def(&def.named())
             .is_some_and(|held| source_identity(&held) != source_identity(def))
@@ -880,10 +872,10 @@ impl SourceDefs {
 
     /// Hold `def` under its own spelling, replacing whatever this engine held for that name.
     ///
-    /// **Case-folded on the way in**, so a source renamed `Lake` → `lake` replaces its entry
-    /// rather than sitting beside it. Two entries for one source is not a cosmetic problem: they
-    /// are what [`held`](Self::held) reports, so the diff would carry a phantom name forever, and
-    /// a forget of one would leave the other answering.
+    /// Case-folded on the way in, so a source renamed `Lake` to `lake` replaces its entry rather
+    /// than sitting beside it: two entries for one source are what [`held`](Self::held) reports,
+    /// so the diff would carry a phantom name and a forget of one would leave the other
+    /// answering.
     fn note(&self, def: &SourceDef) {
         let name = def.named();
         let mut held = self.0.lock().unwrap();
