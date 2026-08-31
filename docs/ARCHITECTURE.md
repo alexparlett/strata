@@ -80,8 +80,8 @@ forwarders. `SessionState`, `RuntimeEnv` and `CacheManager` are never exposed.
 carrying the identity the call is about: `ws(id)` (run, explain, cancel — the nonce family),
 `snapshot(id)` (page, chart, trend, export, pin, live), `catalog()` (registration, `sync`,
 profiling, the generation and the ledger), `sources()` (connect, disconnect, the one listing read
-and the registry questions), `lang()` (validation, the policy verdicts the agent gate reads, and
-the function and prepared-statement catalogues completion is assembled from) and `work()` (the
+and the registry questions), `lang()` (`analyze` for every diagnostic a buffer draws, `bundle()` for the one snapshot
+completion is assembled from, and the policy verdicts the agent gate reads) and `work()` (the
 engine-owned in-flight flag).
 Beside them sits a short root set — `builder`, `id`, `set_data_dir`, `formats` and the config
 trio. The mapping is **total**: a doc test in `facade/mod.rs` fails when a new public method
@@ -304,8 +304,10 @@ Connecting a client is [MCP_CLIENTS.md](MCP_CLIENTS.md).
 - **Data sources** — everything the project reads that is not local disk is one kind of thing.
   `DataSource` is a single publicly implementable trait; a companion `SourceKind` carries the
   identity as consts, `NAME` among them, and `EngineBuilder::with_source` registers under it. The
-  shipped four — `s3`, `gcs`, `http`, `postgres` — are ordinary registrants of that call, so an
-  embedder adds a fifth exactly the way we added ours. `connect` answers the **mode**:
+  shipped five — `s3`, `gcs`, `http`, `postgres`, `mysql` — are ordinary registrants of that call,
+  so an embedder adds a sixth exactly the way we added ours; the two servers are behind cargo
+  features, and an engine built with neither still works, which is what proves the registry is the
+  only path in. `connect` answers the **mode**:
   `Sourced::Store` for a bucket, `Sourced::Catalog` for something that enumerates itself, and the
   mode-specific vocabulary rides those arms so a bucket cannot be asked what relations it holds —
   the method is not there. Everything a source *takes* is declared too: `settings()` answers a
@@ -313,9 +315,9 @@ Connecting a client is [MCP_CLIENTS.md](MCP_CLIENTS.md).
   kind's fields. One persisted `SourceDef` serves them all — a kind, the name the user gave it,
   the settings that kind declared, and which of its secret keys this machine has filed.
   [CONNECTIONS_SPEC.md](CONNECTIONS_SPEC.md).
-- **Databases** — a PostgreSQL source registers a DataFusion **catalog** of relations the server
-  enumerates, so the whole database is queryable as `pg.public.orders` with no per-table declaration,
-  and a same-source subplan is pushed back to the server as one statement
+- **Databases** — a PostgreSQL or MySQL source registers a DataFusion **catalog** of relations the
+  server enumerates, so the whole database is queryable as `pg.public.orders` with no per-table
+  declaration, and a same-source subplan is pushed back to the server as one statement
   (`datafusion-federation`). Discovery gets catalogs; declaration gets defs. An object store
   registers a catalog too, but a **def-fed** one: its relations are the project's own table rows
   bound to that source, which is what makes forgetting a bucket take its tables with it.
@@ -337,3 +339,4 @@ Connecting a client is [MCP_CLIENTS.md](MCP_CLIENTS.md).
 | Connecting MCP clients | [MCP_CLIENTS.md](MCP_CLIENTS.md) |
 | Themes | [FREYA_THEME_SPEC.md](FREYA_THEME_SPEC.md) |
 | Shipping a build | [RELEASING.md](RELEASING.md) |
+| **Embedding the engine in something else** | `strata_engine::guide` — rustdoc, so its examples compile ([docs/README.md](README.md#embedding-the-engine)) |
