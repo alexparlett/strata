@@ -173,8 +173,14 @@ jobs:
       #
       # `#![deny(missing_docs)]` lives in each of the four crates, so an undocumented `pub`
       # item already fails the build — but only for the features that build. The
-      # `strata-engine/testing` module is off by default, so it is named here, which also
-      # compiles the `custom_source` example that carries `required-features`.
+      # `strata-engine/testing` module is off by default, so it is named here.
+      #
+      # It is named here for the LIBRARY only. `cargo doc` selects lib and bin targets and
+      # nothing else, so this step never invokes rustc on `examples/custom_source.rs`
+      # whatever features it is given — measured, by breaking the example and watching this
+      # step pass. Compiling the examples is the `--all-targets` in the clippy step below,
+      # which is the reason that step exists and the reason it cannot be dropped as
+      # redundant with this one.
       #
       # `broken_intra_doc_links` is the rustdoc lint that cannot be a compile error: a
       # `[`Foo`]` naming an item that has been renamed still compiles and renders as plain
@@ -201,7 +207,11 @@ jobs:
       # The `testing` feature is not on in any other step, so this is the only thing that
       # holds its modules — the `DataSource` conformance ring an embedder runs against their
       # own backend, and the two fake sources — to the same lint bar as the rest.
-      # `--all-targets` brings the `custom_source` example in with them.
+      #
+      # `--all-targets` is load-bearing rather than tidy: it is what compiles
+      # `examples/custom_source.rs`, whose `required-features = ["testing"]` keeps it out of
+      # every other step in this file. Drop this step and the example stops being built at
+      # all — the `cargo doc` step above does not build it, despite naming the same feature.
       - name: cargo clippy (testing feature)
         run: cargo clippy -p strata-engine --features testing --all-targets --locked -- -D warnings
 
