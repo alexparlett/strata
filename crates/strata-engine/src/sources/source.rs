@@ -166,8 +166,8 @@ pub enum Field {
     /// Free text.
     Text,
     /// A credential. The **value never reaches the def**: it goes to this machine's keystore
-    /// under `SecretRef::derived("{kind}-{key}", url)`, or arrives through the source's own
-    /// environment convention, and the def records only that it is set.
+    /// under the slot the def recorded for this key, or arrives through the source's own
+    /// environment convention, and the def records only that it is set and where.
     Secret,
     /// One of a fixed set of words, in the source's own spelling.
     Choice(&'static [&'static str]),

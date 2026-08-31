@@ -95,17 +95,17 @@ second implementation of one.
 
 **Who may do what is data an embedder supplies.** `EngineBuilder::with_policy` takes a
 `PolicyProvider` that answers in codes, never prose, so the engine mints every refusal; the shipped
-one is a `Capability` — a set of grants over a local/remote axis, with a per-connection scope for
+one is a `Capability` — a set of grants over a local/remote axis, with a per-source scope for
 the remote half. Unset, it allows everything: restriction is something you say, not something you
 switch off. A caller's own capability narrows the engine's and never widens it, which is how one
 engine serves a full editor and a read-only agent at once.
 
 **Writes only touch data Strata owns, or a database that opted in.** Your source files are read,
-never written. Write statements are gated on the parsed plan's target; a database connection is
+never written. Write statements are gated on the parsed plan's target; a database data source is
 read-only until its own `read_only` setting says otherwise, and then it takes the statements
 DataFusion can plan against it (`INSERT`, `CREATE TABLE AS SELECT`) and the ones only the server
 can run (`CREATE VIEW`, the `DROP`s, a column-list `CREATE TABLE`, `UPDATE`, `DELETE`), the second
-group dispatched as the text you typed with the connection's qualifier cut out. The agent surface
+group dispatched as the text you typed with the source's qualifier cut out. The agent surface
 is opened read-only; exports refuse to land inside storage Strata manages.
 
 ## Principles

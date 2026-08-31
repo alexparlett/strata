@@ -69,11 +69,11 @@ use strata_core::secret::{Keystore, Secret, SecretRef};
 /// written**, so a save's put, a source's read and a Forget's delete cannot address different
 /// entries.
 ///
-/// One slot per secret-typed key a source declares, filed under `"{kind}-{key}"` over the
-/// data source's **name**: a source with two credentials keeps them apart, no source's family
-/// collides with another's, and renaming a data source moves its secrets with it because the same
-/// funnel does both. Nothing is stored on the def — the reference is recomputed each time one is
-/// needed, which is what keeps a machine-local id out of the committed `project.json`.
+/// One slot per secret-typed key a source declares. The def **records** which slot each key is
+/// filed under, minted when the secret is first stored, so a rename moves nothing and a colleague
+/// entering their own password writes their own entry under the id already in the file. A def
+/// written before slots were recorded derives its own, over the family `"{kind}-{key}"` and the
+/// source's name, and is adopted once at load.
 ///
 /// `None` for a provider that is not a source.
 pub fn secret_slot(

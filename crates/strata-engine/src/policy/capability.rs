@@ -118,13 +118,13 @@ pub enum RemoteScope {
 impl RemoteScope {
     /// Whether this scope reaches the data source `facts` names.
     ///
-    /// A target carrying neither a kind nor a url matches nothing but [`All`](RemoteScope::All).
+    /// A target carrying neither a kind nor a name matches nothing but [`All`](RemoteScope::All).
     fn reaches(&self, facts: &TargetFacts) -> bool {
         match self {
             RemoteScope::All => true,
             RemoteScope::Only(selectors) => selectors.iter().any(|sel| match sel {
                 RemoteSel::Kind(kind) => facts.kind.as_deref() == Some(kind.as_str()),
-                RemoteSel::Source(url) => facts.source.as_deref() == Some(url.as_str()),
+                RemoteSel::Source(name) => facts.source.as_deref() == Some(name.as_str()),
             }),
         }
     }
@@ -135,7 +135,7 @@ impl RemoteScope {
 pub enum RemoteSel {
     /// Every data source of one backend kind (`"postgres"`, `"mysql"`).
     Kind(String),
-    /// One data source, by the exact url it is keyed under.
+    /// One data source, by the exact name it is keyed under.
     Source(String),
 }
 

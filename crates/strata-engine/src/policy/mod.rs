@@ -74,7 +74,7 @@ pub struct TargetFacts {
     pub locality: Locality,
     /// The backend kind of the data source the target is in; `None` for a workspace target.
     pub kind: Option<String>,
-    /// The data source's url, the key it is registered under; `None` for a workspace target.
+    /// The data source's name, the key it is registered under; `None` for a workspace target.
     pub source: Option<String>,
 }
 

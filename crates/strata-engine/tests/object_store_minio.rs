@@ -495,7 +495,13 @@ async fn registration_race(engine: &Engine, endpoint: &str) {
 /// view captures the provider `Arc` its plan was built against, so it does not stop resolving
 /// with the catalog. It degrades where it always did, on the object store the forget took off
 /// the session, which is where a forgotten bucket's readers degrade.
-#[tokio::test]
+/// A *phase* of the test below, called first and in sequence rather than a `#[tokio::test]` of
+/// its own: the ambient credentials every phase signs with are **process-wide**, and the last
+/// phase deliberately replaces them with wrong ones to assert MinIO's rejection. Two tests in one
+/// binary run concurrently, so a second `#[tokio::test]` here puts that replacement in a race with
+/// this phase's own `ambient()` — whichever writes last decides what both read, and the rejection
+/// this file exists to prove silently becomes a successful registration. It has its own bucket and
+/// its own engine; only the environment is shared, and only the environment is the problem.
 async fn a_bucket_table_lives_in_its_data_sources_catalog() {
     let (_minio, endpoint) = minio().await;
     seed(&endpoint, &[("data/regions.csv", REGIONS_CSV)]).await;
@@ -598,6 +604,8 @@ async fn a_bucket_table_lives_in_its_data_sources_catalog() {
 
 #[tokio::test]
 async fn a_table_over_a_source_reads_through_the_object_store() {
+    a_bucket_table_lives_in_its_data_sources_catalog().await;
+
     let (_minio, endpoint) = minio().await;
     seed(
         &endpoint,
@@ -792,18 +800,32 @@ async fn a_table_over_a_source_reads_through_the_object_store() {
         "a forgotten bucket is unreachable, exactly as one that was never connected: {refused}"
     );
 
+    rejected_credentials(&endpoint).await;
+
+    let _ = fs::remove_dir_all(&project);
+}
+
+/// **Credentials the bucket refuses** — the last phase, and the reason every phase above shares
+/// one process: it replaces the ambient credentials with wrong ones, which any concurrently
+/// running test would then sign with.
+///
+/// `connect` still succeeds, because a 403 at the bucket root is an authorization answer and not
+/// a description fault — a prefix-scoped `ListBucket` and a public `GetObject`-only bucket both
+/// answer that way while working perfectly. The refusal therefore has to land where the objects
+/// are actually read, on the table's own row, carrying MinIO's own words.
+async fn rejected_credentials(endpoint: &str) {
     env::set_var("AWS_ACCESS_KEY_ID", "AKIAWRONGKEY");
     env::set_var("AWS_SECRET_ACCESS_KEY", "wrong-secret");
 
     let engine = Engine::builder().build();
     engine
         .sources()
-        .connect(source(&endpoint, "ambient"))
+        .connect(source(endpoint, "ambient"))
         .await
         .expect("a 403 is an authorization answer, not a description fault");
     let refused = engine
         .catalog()
-        .register(table(&endpoint))
+        .register(table(endpoint))
         .await
         .expect_err("MinIO rejects the signature")
         .to_string();
@@ -815,6 +837,4 @@ async fn a_table_over_a_source_reads_through_the_object_store() {
             || lower.contains("signature"),
         "the row should carry MinIO's rejection of the signature, got: {refused}"
     );
-
-    let _ = fs::remove_dir_all(&project);
 }
