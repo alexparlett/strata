@@ -27,8 +27,8 @@ use futures::TryStreamExt;
 use strata_model::SourceDef;
 
 use super::source::{
-    DataSource, Field, Listing, Located, Relation, SourceCatalog, SourceKind, SourceMode,
-    SourceSetting, Sourced, When,
+    ConnectRefusal, DataSource, Field, Listing, Located, Relation, SourceCatalog, SourceKind,
+    SourceMode, SourceSetting, Sourced, When,
 };
 use super::sql::{federated, SQLExecutor, SqlSpec};
 use crate::secrets::SecretProvider;
@@ -215,7 +215,7 @@ impl DataSource for TestDoc {
         &self,
         def: &SourceDef,
         _secrets: Arc<dyn SecretProvider>,
-    ) -> Result<Sourced, String> {
+    ) -> Result<Sourced, ConnectRefusal> {
         Ok(Sourced::Catalog(Arc::new(DocCatalog(
             self.rows(def.setting("address"))?,
         ))))
@@ -286,7 +286,7 @@ impl DataSource for TestSql {
         &self,
         def: &SourceDef,
         _secrets: Arc<dyn SecretProvider>,
-    ) -> Result<Sourced, String> {
+    ) -> Result<Sourced, ConnectRefusal> {
         let rows = self
             .sources
             .lock()

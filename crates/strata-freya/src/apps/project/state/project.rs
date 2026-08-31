@@ -858,7 +858,8 @@ impl Answered {
     }
 
     pub fn failed(mut self, name: &str, why: &str) -> Self {
-        self.workspace.insert(name.to_string(), refused(why));
+        self.workspace
+            .insert(name.to_string(), RegStatus::failed(why));
         self
     }
 
@@ -875,7 +876,8 @@ impl Answered {
     }
 
     pub fn source_failed(mut self, name: &str, why: &str) -> Self {
-        self.sources.insert(name.to_string(), refused(why));
+        self.sources
+            .insert(name.to_string(), RegStatus::failed(why));
         self
     }
 
@@ -886,13 +888,6 @@ impl Answered {
             sources: strata_engine::Answers::recorded(self.sources.clone(), stamp),
             generation: stamp,
         }
-    }
-}
-
-#[cfg(test)]
-fn refused(why: &str) -> RegStatus {
-    RegStatus::Failed {
-        reason: why.to_string(),
     }
 }
 
@@ -1818,18 +1813,14 @@ mod tests {
             workspace: Answers::recorded(
                 [(
                     "orders".to_string(),
-                    RegStatus::Failed {
-                        reason: "No suitable object store found".into(),
-                    },
+                    RegStatus::failed("No suitable object store found"),
                 )],
                 CatalogGen::default(),
             ),
             sources: Answers::recorded(
                 [(
                     "lake".to_string(),
-                    RegStatus::Failed {
-                        reason: "This S3 data source needs a region.".into(),
-                    },
+                    RegStatus::failed("This S3 data source needs a region."),
                 )],
                 CatalogGen::default(),
             ),

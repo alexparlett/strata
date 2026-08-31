@@ -75,7 +75,7 @@ impl Sources<'_> {
             let generation = engine.generation.bump();
             engine
                 .ledger
-                .note_source(&name, RegStatus::of(&settled), generation);
+                .note_source(&name, RegStatus::of_connect(&settled), generation);
         }
         settled.map_err(EngineError::from)
     }

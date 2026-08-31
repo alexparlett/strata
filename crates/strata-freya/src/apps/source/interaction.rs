@@ -27,8 +27,8 @@ use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
 use strata_engine::secrets::SecretProvider;
 use strata_engine::{
-    DataSource, Engine, Field, Registrations, SourceInfo, SourceKind, SourceMode, SourceSetting,
-    Sourced, When,
+    Answers, CatalogGen, ConnectFault, ConnectRefusal, DataSource, Engine, Field, RegStatus,
+    Registrations, SourceInfo, SourceKind, SourceMode, SourceSetting, Sourced, When,
 };
 use strata_model::{SecretRef, Secrets, SourceDef};
 
@@ -119,7 +119,7 @@ impl DataSource for TestSource {
         &self,
         _def: &SourceDef,
         _secrets: Arc<dyn SecretProvider>,
-    ) -> Result<Sourced, String> {
+    ) -> Result<Sourced, ConnectRefusal> {
         Err("This test source has no server.".into())
     }
 
@@ -199,6 +199,7 @@ type Handles = (
     SourceCtx,
     RadioStation<ProjectState, ProjChan>,
     State<ScanRequest>,
+    State<Registrations>,
 );
 
 /// The editor over `draft`, opened on `target`, against its own scratch project.
@@ -214,7 +215,7 @@ fn runner(tag: &'static str, target: SourceTarget, draft: SourceDraft) -> (Testi
         move |r| {
             r.provide_root_context(engine);
             r.provide_root_context(|| State::create(CatalogState::Cold));
-            r.provide_root_context(|| State::create(Registrations::default()));
+            let registrations = r.provide_root_context(|| State::create(Registrations::default()));
             let rescan = r.provide_root_context(|| State::create(ScanRequest::default()));
             r.provide_root_context(|| State::create(Log::default()));
             r.provide_root_context(|| State::create(PersistFaults::default()));
@@ -230,7 +231,7 @@ fn runner(tag: &'static str, target: SourceTarget, draft: SourceDraft) -> (Testi
                 secret_removed: State::create(BTreeSet::new()),
                 secret_probes: State::create(BTreeMap::new()),
             });
-            (ctx, project, rescan)
+            (ctx, project, rescan, registrations)
         },
         1.,
     )
@@ -294,7 +295,8 @@ fn source_draft() -> SourceDraft {
 /// the generation it asked at.
 #[test]
 fn saving_writes_the_def_and_waits_for_the_pass() {
-    let (mut runner, (ctx, project, rescan)) = runner("save", SourceTarget::New, source_draft());
+    let (mut runner, (ctx, project, rescan, ..)) =
+        runner("save", SourceTarget::New, source_draft());
     settle(&mut runner);
 
     click_lowest(&mut runner, "Save");
@@ -324,7 +326,7 @@ fn saving_writes_the_def_and_waits_for_the_pass() {
 fn an_edit_that_renames_leaves_no_row_behind() {
     let mut draft = source_draft();
     draft.name = "depot".into();
-    let (mut runner, (_, mut project, _)) =
+    let (mut runner, (_, mut project, ..)) =
         runner("moved", SourceTarget::Edit("warehouse".into()), draft);
     {
         let mut p = project.write_channel(ProjChan::Sources);
@@ -485,7 +487,7 @@ fn a_group_heading_rides_the_rows_that_survive() {
 fn an_address_is_refused_in_the_kinds_own_words() {
     let mut draft = source_draft();
     draft.set("address", "db.internal".into());
-    let (mut runner, (ctx, _, rescan)) = runner("address", SourceTarget::New, draft);
+    let (mut runner, (ctx, _, rescan, ..)) = runner("address", SourceTarget::New, draft);
     settle(&mut runner);
 
     assert!(
@@ -508,7 +510,7 @@ fn an_address_is_refused_in_the_kinds_own_words() {
 fn a_required_declared_key_blocks_the_save() {
     let mut draft = source_draft();
     draft.set("user", String::new());
-    let (mut runner, (ctx, project, rescan)) = runner("required", SourceTarget::New, draft);
+    let (mut runner, (ctx, project, rescan, ..)) = runner("required", SourceTarget::New, draft);
     settle(&mut runner);
 
     assert!(
@@ -537,7 +539,7 @@ fn a_required_declared_key_blocks_the_save() {
 fn a_name_clash_is_explained_beside_the_button() {
     let mut draft = source_draft();
     draft.name = String::new();
-    let (mut runner, (ctx, mut project, rescan)) = runner("name", SourceTarget::New, draft);
+    let (mut runner, (ctx, mut project, rescan, ..)) = runner("name", SourceTarget::New, draft);
     settle(&mut runner);
 
     assert_eq!(
@@ -580,7 +582,7 @@ fn a_name_clash_is_explained_beside_the_button() {
 /// quotes that data source's own name back and Save never re-enables.
 #[test]
 fn editing_a_source_does_not_clash_with_the_row_it_replaces() {
-    let (mut runner, (ctx, mut project, _)) = runner(
+    let (mut runner, (ctx, mut project, ..)) = runner(
         "self-clash",
         SourceTarget::Edit("warehouse".into()),
         source_draft(),
@@ -745,6 +747,69 @@ fn a_secret_row_says_what_this_machine_holds() {
     );
 }
 
+/// **A credential the server turned away is an error on that key's own row** — the second of the
+/// two states a secret row can be wrong about, and the one only a *connect* can establish.
+///
+/// It arrives as a fact, not as prose: the source recognised its server's code and named its own
+/// declared key on the refusal, and this window joins the engine's ledger against the row it is
+/// drawing. So the footer's sentence is not parsed, and the row is right again the moment the
+/// user starts typing a replacement.
+#[test]
+fn a_credential_the_server_refused_is_an_error_on_its_own_row() {
+    let mut draft = source_draft();
+    draft.secrets.insert("password".into(), SecretRef::mint());
+    let (mut runner, (ctx, _, _, mut registrations)) = runner(
+        "secret-rejected",
+        SourceTarget::Edit("warehouse".into()),
+        draft,
+    );
+    let mut probes = ctx.secret_probes;
+    probes.set(
+        [("password".to_string(), SecretProbe::Stored)]
+            .into_iter()
+            .collect(),
+    );
+    settle(&mut runner);
+    assert!(
+        shows(
+            &runner,
+            "A password is stored on this machine. Type a new one to replace it."
+        ),
+        "before the connect there is nothing wrong with it: {:?}",
+        texts(&runner)
+    );
+
+    registrations.set(Registrations {
+        generation: CatalogGen::default(),
+        sources: Answers::recorded(
+            [(
+                "warehouse".to_string(),
+                RegStatus::Failed {
+                    reason: "The server refused the user 'reader'.".into(),
+                    fault: Some(ConnectFault::Rejected { key: "password" }),
+                },
+            )],
+            CatalogGen::default(),
+        ),
+        ..Registrations::default()
+    });
+    settle(&mut runner);
+    let said = "The server refused this data source's sign-in the last time it connected. Type a \
+                new password to replace the one stored on this machine.";
+    assert!(shows(&runner, said), "{said:?}: {:?}", texts(&runner));
+
+    ctx.set_secret("password", "hunter2".into());
+    settle(&mut runner);
+    assert!(
+        shows(
+            &runner,
+            "This password goes into this machine's keystore when you save."
+        ),
+        "and a replacement being typed is what the row is about now: {:?}",
+        texts(&runner)
+    );
+}
+
 /// **A declared choice is a `Select` over the words the kind gave**, so a value it would refuse is
 /// unreachable — and a key nothing has touched is written as the key declares it.
 #[test]
@@ -808,7 +873,7 @@ fn a_stored_source_def_survives_the_form_untouched() {
 fn a_name_another_source_holds_blocks_the_save() {
     let mut draft = source_draft();
     draft.name = "old_lake".into();
-    let (mut runner, (_, project, _)) = runner("clash", SourceTarget::New, draft);
+    let (mut runner, (_, project, ..)) = runner("clash", SourceTarget::New, draft);
     settle(&mut runner);
 
     assert!(

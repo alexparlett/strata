@@ -496,8 +496,8 @@ use_profile(engine, &target, scan) -> UseQuery<ProfileEntry>   // the ONE place 
 ### 6c. Registration outcomes — the engine's record, rendered here
 
 Whether a def registered is not this window's to decide, so it is not this window's to store. The
-engine retains what it answered for each def (`RegStatus::{Ready, Failed { reason }}`, stamped
-with the `CatalogGen` it was answered at) and hands it over as one value,
+engine retains what it answered for each def (`RegStatus::{Ready, Failed { reason, fault }}`,
+stamped with the `CatalogGen` it was answered at) and hands it over as one value,
 `Catalog::registrations()`. A catalog row is the **join**: the def from `ProjectState`, the
 verdict from that read.
 
@@ -511,6 +511,15 @@ verdict from that read.
   engine-side `Pending`, because "not yet" is a fact about the pass rather than about the def.
   What the user sees while waiting is the scan claim's own affordance (the row's held verdict and
   the spinner's hold-back, `sidebar/catalog/row.rs`), never a status the app wrote.
+- **Every window that reads it is handed it.** Each OS window has its own scope tree, so the
+  Configure and data source editors carry the `RegistrationsCtx` as a launch value and provide it
+  at their own root — beside `catalog` and `report`, and for `report`'s reason: a child window
+  inherits no context, and `use_registrations` panics rather than degrading.
+- **A refusal can carry a fact as well as a sentence.** `Failed.fault` is the connect's own facet
+  (`ConnectFault`, from `DataSource::connect`'s `ConnectRefusal`), `None` for every registration
+  that is not a connect. It is what lets the data source editor draw *the server refused this
+  credential* on the row for that key (`RegStatus::rejected`) instead of leaving the app to match
+  the footer's prose.
 - **A gesture waits on its own answer.** Configure's Save and the data source editor's Save record
   the generation they asked at and wait for an entry stamped past it
   (`Answers::answered_since`). An edited def still carries `Ready` from the pass before, so a

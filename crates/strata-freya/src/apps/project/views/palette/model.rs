@@ -373,12 +373,7 @@ mod tests {
             workspace: Answers::recorded(
                 [
                     ("orders".to_string(), RegStatus::Ready),
-                    (
-                        "broken".to_string(),
-                        RegStatus::Failed {
-                            reason: "No files found".into(),
-                        },
-                    ),
+                    ("broken".to_string(), RegStatus::failed("No files found")),
                     ("revenue".to_string(), RegStatus::Ready),
                 ],
                 CatalogGen::default(),

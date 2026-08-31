@@ -39,7 +39,7 @@ pub use state::{persisted_defs, use_report, ReportCtx};
 /// it, which is what keeps "make the engine match the defs" a single implementation.
 pub use state::{
     refresh_catalog, refresh_table, use_registrations, Catalog, CatalogRescan, ProjChan,
-    ProjectState,
+    ProjectState, RegistrationsCtx,
 };
 /// The window's one statement fold, for the **Configure** window: a memory table is created by a
 /// statement rather than registered from a def (IT-01), and it folds its report exactly as the

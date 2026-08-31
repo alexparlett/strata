@@ -34,7 +34,7 @@ use super::{built, check_bucket, client_options, client_settings, probe as reach
 use crate::secrets::SecretProvider;
 use crate::sources::secret_slot;
 use crate::sources::source::{
-    DataSource, Field, SourceKind, SourceMode, SourceSetting, Sourced, When,
+    ConnectRefusal, DataSource, Field, SourceKind, SourceMode, SourceSetting, Sourced, When,
 };
 
 /// How this bucket is signed. libpq's `sslmode` shape: the source's own words, handed to its own
@@ -210,7 +210,7 @@ impl DataSource for S3 {
         &self,
         def: &SourceDef,
         secrets: Arc<dyn SecretProvider>,
-    ) -> Result<Sourced, String> {
+    ) -> Result<Sourced, ConnectRefusal> {
         let value = |key: &str| def.config.get(key).map(|v| v.trim()).unwrap_or_default();
         let region = value("region");
         if region.is_empty() {

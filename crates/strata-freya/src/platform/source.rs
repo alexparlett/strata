@@ -45,6 +45,7 @@ pub fn open_source(platform: Platform, launch: SourceLaunch) {
             launch.app.clone(),
             launch.project,
             launch.subtree.clone(),
+            launch.registrations,
             launch.rescan,
             launch.catalog,
             launch.engine.clone(),

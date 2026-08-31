@@ -4,6 +4,7 @@ use std::fmt;
 
 use thiserror::Error;
 
+use crate::sources::source::ConnectRefusal;
 use crate::statements::Refusal;
 
 /// Why a call stopped rather than failed.
@@ -75,6 +76,16 @@ impl From<String> for EngineError {
     /// so a caller can still match its `reason` after the sentence is rendered.
     fn from(diagnosis: String) -> Self {
         EngineError::Failed(diagnosis)
+    }
+}
+
+impl From<ConnectRefusal> for EngineError {
+    /// A failed connect is a failure like any other to the caller that awaited it.
+    ///
+    /// The facet is not lost with it: the **ledger** keeps it, which is where every surface reads
+    /// a registration outcome from. This is only the answer to *this* call.
+    fn from(refusal: ConnectRefusal) -> Self {
+        EngineError::Failed(refusal.reason)
     }
 }
 

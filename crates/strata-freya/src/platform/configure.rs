@@ -53,6 +53,7 @@ pub fn open_configure(platform: Platform, launch: ConfigureLaunch) {
             launch.app.clone(),
             launch.project,
             launch.subtree.clone(),
+            launch.registrations,
             launch.rescan,
             launch.catalog,
             launch.engine.clone(),

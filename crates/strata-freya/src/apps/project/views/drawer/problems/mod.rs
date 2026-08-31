@@ -267,12 +267,7 @@ mod tests {
         };
         let answers = Registrations {
             workspace: Answers::recorded(
-                failed.map(|why| {
-                    (
-                        "orders".to_string(),
-                        RegStatus::Failed { reason: why.into() },
-                    )
-                }),
+                failed.map(|why| ("orders".to_string(), RegStatus::failed(why))),
                 CatalogGen::default(),
             ),
             ..Default::default()

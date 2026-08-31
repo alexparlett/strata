@@ -402,12 +402,7 @@ mod tests {
             workspace: Answers::recorded(
                 [
                     ("orders".to_string(), RegStatus::Ready),
-                    (
-                        "gone".to_string(),
-                        RegStatus::Failed {
-                            reason: "No source paths".into(),
-                        },
-                    ),
+                    ("gone".to_string(), RegStatus::failed("No source paths")),
                     ("daily".to_string(), RegStatus::Ready),
                 ],
                 CatalogGen::default(),
