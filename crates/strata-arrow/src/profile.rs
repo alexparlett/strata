@@ -18,7 +18,9 @@ use strata_model::{Kind, StatKey};
 /// have is not a slower plan but a failed one, and there is no per-expression fallback to catch it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Profiled {
+    /// A table or view the workspace registered, scanned by DataFusion itself.
     Workspace,
+    /// A relation inside a data source's catalog, aggregated by the server.
     Database,
 }
 

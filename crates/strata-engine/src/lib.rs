@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 //! The DataFusion engine — a **direct-call async facade** over a runtime it owns.
 //!
 //! This crate is the workspace's **one DataFusion boundary**: nothing else names DataFusion
@@ -45,6 +46,7 @@ mod facade;
 pub mod formats;
 mod functions;
 mod generation;
+pub mod guide;
 mod ipc;
 pub mod json_poly;
 pub mod policy;
@@ -59,6 +61,8 @@ pub mod sources;
 pub mod sql;
 pub mod statements;
 pub mod tables;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 pub mod udf_package;
 pub mod udfs;
 
@@ -161,8 +165,11 @@ pub struct RunTag(pub u128);
 /// config it holds now to tell whether they still render the way a fresh read would.
 #[derive(Debug)]
 pub struct RunRows {
+    /// Page 1 as display cells, with the snapshot handle and the run's own figures.
     pub output: QueryOutput,
+    /// The same rows, still typed.
     pub batch: RecordBatch,
+    /// The display config the cells were rendered under.
     pub display: DisplayStamp,
 }
 
@@ -171,7 +178,9 @@ pub struct RunRows {
 /// [`RunRows`]'s shape, for a page after the first.
 #[derive(Debug)]
 pub struct SnapshotPage {
+    /// The page as display cells.
     pub rows: Vec<Vec<Cell>>,
+    /// The same rows, still typed.
     pub batch: RecordBatch,
 }
 
@@ -719,7 +728,10 @@ pub enum RegStatus {
     /// session.
     Ready,
     /// The engine refused it. The def still exists; there is just nothing working behind it.
-    Failed { reason: String },
+    Failed {
+        /// Why, in the engine's own words.
+        reason: String,
+    },
 }
 
 impl RegStatus {
@@ -734,6 +746,7 @@ impl RegStatus {
         }
     }
 
+    /// Whether the def registered.
     pub fn is_ready(&self) -> bool {
         matches!(self, RegStatus::Ready)
     }
@@ -755,7 +768,9 @@ impl RegStatus {
 /// previous `Ready` as the answer to the question it has only just asked.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Registration {
+    /// What the engine answered.
     pub status: RegStatus,
+    /// The generation it answered at.
     pub generation: CatalogGen,
 }
 
@@ -860,6 +875,7 @@ fn note_in(
 /// called `events` are different things.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Registrations {
+    /// The generation the ledger was read at.
     pub generation: CatalogGen,
     /// What the engine answered for the workspace catalog's tables and views.
     pub workspace: Answers,
@@ -1060,6 +1076,7 @@ impl SourceDefs {
         })
     }
 
+    /// The connections `defs` describes.
     pub fn of(defs: &[SourceDef]) -> Self {
         let held = Self::default();
         for def in defs {

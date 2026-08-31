@@ -168,6 +168,53 @@ jobs:
             --skip a_database_source_registers_a_federated_catalog \
             --skip a_mysql_source_registers_a_federated_catalog
 
+      # The published set's own gate. Two things it holds, neither of which the clippy step
+      # above can:
+      #
+      # `#![deny(missing_docs)]` lives in each of the four crates, so an undocumented `pub`
+      # item already fails the build — but only for the features that build. The
+      # `strata-engine/testing` module is off by default, so it is named here.
+      #
+      # It is named here for the LIBRARY only. `cargo doc` selects lib and bin targets and
+      # nothing else, so this step never invokes rustc on `examples/custom_source.rs`
+      # whatever features it is given — measured, by breaking the example and watching this
+      # step pass. Compiling the examples is the `--all-targets` in the clippy step below,
+      # which is the reason that step exists and the reason it cannot be dropped as
+      # redundant with this one.
+      #
+      # `broken_intra_doc_links` is the rustdoc lint that cannot be a compile error: a
+      # `[`Foo`]` naming an item that has been renamed still compiles and renders as plain
+      # text on docs.rs. Denied per-lint rather than through a blanket `-D warnings`,
+      # deliberately: `private_intra_doc_links` fires ~65 times across these crates because
+      # the house style has an item's docs cite the private helpers that explain it
+      # (`.agent/reference/COMMENTS.md` section 3), and that is reasoning worth keeping.
+      # A link to a private item degrades to plain text; a link to a *missing* item is a
+      # defect, and only the second is denied. The other three catch a mangled doc comment:
+      # stray HTML, a ```rust block that does not parse, and a bare URL.
+      #
+      # `--no-deps`, so a dependency's own doc warnings are not ours to answer for.
+      - name: cargo doc (published crates)
+        env:
+          RUSTDOCFLAGS: >-
+            -D rustdoc::broken_intra_doc_links
+            -D rustdoc::invalid_html_tags
+            -D rustdoc::invalid_rust_codeblocks
+            -D rustdoc::bare_urls
+        run: |
+          cargo doc --locked --no-deps --features strata-engine/testing \
+            -p strata-model -p strata-arrow -p strata-engine -p strata-agent
+
+      # The `testing` feature is not on in any other step, so this is the only thing that
+      # holds its modules — the `DataSource` conformance ring an embedder runs against their
+      # own backend, and the two fake sources — to the same lint bar as the rest.
+      #
+      # `--all-targets` is load-bearing rather than tidy: it is what compiles
+      # `examples/custom_source.rs`, whose `required-features = ["testing"]` keeps it out of
+      # every other step in this file. Drop this step and the example stops being built at
+      # all — the `cargo doc` step above does not build it, despite naming the same feature.
+      - name: cargo clippy (testing feature)
+        run: cargo clippy -p strata-engine --features testing --all-targets --locked -- -D warnings
+
       # The engine with **no data sources compiled in** — the proof that a shipped source
       # reaches the engine only through the public registration an embedder calls, and that
       # its whole dependency tree rides its cargo feature. A private path from the engine

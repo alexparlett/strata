@@ -53,10 +53,12 @@ pub fn columns(info: &[ColumnInfo]) -> Columns {
 /// Only needed when more than one project is open — the error lists them.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ProjectParams {
+    /// Which open project, by root path or by name. Only needed when more than one is open.
     #[serde(default)]
     pub project: Option<String>,
 }
 
+/// `describe_table` on the wire.
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct DescribeTableParams {
     /// The table or view to describe. Saved queries are not in this namespace.
@@ -74,6 +76,7 @@ pub struct DescribeTableParams {
     /// the matches), 50 per page.
     #[serde(default)]
     pub page: Option<usize>,
+    /// Which open project, by root path or by name. Only needed when more than one is open.
     #[serde(default)]
     pub project: Option<String>,
 }
@@ -89,6 +92,7 @@ pub struct ListTablesParams {
     /// 1-based page over the (filtered) catalog, 50 entries per page.
     #[serde(default)]
     pub page: Option<usize>,
+    /// Which open project, by root path or by name. Only needed when more than one is open.
     #[serde(default)]
     pub project: Option<String>,
 }
@@ -100,22 +104,27 @@ pub struct ListFunctionsParams {
     /// in full detail; the unfiltered registry lists names only.
     #[serde(default)]
     pub matching: Option<String>,
+    /// Which open project, by root path or by name. Only needed when more than one is open.
     #[serde(default)]
     pub project: Option<String>,
 }
 
+/// `validate` on the wire.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ValidateParams {
     /// The SQL to check. Never executed.
     pub sql: String,
+    /// Which open project, by root path or by name. Only needed when more than one is open.
     #[serde(default)]
     pub project: Option<String>,
 }
 
+/// The one argument every query-session tool takes beside the project.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct QuerySessionParams {
     /// A handle from `open_query_session` or `list_query_sessions`.
     pub query_session: String,
+    /// Which open project, by root path or by name. Only needed when more than one is open.
     #[serde(default)]
     pub project: Option<String>,
 }
@@ -138,15 +147,19 @@ pub struct RunParams {
     /// rest.
     #[serde(default)]
     pub page_size: Option<usize>,
+    /// Which open project, by root path or by name. Only needed when more than one is open.
     #[serde(default)]
     pub project: Option<String>,
 }
 
+/// Whether `run` executes the statement or only plans it.
 #[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
+    /// Execute it and return page 1.
     #[default]
     Run,
+    /// Return the plan and materialize nothing.
     Explain,
 }
 
@@ -159,6 +172,7 @@ impl From<Mode> for RunMode {
     }
 }
 
+/// `read_page` on the wire.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ReadPageParams {
     /// A query-session handle whose last run settled with rows.
@@ -168,12 +182,15 @@ pub struct ReadPageParams {
     /// Order the whole snapshot before the page window is taken.
     #[serde(default)]
     pub sort: Option<Sort>,
+    /// Which open project, by root path or by name. Only needed when more than one is open.
     #[serde(default)]
     pub project: Option<String>,
 }
 
+/// How to order a snapshot before its page window is taken.
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 pub struct Sort {
+    /// The column to order by, as the result schema names it.
     pub column: String,
     /// Ascending when absent.
     #[serde(default = "yes")]
@@ -197,6 +214,7 @@ pub struct ExportResultParams {
     /// `arrow`, or any other format this build can write. Each is written with its own defaults:
     /// a CSV carries a header row and comma-separated fields, none of them are compressed.
     pub format: String,
+    /// Which open project, by root path or by name. Only needed when more than one is open.
     #[serde(default)]
     pub project: Option<String>,
 }
@@ -250,9 +268,13 @@ pub fn export_format(word: &str, registered: &[FormatInfo]) -> Result<Format, Ag
 /// that had already succeeded.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ExportResult {
+    /// The session the export read.
     pub query_session: String,
+    /// Where the file was written.
     pub path: String,
+    /// How many rows it holds.
     pub rows: usize,
+    /// How large it is.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bytes: Option<u64>,
 }
@@ -268,14 +290,19 @@ impl From<(String, ExportReport)> for ExportResult {
     }
 }
 
+/// `list_projects`' answer.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ProjectsResult {
+    /// Every project this host has open.
     pub projects: Vec<ProjectWire>,
 }
 
+/// One open project.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ProjectWire {
+    /// Its folder's name.
     pub name: String,
+    /// Its root path.
     pub root: String,
 }
 
@@ -300,10 +327,12 @@ const SQL_PREVIEW: usize = 160;
 /// Source paths a table row lists before the count stands in for the rest.
 const SOURCES_SHOWN: usize = 3;
 
+/// `list_tables`' answer.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct TablesResult {
     /// Entries the catalog holds (or 'matching' matched), before paging.
     pub total: usize,
+    /// This page of them.
     pub entries: Vec<EntryWire>,
     /// The project's data sources, and what registering each one answered. A data source that
     /// registered a **catalog** carries the name its relations are addressed by: nothing in
@@ -317,6 +346,7 @@ pub struct TablesResult {
     /// Present only when the answer is one window of more.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page: Option<usize>,
+    /// How many entries a page holds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page_size: Option<usize>,
 }
@@ -399,11 +429,13 @@ pub fn tables_result(
 /// full of signing failures and nothing saying which one thing is actually wrong.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct SourceWire {
+    /// The data source's name.
     pub name: String,
     /// The catalog its relations are addressed by. Absent for an object store, which has no
     /// namespace of its own — what it holds is the table entries that read through it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub catalog: Option<String>,
+    /// What registering it answered.
     pub state: StateWire,
     /// What the engine refused it with, present exactly when `state` is `failed`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -432,26 +464,37 @@ pub fn source_wires(snapshot: &SourcesSnapshot) -> Vec<SourceWire> {
         .collect()
 }
 
+/// One catalog entry, as `list_tables` lists it.
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EntryWire {
+    /// A registered table.
     Table {
+        /// Its name.
         name: String,
+        /// The reader it is read with.
         format: String,
         /// The first few source paths as stored; `sources_total` counts the whole set when
         /// more were elided.
         sources: Vec<String>,
+        /// Source paths the def holds in total.
         #[serde(skip_serializing_if = "Option::is_none")]
         sources_total: Option<usize>,
+        /// What registering it answered.
         state: StateWire,
+        /// What the engine refused it with, present exactly when `state` is `failed`.
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    /// A saved view.
     View {
+        /// Its name.
         name: String,
         /// A one-line preview, clipped visibly. The full text is `describe_table`'s answer.
         sql: String,
+        /// What creating it answered.
         state: StateWire,
+        /// What the engine refused it with, present exactly when `state` is `failed`.
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
@@ -459,8 +502,11 @@ pub enum EntryWire {
     /// for saved queries, so a preview here would make the full text unreachable — the one
     /// per-entry bound honesty forbids.
     SavedQuery {
+        /// Its identity, which a rename does not move.
         id: String,
+        /// Its label.
         name: String,
+        /// The snippet itself.
         sql: String,
     },
 }
@@ -505,11 +551,15 @@ fn entry_wire(entry: CatalogEntry) -> EntryWire {
     }
 }
 
+/// What the engine last answered for a def.
 #[derive(Clone, Copy, Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum StateWire {
+    /// No pass has reached it yet.
     Pending,
+    /// It registered.
     Ready,
+    /// The engine refused it.
     Failed,
 }
 
@@ -532,10 +582,14 @@ fn split_reg(reg: RegState) -> (StateWire, Option<String>) {
 /// names what the shown part was cut from.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct DescribeResult {
+    /// The relation's name, as it was asked for.
     pub name: String,
+    /// What registering it answered.
     pub state: StateWire,
+    /// Whether it is a table or a view.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<EntryKindWire>,
+    /// What the engine refused it with, present exactly when `state` is `failed`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     /// The data source this relation lives in, for one that is not a def of the
@@ -543,21 +597,26 @@ pub struct DescribeResult {
     /// everything in the workspace.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// The reader a table is read with.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
+    /// A few of a table's source paths, as stored.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<String>,
     /// Source paths the def holds in total; present only when 'sources' shows fewer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sources_total: Option<usize>,
+    /// A view's definition query, whole.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sql: Option<String>,
+    /// The Hive partition columns a table's files are laid out by.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub partitions: Vec<PartitionWire>,
     /// The row count the source reports for free. Absent when it reports none — never
     /// counted, never derived.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rows: Option<u64>,
+    /// This window of the schema's top-level columns.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub columns: Vec<ColumnWire>,
     /// Top-level columns the schema holds in total; present only when 'columns' shows
@@ -580,6 +639,7 @@ pub struct DescribeResult {
     /// Present only when the answer is one window of more.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page: Option<usize>,
+    /// How many rows a page holds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page_size: Option<usize>,
 }
@@ -588,8 +648,11 @@ pub struct DescribeResult {
 /// never a dotted string — and what it is.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct MatchWire {
+    /// Where the field is, outermost segment first.
     pub path: Vec<String>,
+    /// Its Arrow type, as the engine reports it.
     pub dtype: String,
+    /// The visual family that type falls under.
     pub kind: KindWire,
     /// How many real fields this one row stands for, when its path runs through a collapsed
     /// key set (the `<key>` segment). Absent when the row is one field.
@@ -597,16 +660,22 @@ pub struct MatchWire {
     pub matched_keys: Option<usize>,
 }
 
+/// Which of the two workspace namespaces a def is in.
 #[derive(Clone, Copy, Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EntryKindWire {
+    /// A table.
     Table,
+    /// A view.
     View,
 }
 
+/// One Hive partition column.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct PartitionWire {
+    /// Its name.
     pub name: String,
+    /// Its Arrow type.
     pub dtype: String,
 }
 
@@ -614,10 +683,15 @@ pub struct PartitionWire {
 /// into; `dtype` is the Arrow type as the engine reports it.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ColumnWire {
+    /// The column's name.
     pub name: String,
+    /// Its Arrow type, as the engine reports it.
     pub dtype: String,
+    /// The visual family that type falls under.
     pub kind: KindWire,
+    /// Whether it admits nulls.
     pub nullable: bool,
+    /// This window of its direct children.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<ColumnWire>,
     /// Direct children this column has in total; present only when 'children' shows fewer.
@@ -660,15 +734,23 @@ impl From<&ColumnInfo> for ColumnWire {
     }
 }
 
+/// The visual family a column's type falls under.
 #[derive(Clone, Copy, Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum KindWire {
+    /// Text.
     Str,
+    /// A number.
     Num,
+    /// A boolean.
     Bool,
+    /// A date, a time or a timestamp.
     Ts,
+    /// A struct.
     Struct,
+    /// A list.
     List,
+    /// A map.
     Map,
 }
 
@@ -686,9 +768,12 @@ impl From<Kind> for KindWire {
     }
 }
 
+/// One fact the source reports about a column.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct StatWire {
+    /// Which fact it is.
     pub key: StatKeyWire,
+    /// The value, formatted.
     pub value: String,
     /// False when the source truncated the value, making it a bound rather than the value.
     pub exact: bool,
@@ -704,14 +789,21 @@ impl From<&Stat> for StatWire {
     }
 }
 
+/// Which fact a [`StatWire`] carries.
 #[derive(Clone, Copy, Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum StatKeyWire {
+    /// How many rows are null.
     Nulls,
+    /// The smallest value.
     Min,
+    /// The largest value.
     Max,
+    /// How many distinct values there are.
     Distinct,
+    /// The arithmetic mean.
     Mean,
+    /// The median.
     Median,
 }
 
@@ -735,14 +827,18 @@ impl From<StatKey> for StatKeyWire {
 /// answers with every name and a note pointing at 'matching'.
 pub const FUNCTION_DETAIL: usize = 30;
 
+/// `list_functions`' answer.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct FunctionsResult {
     /// Functions this answer covers — the whole registry, or what 'matching' matched.
     /// Always stated, so "the 12 date functions" and "12 of the 40 date functions" cannot
     /// read the same.
     pub total: usize,
+    /// The scalar functions.
     pub scalar: Vec<FunctionWire>,
+    /// The aggregate functions.
     pub aggregate: Vec<FunctionWire>,
+    /// The window functions.
     pub window: Vec<FunctionWire>,
     /// Present when detail was withheld; names the recovery.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -796,8 +892,10 @@ fn function_rows(fs: Vec<&FunctionSym>, detailed: bool) -> Vec<FunctionWire> {
         .collect()
 }
 
+/// One registered SQL function.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct FunctionWire {
+    /// The name a statement calls it by.
     pub name: String,
     /// One entry per overload, each an ordered list of parameter labels. A trailing `…`
     /// marks a variadic tail. **Absent only in a names-only answer** — a detailed row
@@ -805,8 +903,10 @@ pub struct FunctionWire {
     /// "no declared arity" cannot read as the same absence.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signatures: Option<Vec<Vec<String>>>,
+    /// The type it returns, where the registry declares one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub returns: Option<String>,
+    /// What it does, in the registry's own words.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 }
@@ -822,14 +922,19 @@ impl From<&FunctionSym> for FunctionWire {
     }
 }
 
+/// `validate`'s answer.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ValidateResult {
+    /// Everything wrong with the submitted SQL. Empty means it runs.
     pub diagnostics: Vec<DiagnosticWire>,
 }
 
+/// One problem with the submitted SQL.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct DiagnosticWire {
+    /// How bad it is.
     pub severity: SeverityWire,
+    /// What is wrong.
     pub message: String,
     /// `line L:C`, when the diagnostic has a position.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -854,22 +959,31 @@ impl From<&Diagnostic> for DiagnosticWire {
     }
 }
 
+/// How bad a [`DiagnosticWire`] is.
 #[derive(Clone, Copy, Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SeverityWire {
+    /// The statement will not run.
     Error,
+    /// It will run and probably should not.
     Warning,
+    /// Something worth saying about SQL that is fine.
     Info,
 }
 
+/// `list_query_sessions`' answer.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct QuerySessionsResult {
+    /// Every query session this agent holds.
     pub query_sessions: Vec<QuerySessionWire>,
 }
 
+/// One query session.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct QuerySessionWire {
+    /// Its handle.
     pub query_session: String,
+    /// What it is holding.
     pub state: QuerySessionStateWire,
 }
 
@@ -886,16 +1000,22 @@ impl From<QuerySessionInfo> for QuerySessionWire {
     }
 }
 
+/// What a query session is holding.
 #[derive(Clone, Copy, Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum QuerySessionStateWire {
+    /// Nothing has run in it.
     Empty,
+    /// A run is in flight.
     Running,
+    /// A run settled, and its result can be paged.
     Settled,
 }
 
+/// `open_query_session`' and `close_query_session`'s answer.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct QuerySessionResult {
+    /// The session's handle.
     pub query_session: String,
 }
 
@@ -916,38 +1036,58 @@ pub struct QuerySessionResult {
 #[serde(tag = "status", rename_all = "snake_case")]
 #[schemars(extend("type" = "object"))]
 pub enum RunResult {
+    /// The statement ran and produced rows.
     Ok {
+        /// The session it ran in.
         query_session: String,
+        /// The result schema.
         columns: Columns,
         /// Page 1. A cell is `null` or its formatted text.
         rows: Vec<Vec<Option<String>>>,
         /// Exact — the snapshot knows, and no `LIMIT` was injected to make it otherwise.
         total: usize,
+        /// Which page this is, 1-based.
         page: usize,
+        /// How many rows a page holds.
         page_size: usize,
+        /// Wall-clock the run took.
         elapsed_ms: u64,
     },
+    /// The statement was planned and not executed.
     Plan {
+        /// The session it was planned in.
         query_session: String,
         /// True when the statement was `EXPLAIN ANALYZE`, so the physical plan carries
         /// per-operator metrics.
         analyze: bool,
+        /// The logical plan, as `EXPLAIN` prints it.
         logical: String,
+        /// The physical plan, as `EXPLAIN` prints it.
         physical: String,
     },
+    /// The run was stopped rather than failed.
     Stopped {
+        /// The session it ran in.
         query_session: String,
+        /// What stopped it.
         reason: String,
     },
 }
 
+/// `read_page`'s answer.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct PageResult {
+    /// The session the page was read from.
     pub query_session: String,
+    /// The result schema.
     pub columns: Columns,
+    /// This page's rows. A cell is `null` or its formatted text.
     pub rows: Vec<Vec<Option<String>>>,
+    /// How many rows the whole result holds.
     pub total: usize,
+    /// Which page this is, 1-based.
     pub page: usize,
+    /// How many rows a page holds.
     pub page_size: usize,
 }
 

@@ -157,6 +157,7 @@ pub fn check_user(user: &str) -> Result<(), String> {
 pub struct MyAddress<'a> {
     /// Unbracketed: `[::1]` arrives here as `::1`, which is what the driver's hostname takes.
     pub host: &'a str,
+    /// The port, which the address states rather than defaulting.
     pub port: u16,
 }
 

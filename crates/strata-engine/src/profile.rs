@@ -44,15 +44,20 @@ use strata_arrow::profile::Profiled;
 /// names to match on.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Slot {
+    /// The entry's row count.
     Rows,
     /// The column's non-null count. Nulls are derived (`rows - non_null`) rather than
     /// aggregated: `count(col)` already skips nulls, so this is exact and avoids the
     /// `ExprFunctionExt` FILTER builder (and its fallible `build()`) for free.
     NonNull {
+        /// The column counted.
         name: String,
     },
+    /// One aggregated fact about a column.
     Stat {
+        /// The column aggregated.
         name: String,
+        /// Which fact it is.
         key: StatKey,
     },
 }

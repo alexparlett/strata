@@ -39,12 +39,18 @@ mod vocabulary;
 use ranking::*;
 use vocabulary::*;
 
+/// What a [`Completion`] offers, driving its icon and its ranking.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CompletionKind {
+    /// A table.
     Table,
+    /// A view.
     View,
+    /// A column.
     Column,
+    /// A function.
     Function,
+    /// A SQL keyword.
     Keyword,
 }
 
@@ -52,10 +58,15 @@ pub enum CompletionKind {
 /// out when accepted (so we replace the half-typed token, not just insert).
 #[derive(Clone, PartialEq)]
 pub struct Completion {
+    /// How the candidate reads in the popup.
     pub label: String,
+    /// What accepting it writes into the buffer.
     pub insert: String,
+    /// What kind of thing it offers.
     pub kind: CompletionKind,
+    /// The dim second line beside the label, where there is one.
     pub detail: Option<String>,
+    /// The byte span accepting it replaces.
     pub replace: Range<usize>,
 }
 

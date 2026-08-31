@@ -32,10 +32,15 @@ struct MockSession {
 /// One project the mock serves. Build it, register whatever tables the test needs on its
 /// [`engine`](MockProject::engine), then hand it to [`MockHost::new`].
 pub struct MockProject {
+    /// The project's name.
     pub name: String,
+    /// Its root, which is its identity.
     pub root: PathBuf,
+    /// The engine it serves from.
     pub engine: Arc<Engine>,
+    /// The catalog rows `list_tables` answers with.
     pub catalog: Vec<CatalogEntry>,
+    /// What `describe_table` answers for, by name.
     pub described: Vec<Described>,
     sessions: Vec<MockSession>,
     settle: Option<EngineError>,
@@ -61,11 +66,13 @@ impl MockProject {
         }
     }
 
+    /// The project with `entries` as its catalog.
     pub fn with_catalog(mut self, entries: Vec<CatalogEntry>) -> MockProject {
         self.catalog = entries;
         self
     }
 
+    /// The project with `described` added to what it can describe.
     pub fn with_described(mut self, described: Described) -> MockProject {
         self.described.push(described);
         self
@@ -91,6 +98,7 @@ pub struct MockHost {
 }
 
 impl MockHost {
+    /// A host serving `projects`.
     pub fn new(projects: Vec<MockProject>) -> Arc<MockHost> {
         Arc::new(MockHost {
             projects: Mutex::new(projects),

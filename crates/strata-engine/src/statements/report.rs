@@ -24,6 +24,7 @@ pub struct StatementReport {
     /// applicable* — a `DROP` or a `SET` counts nothing, which is a different fact from
     /// counting zero.
     pub count: Option<u64>,
+    /// Wall-clock the statement took.
     pub elapsed_ms: u128,
     /// What the app folds into `ProjectState`. `None` where the statement changed nothing the
     /// catalog holds; deliberately not a `StoreEffect::None` variant beside it, which would be
@@ -34,8 +35,11 @@ pub struct StatementReport {
 /// What an arm answers with — [`StatementReport`] minus the two fields `execute` owns. An arm
 /// therefore cannot mislabel itself or forget to stamp the clock.
 pub struct StatementOutcome {
+    /// The sentence the user reads.
     pub message: String,
+    /// Rows the statement moved, where it moved any.
     pub count: Option<u64>,
+    /// What the app folds into its catalog.
     pub effect: Option<StoreEffect>,
 }
 
@@ -51,23 +55,41 @@ pub enum StoreEffect {
     /// A table def arrived or was rewritten, already registered — an internal table's CTAS
     /// output or a typed `CREATE EXTERNAL TABLE`. The def is the durable,
     /// shareable half; the meta is the answer that lands on its row.
-    TableUpserted { def: TableDef, meta: TableMeta },
+    TableUpserted {
+        /// The def to write to the store.
+        def: TableDef,
+        /// What registration learned about it.
+        meta: TableMeta,
+    },
     /// A table def is gone and its provider deregistered. `dependents` are the views
     /// left reading it — **named, never cascaded**: a `ViewTable`'s inlined plan goes on
     /// executing until reload, and the epoch bump makes diagnostics re-derive immediately,
     /// which is the surface that matters. The next pass answers for them honestly.
     TableRemoved {
+        /// The table that is gone.
         name: String,
+        /// The views left reading it.
         dependents: Vec<String>,
     },
     /// A view def arrived or was rewritten, already created — the same pair ⌘S folds.
-    ViewUpserted { def: ViewDef, meta: ViewMeta },
+    ViewUpserted {
+        /// The def to write to the store.
+        def: ViewDef,
+        /// What creating it learned.
+        meta: ViewMeta,
+    },
     /// A view def is gone and the view dropped.
-    ViewRemoved { name: String },
+    ViewRemoved {
+        /// The view that is gone.
+        name: String,
+    },
     /// The table's *data* moved but its def did not — an `INSERT` appending a file.
     /// A re-scan is what refreshes `TableMeta.rows`, because a row count is something the
     /// scan driver reads, never something the store adds up for itself.
-    RescanTable { name: String },
+    RescanTable {
+        /// The table whose files changed.
+        name: String,
+    },
     /// The session's function catalog moved. Nothing persists — functions are
     /// session-scoped (spec §8) — but names that did not resolve a moment ago now do, so the
     /// catalog epoch has to move with them.

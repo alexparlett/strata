@@ -26,14 +26,20 @@ use crate::{fold_ident, CATALOG, SCHEMA};
 #[derive(Clone, Debug, PartialEq)]
 pub enum Target {
     /// The workspace catalog's one schema, under the bare name registration takes.
-    Workspace { name: String },
+    Workspace {
+        /// The bare name registration takes.
+        name: String,
+    },
     /// A table in a **store** data source's catalog — one of the project's own rows,
     /// whose data is files in a bucket.
     Store(Stored),
     /// A relation inside a live data source's catalog.
     Remote(Remote),
     /// A qualifier that resolves to no catalog at all — [`elsewhere`]'s wording.
-    Nowhere { qualifier: String },
+    Nowhere {
+        /// The qualifier that resolved to nothing.
+        qualifier: String,
+    },
 }
 
 impl Target {
@@ -132,7 +138,9 @@ impl Stored {
 /// and a `DROP` then reported a destructive action as consequence-free.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Remote {
+    /// The data source's name, in its own spelling.
     pub source: String,
+    /// The relation, as the plan records it.
     pub reference: TableReference,
 }
 

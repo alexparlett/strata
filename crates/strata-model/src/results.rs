@@ -8,7 +8,9 @@ use super::ColumnInfo;
 /// flag stays even though the text is the configured NULL rendering).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cell {
+    /// The cell as it is displayed.
     pub text: String,
+    /// Whether the underlying value is NULL.
     pub null: bool,
 }
 
@@ -32,11 +34,17 @@ pub struct QueryOutput {
     /// The materialized snapshot every later read targets. `None` ⇔ the query produced
     /// zero rows (nothing was materialized; there are no pages to read).
     pub snapshot: Option<SnapshotId>,
+    /// The result schema.
     pub columns: Vec<ColumnInfo>,
+    /// This page's rows.
     pub rows: Vec<Vec<Cell>>,
+    /// How many rows the whole result holds.
     pub total: usize,
+    /// Which page this is, 1-based.
     pub page: usize,
+    /// How many rows a page holds.
     pub page_size: usize,
+    /// Wall-clock the run took.
     pub elapsed_ms: u128,
 }
 
@@ -48,6 +56,7 @@ pub struct QueryOutput {
 pub struct PageQuery {
     /// 1-based.
     pub page: usize,
+    /// How many rows a page holds.
     pub page_size: usize,
     /// `(column name, ascending)`.
     pub sort: Option<(String, bool)>,

@@ -35,19 +35,33 @@ use crate::sql::unwrap_statement;
 /// a lead with no entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StmtKind {
+    /// `CREATE EXTERNAL TABLE`.
     CreateExternalTable,
+    /// `CREATE TABLE` with a column list.
     CreateTable,
+    /// `CREATE TABLE … AS SELECT`.
     Ctas,
+    /// `INSERT`.
     Insert,
+    /// `DROP TABLE`.
     DropTable,
+    /// `CREATE VIEW`.
     CreateView,
+    /// `DROP VIEW`.
     DropView,
+    /// `COPY … TO`.
     Copy,
+    /// `SET`.
     Set,
+    /// `RESET`.
     Reset,
+    /// `PREPARE`.
     Prepare,
+    /// `DEALLOCATE`.
     Deallocate,
+    /// `CREATE FUNCTION`.
     CreateFunction,
+    /// `DROP FUNCTION`.
     DropFunction,
     /// Remote-only, so the arm refuses a workspace target in its own words; intercepted rather
     /// than refused here because whose catalog the target is in is not something the parsed
@@ -147,6 +161,7 @@ impl Fault {
 /// What one parsed statement is, and what is wrong with it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Classified {
+    /// What the statement is.
     pub form: Form,
     /// A fault in the statement, reached only once the caller is permitted the form.
     pub fault: Option<Fault>,

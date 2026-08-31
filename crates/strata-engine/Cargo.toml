@@ -7,6 +7,7 @@ license = "MIT"
 
 [features]
 default = ["postgres", "mysql"]
+testing = []
 postgres = [
     "dep:datafusion-table-providers-common",
     "dep:datafusion-table-providers-postgres",
@@ -53,6 +54,10 @@ tokio-postgres = "0.7"
 aws-sdk-s3 = "1"
 flate2 = "1"
 keyring-core = "1"
+
+[[example]]
+name = "custom_source"
+required-features = ["testing"]
 
 [lints]
 workspace = true

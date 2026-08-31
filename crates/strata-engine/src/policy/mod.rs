@@ -38,12 +38,19 @@ pub enum Locality {
 /// What [`PolicyProvider::admit`] asks about, before anything has resolved a target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GrantFamily {
+    /// Reading.
     Read,
+    /// Writing rows.
     Write,
+    /// Creating and dropping tables.
     Ddl,
+    /// Creating and dropping views.
     ViewDdl,
+    /// Writing a file with `COPY … TO`.
     CopyOut,
+    /// Moving the session — `SET`, `RESET`, `PREPARE`, `DEALLOCATE`.
     Session,
+    /// Creating and dropping functions.
     Functions,
 }
 
@@ -63,6 +70,7 @@ impl GrantFamily {
 /// What a policy decision may turn on about a statement's resolved target.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TargetFacts {
+    /// Where the target lives.
     pub locality: Locality,
     /// The backend kind of the data source the target is in; `None` for a workspace target.
     pub kind: Option<String>,
@@ -152,7 +160,9 @@ impl fmt::Debug for Principal {
 /// Whether a caller may proceed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Admit {
+    /// They may.
     Allow,
+    /// They may not, for this reason.
     Deny(DenyCode),
 }
 

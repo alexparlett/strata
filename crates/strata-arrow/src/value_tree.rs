@@ -38,7 +38,9 @@ pub struct ValueNode {
     /// The type, in the spelling the grid's header and the column inspector use
     /// (`column::short_type`), so one value cannot be described two ways.
     pub dtype: String,
+    /// The visual kind that type falls under.
     pub kind: Kind,
+    /// What the row shows, and whether it opens.
     pub value: NodeValue,
 }
 

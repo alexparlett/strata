@@ -39,6 +39,7 @@ pub fn chart_role(dt: &DataType) -> ChartRole {
     }
 }
 
+/// The vocabulary row an Arrow field becomes.
 pub fn column_info(field: &Field) -> ColumnInfo {
     let dtype = short_type(field.data_type());
     ColumnInfo {

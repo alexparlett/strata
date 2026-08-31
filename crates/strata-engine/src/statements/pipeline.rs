@@ -140,7 +140,12 @@ pub enum Reason {
     /// The statement itself is at fault, and no capability makes it well-formed.
     Grammar(Fault),
     /// This caller may not perform this form.
-    Policy { form: Form, code: DenyCode },
+    Policy {
+        /// The form the caller was refused.
+        form: Form,
+        /// Which grant it needed.
+        code: DenyCode,
+    },
     /// The policy provider could not decide — an unreachable decision point, expired credentials.
     /// A fault rather than a decision: the statement is refused and the provider's words surfaced.
     Undecided(String),
@@ -169,7 +174,9 @@ impl Reason {
 /// `span` is set only where the refusal has a position of its own, such as an ambiguous name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Refusal {
+    /// Why it was refused.
     pub reason: Reason,
+    /// Where in the buffer to point, where the refusal has a position of its own.
     pub span: Option<Span>,
 }
 

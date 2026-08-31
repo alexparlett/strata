@@ -50,7 +50,12 @@ pub enum EngineError {
     /// The runtime dropped or panicked the task carrying the call — a different fault from the
     /// call's own, which is why the message names the call rather than the work.
     #[error("{what} task failed: {why}")]
-    Task { what: String, why: String },
+    Task {
+        /// The call the runtime dropped.
+        what: String,
+        /// What the runtime said about it.
+        why: String,
+    },
 }
 
 impl EngineError {

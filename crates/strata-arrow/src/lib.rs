@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 //! Strata's **Arrow-level vocabulary** — the layer between the serde-only [`strata_model`] and the
 //! DataFusion boundary `strata_engine`.
 //!

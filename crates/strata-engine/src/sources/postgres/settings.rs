@@ -32,8 +32,8 @@ pub const PASSWORD_ENV: &[&str] = &["PGPASSWORD"];
 pub const SSL_MODES: &[&str] = &["disable", "prefer", "require", "verify-ca", "verify-full"];
 
 /// The modes that read a root certificate — the one list, read by [`verifies`] and by the
-/// certificate key's own [`Shown`], so what the form offers and what the driver does cannot
-/// disagree.
+/// certificate key's own [`When`](crate::sources::source::When), so what the form offers and what
+/// the driver does cannot disagree.
 pub const SSL_VERIFYING: &[&str] = &["verify-ca", "verify-full"];
 
 /// The sections this source's rows sit in.
@@ -181,7 +181,9 @@ pub fn check_user(user: &str) -> Result<(), String> {
 pub struct PgAddress<'a> {
     /// Unbracketed: `[::1]` arrives here as `::1`, which is what a driver's `host=` takes.
     pub host: &'a str,
+    /// The port, which the address states rather than defaulting.
     pub port: u16,
+    /// The database this data source reads.
     pub database: &'a str,
 }
 

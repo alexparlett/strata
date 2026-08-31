@@ -90,6 +90,7 @@ impl WorkspaceName {
         WorkspaceName(if bare { id } else { quoted(&id) })
     }
 
+    /// The rendered name.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -127,6 +128,7 @@ impl SessionName {
         )
     }
 
+    /// The rendered name.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -143,10 +145,12 @@ impl SessionName {
 pub struct ResultColumn(String);
 
 impl ResultColumn {
+    /// `name`, quoted verbatim.
     pub fn of(name: impl AsRef<str>) -> Self {
         ResultColumn(quoted(name.as_ref()))
     }
 
+    /// The rendered name.
     pub fn as_str(&self) -> &str {
         &self.0
     }

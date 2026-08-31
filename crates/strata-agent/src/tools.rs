@@ -84,6 +84,7 @@ pub const MAX_PAGE_SIZE: usize = 10_000;
 /// vocabulary with two transports rather than two vocabularies.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToolSpec {
+    /// The tool's name, as `tools/call` addresses it.
     pub name: String,
     /// The `#[tool]` method's doc comment, verbatim — the same text `tools/list` advertises.
     pub description: String,
@@ -762,6 +763,7 @@ impl<H: Host> StrataTools<H> {
         tools
     }
 
+    /// Every project this host has open.
     pub async fn list_projects(&self) -> ProjectsResult {
         ProjectsResult {
             projects: self
@@ -840,6 +842,15 @@ impl<H: Host> StrataTools<H> {
         describe::describe_result(described, &params)
     }
 
+    /// The engine's function registry, narrowed by `matching` and bounded by
+    /// [`FUNCTION_DETAIL`](crate::wire::FUNCTION_DETAIL).
+    ///
+    /// A match set at or under the bound comes back in full; anything larger lists names only and
+    /// says how to narrow it.
+    ///
+    /// # Errors
+    ///
+    /// If the project cannot be resolved.
     pub async fn list_functions(
         &self,
         params: ListFunctionsParams,
@@ -851,6 +862,11 @@ impl<H: Host> StrataTools<H> {
         ))
     }
 
+    /// What is wrong with a statement, without running it.
+    ///
+    /// # Errors
+    ///
+    /// If the project cannot be resolved.
     pub async fn validate(&self, params: ValidateParams) -> Result<ValidateResult, AgentError> {
         let (_, engine) = self.engine(params.project.as_deref()).await?;
         let diagnostics = engine.lang().analyze(params.sql).await;
@@ -895,6 +911,11 @@ impl<H: Host> StrataTools<H> {
         })
     }
 
+    /// This agent's own query sessions, in the project asked.
+    ///
+    /// # Errors
+    ///
+    /// If the project cannot be resolved.
     pub async fn list_query_sessions(
         &self,
         params: ProjectParams,
@@ -932,6 +953,14 @@ impl<H: Host> StrataTools<H> {
         }
     }
 
+    /// Runs one read-only statement in a query session, replacing whatever it last settled.
+    ///
+    /// The statement is gated before dispatch and never rewritten; a stop comes back as
+    /// [`RunResult::Stopped`] rather than as an error.
+    ///
+    /// # Errors
+    ///
+    /// If the project or the session cannot be resolved, the statement is refused, or the run fails.
     pub async fn run(&self, params: RunParams) -> Result<RunResult, AgentError> {
         self.run_as(self.connection.agent, params).await
     }
@@ -985,6 +1014,11 @@ impl<H: Host> StrataTools<H> {
         }
     }
 
+    /// One page of a session's settled result.
+    ///
+    /// # Errors
+    ///
+    /// If the project or the session cannot be resolved, or the session has no readable result.
     pub async fn read_page(&self, params: ReadPageParams) -> Result<PageResult, AgentError> {
         self.read_page_as(self.connection.agent, params).await
     }
@@ -1105,6 +1139,11 @@ impl<H: Host> StrataTools<H> {
         }
     }
 
+    /// Closes a query session, retiring its result and cancelling any run in flight.
+    ///
+    /// # Errors
+    ///
+    /// If the project or the session cannot be resolved, or the session is not this agent's.
     pub async fn close_query_session(
         &self,
         params: QuerySessionParams,

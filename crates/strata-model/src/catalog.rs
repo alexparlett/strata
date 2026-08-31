@@ -15,8 +15,11 @@ use uuid::Uuid;
 /// key's identity has to be hashable all the way down.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum CatalogKind {
+    /// A table.
     Table,
+    /// A view.
     View,
+    /// A saved query.
     Query,
 }
 
@@ -33,8 +36,11 @@ pub enum CatalogKind {
 /// server rather than from us.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct RemoteRef {
+    /// The catalog the data source registered.
     pub source: String,
+    /// The schema inside it, in the server's own spelling.
     pub schema: String,
+    /// The relation inside that schema, in the server's own spelling.
     pub relation: String,
 }
 
@@ -54,7 +60,12 @@ impl RemoteRef {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum ColOwner {
     /// A workspace table or view, by name — their shared engine/SQL identity.
-    Entry { kind: CatalogKind, name: String },
+    Entry {
+        /// Which workspace collection holds it.
+        kind: CatalogKind,
+        /// Its name, which is also its SQL identity.
+        name: String,
+    },
     /// A relation inside a data source's catalog.
     Remote(RemoteRef),
 }
@@ -91,6 +102,7 @@ impl ColOwner {
 /// up front, moved to where the columns are actually known.
 #[derive(Clone, PartialEq, Debug)]
 pub struct ColRef {
+    /// Whose column this is.
     pub owner: ColOwner,
     /// Path within the owner. A top-level column is a one-segment path.
     pub path: Vec<String>,
@@ -146,19 +158,25 @@ where
 /// Arrow carry their compression *inside* the file, so neither offers this.
 ///
 /// The extension matters as much as the codec: a gzipped CSV is `events.csv.gz`, and a listing
-/// filtered on `.csv` matches none of them — see [`SourceFormat::extension`].
+/// filtered on `.csv` matches none of them — see [`extension`](Self::extension).
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum FileCompression {
+    /// Uncompressed.
     #[default]
     None,
+    /// gzip, `.gz`.
     Gzip,
+    /// bzip2, `.bz2`.
     Bzip2,
+    /// xz, `.xz`.
     Xz,
+    /// Zstandard, `.zst`.
     Zstd,
 }
 
 impl FileCompression {
+    /// Every codec, in the order a picker offers them.
     pub const ALL: [FileCompression; 5] =
         [Self::None, Self::Gzip, Self::Bzip2, Self::Xz, Self::Zstd];
 
@@ -173,6 +191,7 @@ impl FileCompression {
         }
     }
 
+    /// What this codec is called, as a picker prints it.
     pub fn label(self) -> &'static str {
         match self {
             Self::None => "None",
@@ -210,7 +229,9 @@ pub enum JsonShape {
 pub struct CsvRead {
     /// The first row holds column names.
     pub header: bool,
+    /// The field separator.
     pub delimiter: char,
+    /// The character a quoted field is wrapped in.
     pub quote: char,
     /// Escapes a quote inside a quoted field. Absent = none.
     pub escape: Option<char>,
@@ -225,6 +246,7 @@ pub struct CsvRead {
     /// Rows scanned to infer types. `None` = the engine's default; `Some(0)` means "read
     /// everything as text" (DataFusion's own `disable_inference` arm).
     pub infer_rows: Option<usize>,
+    /// Compression wrapping the whole file.
     pub compression: FileCompression,
 }
 
@@ -250,6 +272,7 @@ impl Default for CsvRead {
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
 #[serde(default)]
 pub struct JsonRead {
+    /// Which JSON layout the file is in.
     pub shape: JsonShape,
     /// Records scanned to infer the schema. **`None` = scan every record**, the default: the
     /// reader exists to notice a type conflict, and a capped scan that misses one types the column
@@ -258,6 +281,7 @@ pub struct JsonRead {
     /// `Some(0)` is refused by the engine, so the Configure pane spends 0 as its "scan everything"
     /// sentinel and writes `None` for it.
     pub infer_rows: Option<usize>,
+    /// Compression wrapping the whole file.
     pub compression: FileCompression,
 }
 
@@ -273,15 +297,21 @@ pub struct JsonRead {
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum SourceFormat {
+    /// Apache Parquet.
     #[default]
     Parquet,
+    /// Delimited text.
     Csv(CsvRead),
+    /// JSON, in either of [`JsonShape`]'s layouts.
     Json(JsonRead),
+    /// Arrow IPC.
     Arrow,
     /// A format named by the word its reader is registered under, with that reader's own
     /// `format.*` options kept verbatim.
     Extension {
+        /// The word the reader is registered under.
         format: String,
+        /// That reader's `format.*` options, verbatim.
         options: BTreeMap<String, String>,
     },
 }
@@ -414,6 +444,7 @@ pub enum TableOrigin {
 }
 
 impl TableOrigin {
+    /// Whether Strata owns this table's files.
     pub fn is_internal(self) -> bool {
         matches!(self, TableOrigin::Internal)
     }
@@ -424,11 +455,12 @@ impl TableOrigin {
 /// def names a [`data source`](Self::source), which is what they are relative to instead.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct TableDef {
+    /// The table's name, which is also its SQL identity.
     pub name: String,
     /// The reader and its options — see [`SourceFormat`].
     #[serde(deserialize_with = "de_format", serialize_with = "se_format")]
     pub format: SourceFormat,
-    /// **Which data source [`sources`](Self::sources) are read through**, by its
+    /// **Which data source [`paths`](Self::paths) are read through**, by its
     /// [`name`](crate::SourceDef::name) — `acme_lake`. `None` is the local disk.
     ///
     /// A *reference*, not a copy: the bucket, its provider and its credentials belong to the
@@ -440,12 +472,13 @@ pub struct TableDef {
     /// two.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// The files, as paths or globs.
     pub paths: Vec<String>,
     /// Hive partition columns as `(name, arrow_type)` — the persisted source of truth for
     /// deterministic reload (types aren't re-detected).
     #[serde(default, deserialize_with = "de_partition_cols")]
     pub partition_cols: Vec<(String, String)>,
-    /// Whose files [`sources`](Self::sources) names — see [`TableOrigin`].
+    /// Whose files [`paths`](Self::paths) names — see [`TableOrigin`].
     #[serde(default)]
     pub origin: TableOrigin,
 }
@@ -621,7 +654,9 @@ mod format_tests {
 /// `name` — that *is* its engine/SQL identity.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct ViewDef {
+    /// The view's name, which is also its SQL identity.
     pub name: String,
+    /// The definition query.
     pub sql: String,
 }
 
@@ -632,9 +667,13 @@ pub struct ViewDef {
 /// minted per load; it sticks on the next save.
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct SavedQuery {
+    /// The identity a rename cannot dangle.
     #[serde(default = "Uuid::new_v4")]
     pub id: Uuid,
+    /// The label, which a rename changes.
     pub name: String,
+    /// The snippet itself.
     pub sql: String,
+    /// A note the user keeps beside it.
     pub meta: String,
 }

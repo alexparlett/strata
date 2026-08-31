@@ -157,6 +157,18 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 ```
 
+The four crates meant for a crates.io reader — `strata-model`, `strata-arrow`, `strata-engine`
+and `strata-agent` — carry `#![deny(missing_docs)]`, so an undocumented `pub` item is a build
+failure. Their rustdoc has a gate of its own, because a `[`Foo`]` naming a renamed item still
+compiles and silently renders as plain text:
+
+```bash
+RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --locked --no-deps --features strata-engine/testing -p strata-model -p strata-arrow -p strata-engine -p strata-agent
+```
+
+Embedder documentation lives in `strata_engine::guide` rather than in `docs/`, so that its
+examples are compiled and run by `cargo test`.
+
 The curated lint set lives in `[workspace.lints]` in the root `Cargo.toml`, with thresholds in
 `clippy.toml`. A lint that is wrong for this codebase is allowed once at the workspace with a
 one-line reason — not suppressed per site; an inline `#[allow]` is reserved for a fact about one

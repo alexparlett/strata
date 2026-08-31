@@ -96,7 +96,10 @@ pub enum Sourced {
     /// An object store, registered under `scheme://<address>` — the scheme being the kind's own
     /// [`SourceKind::SCHEME`], so a connected store and a table's composed paths cannot disagree
     /// about it.
-    Store { store: Arc<dyn ObjectStore> },
+    Store {
+        /// The store, registered under `scheme://<address>`.
+        store: Arc<dyn ObjectStore>,
+    },
     /// A live catalog handle, holding whatever it reaches its source through.
     Catalog(Arc<dyn SourceCatalog>),
 }
@@ -119,10 +122,12 @@ pub struct SourceSetting {
     pub key: &'static str,
     /// The row's label, in the editor's register.
     pub label: &'static str,
+    /// What the editor draws for it.
     pub field: Field,
     /// The section this row sits under, `None` for one that sits above them all. A source's rows
     /// are drawn in the order it declares them, so a group's keys are declared together.
     pub group: Option<&'static str>,
+    /// Whether the row is refused empty.
     pub required: bool,
     /// What the value is when the data source says nothing.
     pub default: Option<&'static str>,
@@ -158,6 +163,7 @@ pub struct When {
 /// What kind of value a [`SourceSetting`] takes, and therefore what the editor draws for it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Field {
+    /// Free text.
     Text,
     /// A credential. The **value never reaches the def**: it goes to this machine's keystore
     /// under `SecretRef::derived("{kind}-{key}", url)`, or arrives through the source's own
@@ -167,6 +173,7 @@ pub enum Field {
     Choice(&'static [&'static str]),
     /// A path to a file the user owns — a certificate, a key file. The path, never the contents.
     Path,
+    /// A checkbox.
     Flag,
 }
 
@@ -264,7 +271,10 @@ pub enum Support {
     ///
     /// `why` is a clause naming what to reach for instead, and is empty where there is nothing to
     /// name. [`unsupported_function`] is what words it into a refusal.
-    Unmapped { why: String },
+    Unmapped {
+        /// A clause naming what to reach for instead, empty where there is nothing to name.
+        why: String,
+    },
 }
 
 /// A source's answer for the function names it has an opinion about.
@@ -285,6 +295,7 @@ impl FunctionMap {
         self.0.get(function)
     }
 
+    /// Whether the source has an opinion about any function name.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -399,6 +410,7 @@ impl ServerIdent {
         ServerIdent(rendered)
     }
 
+    /// The rendered identifier.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -540,9 +552,13 @@ pub trait SourceCatalog: Send + Sync + fmt::Debug + 'static {
 /// One registered source, as a surface that offers it sees it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceInfo {
+    /// The word the source is registered under.
     pub kind: &'static str,
+    /// What it is called, as a picker prints it.
     pub label: &'static str,
+    /// Its short badge, as the catalog tree prints it.
     pub badge: &'static str,
+    /// Whether connecting it yields a store or a catalog.
     pub mode: SourceMode,
     /// The settings the editor draws for it — [`DataSource::settings`].
     pub settings: &'static [SourceSetting],

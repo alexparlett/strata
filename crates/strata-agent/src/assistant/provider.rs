@@ -107,6 +107,7 @@ pub struct Rungs {
     /// prefix with a reasoning model. `contains` is open in the over-match direction, and
     /// default-closed does nothing about that: `gpt-5-chat-latest` contains `gpt-5`.
     pub except: &'static [&'static str],
+    /// The rungs these models accept.
     pub rungs: &'static [Effort],
 }
 
@@ -184,10 +185,13 @@ pub enum KeyUse {
 /// each need to know about it.
 #[derive(Clone, Copy, Debug)]
 pub struct Provider {
+    /// Which kind this is.
     pub kind: ProviderKind,
     /// What every surface calls it.
     pub label: &'static str,
+    /// Whether it takes an endpoint, and what its default is.
     pub base_url: BaseUrl,
+    /// Whether it takes a key, and which environment variable it falls back to.
     pub key: KeyUse,
     /// Which of this kind's models offer a reasoning control, and therefore whether the
     /// composer footer draws one for the model in hand. Ask it through
@@ -383,6 +387,7 @@ impl Provider {
 /// arrives as a [`Secret`], so a `tracing::debug!("{selection:?}")` cannot print it.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Selection {
+    /// Which provider to send to.
     pub kind: ProviderKind,
     /// The model name, as the provider spells it.
     pub model: String,
@@ -409,16 +414,19 @@ impl Selection {
         }
     }
 
+    /// The selection with `url` as its endpoint.
     pub fn with_base_url(mut self, url: impl Into<String>) -> Selection {
         self.base_url = Some(url.into());
         self
     }
 
+    /// The selection with `key` as its credential.
     pub fn with_key(mut self, key: Secret) -> Selection {
         self.api_key = Some(key);
         self
     }
 
+    /// The selection asking for `effort`.
     pub fn with_effort(mut self, effort: Effort) -> Selection {
         self.effort = Some(effort);
         self
@@ -439,32 +447,56 @@ impl Selection {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum SelectionError {
     /// No model name.
-    NoModel { kind: ProviderKind },
+    NoModel {
+        /// The provider asked.
+        kind: ProviderKind,
+    },
     /// The kind needs a base URL and the selection carries none.
-    NoBaseUrl { kind: ProviderKind },
+    NoBaseUrl {
+        /// The provider asked.
+        kind: ProviderKind,
+    },
     /// The kind has no base URL to set, and one was set anyway. Refused rather than dropped:
     /// a field that is silently ignored is a lie on screen.
-    BaseUrlNotUsed { kind: ProviderKind },
+    BaseUrlNotUsed {
+        /// The provider asked.
+        kind: ProviderKind,
+    },
     /// The base URL is not a URL this can call.
-    BadBaseUrl { url: String, why: String },
+    BadBaseUrl {
+        /// The URL as it was given.
+        url: String,
+        /// What is wrong with it.
+        why: String,
+    },
     /// A keyed provider with no key in the roster and nothing in its environment variable.
     NoKey {
+        /// The provider asked.
         kind: ProviderKind,
+        /// The environment variable it falls back to.
         env: &'static str,
     },
     /// A key was set for a provider that takes none.
-    KeyNotUsed { kind: ProviderKind },
+    KeyNotUsed {
+        /// The provider asked.
+        kind: ProviderKind,
+    },
     /// An effort rung this **model** does not offer — including any rung at all for a model
     /// with no reasoning control.
     NoSuchEffort {
+        /// The provider asked.
         kind: ProviderKind,
+        /// The model asked.
         model: String,
+        /// The rung it does not offer.
         effort: Effort,
     },
     /// The model's own name ends in what the adapter reads as a reasoning keyword, so the
     /// request would name a **different model** than the one on screen.
     ModelReadsAsEffort {
+        /// The provider asked.
         kind: ProviderKind,
+        /// The model as it is spelled on screen.
         model: String,
         /// The name the request would actually carry.
         sent: String,
@@ -776,14 +808,17 @@ impl Brain {
         })
     }
 
+    /// The client the selection built.
     pub fn client(&self) -> &Client {
         &self.client
     }
 
+    /// The model it addresses.
     pub fn model(&self) -> &ModelIden {
         &self.model
     }
 
+    /// The options every send carries.
     pub fn options(&self) -> &ChatOptions {
         &self.options
     }

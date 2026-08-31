@@ -6,12 +6,19 @@
 /// Strata type→colour map).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
+    /// Text.
     Str,
+    /// A number.
     Num,
+    /// A boolean.
     Bool,
+    /// A date, a time or a timestamp.
     Ts,
+    /// A struct.
     Struct,
+    /// A list.
     List,
+    /// A map.
     Map,
 }
 
@@ -95,6 +102,7 @@ impl Kind {
         }
     }
 
+    /// Whether a cell of this kind holds a value that expands.
     pub fn is_nested(self) -> bool {
         matches!(self, Kind::Struct | Kind::List | Kind::Map)
     }
@@ -126,11 +134,17 @@ pub enum ChartRole {
 /// profile surfaces only what the source did not already answer for free.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StatKey {
+    /// How many rows are null.
     Nulls,
+    /// The smallest value.
     Min,
+    /// The largest value.
     Max,
+    /// How many distinct values there are.
     Distinct,
+    /// The arithmetic mean.
     Mean,
+    /// The median.
     Median,
 }
 
@@ -144,8 +158,11 @@ pub enum StatKey {
 /// the inspector marks those `~`. Computed facts are always exact.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stat {
+    /// Which fact this is.
     pub key: StatKey,
+    /// The value, formatted for display.
     pub text: String,
+    /// Whether the value is the fact itself rather than a bound on it.
     pub exact: bool,
 }
 
@@ -153,13 +170,18 @@ pub struct Stat {
 /// facts read for free from the source.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ColumnInfo {
+    /// The column's name.
     pub name: String,
+    /// Its Arrow type, as that type prints itself.
     pub dtype: String,
+    /// The visual kind that type falls under.
     pub kind: Kind,
     /// What a chart may encode this column as — see [`ChartRole`]. Carried here because this
     /// struct is what survives the boundary the Arrow type itself does not cross.
     pub role: ChartRole,
+    /// Whether the column admits nulls.
     pub nullable: bool,
+    /// The columns nested inside it, for a struct, a list or a map.
     pub children: Vec<ColumnInfo>,
     /// Facts the source reports **for free** — read, never computed. Empty for every format but
     /// Parquet and Arrow.

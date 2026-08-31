@@ -14,7 +14,9 @@ use std::collections::BTreeMap;
 /// value.
 #[derive(PartialEq, Eq, Debug)]
 pub struct ClientKey {
+    /// The key, in `object_store`'s own spelling.
     pub name: &'static str,
+    /// What it does, as the picker prints it.
     pub what: &'static str,
 }
 
@@ -29,8 +31,8 @@ pub struct ClientKey {
 /// Two of `object_store`'s keys are deliberately **absent**, and for the same reason in both
 /// halves: they are already said elsewhere, and a second control for one setting is two controls
 /// that can disagree. `allow_http` is the S3 provider's own
-/// [`S3Store::allow_http`](strata_model::S3Store::allow_http) toggle, and on an HTTP data source it
-/// is the **scheme the user typed** (the store's build derives it); `default_content_type`
+/// own endpoint toggle, and on an HTTP data source it is the **scheme the user typed** (the
+/// store's build derives it); `default_content_type`
 /// describes an upload, and nothing here writes.
 pub const CLIENT_KEYS: &[ClientKey] = &[
     ClientKey {

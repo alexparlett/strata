@@ -9,8 +9,11 @@ use super::tree::PlanNode;
 /// (bracket-aware) or a bare fragment (`has_key == false`, spans both columns).
 #[derive(Clone, Debug, PartialEq)]
 pub struct DetailPart {
+    /// The key, or the whole fragment when there is none.
     pub key: String,
+    /// The value, empty when there is no key.
     pub val: String,
+    /// Whether the fragment split into a pair.
     pub has_key: bool,
 }
 

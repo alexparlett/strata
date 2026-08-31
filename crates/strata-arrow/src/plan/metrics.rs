@@ -12,10 +12,15 @@ use strata_core::util::fmt_int;
 /// tags each [`Metric`] with one, derived from DataFusion's `MetricValue` variant.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MetricKind {
+    /// A plain count.
     Count,
+    /// A duration, aggregated in nanoseconds.
     Time,
+    /// A quantity of bytes read or written.
     Bytes,
+    /// A quantity of bytes held.
     Memory,
+    /// A proportion.
     Ratio,
 }
 
@@ -48,10 +53,12 @@ impl MetricKind {
 /// engine from a DataFusion `MetricValue`; the UI never re-derives units.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Metric {
+    /// DataFusion's own name for the metric.
     pub name: String,
     /// Raw aggregated value (`MetricValue::as_usize`): ns for time, bytes for
     /// bytes/memory, otherwise a plain count. Drives zero-detection + self-time.
     pub value: u64,
+    /// Which unit [`value`](Self::value) is in.
     pub kind: MetricKind,
     /// Unit-aware display label (`15.6 ms`, `605 B`, `48,213`).
     pub label: String,
@@ -126,9 +133,13 @@ pub fn group_color(group: &str) -> &'static str {
 /// `Warn` amber, `Ok` green, `Info` blue.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum InsightTone {
+    /// Something went wrong.
     Err,
+    /// Something is worth looking at.
     Warn,
+    /// Something went well.
     Ok,
+    /// Something worth knowing.
     Info,
 }
 
@@ -148,7 +159,9 @@ impl InsightTone {
 /// metrics grid (`EXPLAIN_PLAN_SPEC` §4), tone-coded.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Insight {
+    /// The callout, as it reads.
     pub text: String,
+    /// How it is coloured.
     pub tone: InsightTone,
 }
 

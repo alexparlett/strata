@@ -249,6 +249,7 @@ fn keys_field() -> FieldRef {
 }
 
 impl StructKeys {
+    /// The `struct_keys` function.
     pub fn new() -> StructKeys {
         StructKeys {
             signature: Signature::any(1, Volatility::Immutable),
@@ -335,6 +336,7 @@ fn entry_field(value: FieldRef) -> FieldRef {
 }
 
 impl StructEntries {
+    /// The `struct_entries` function.
     pub fn new() -> StructEntries {
         StructEntries {
             signature: Signature::any(1, Volatility::Immutable),
@@ -450,6 +452,7 @@ pub struct StructGet {
 }
 
 impl StructGet {
+    /// The `struct_get` function.
     pub fn new() -> StructGet {
         StructGet {
             signature: Signature::any(2, Volatility::Immutable),
@@ -553,6 +556,7 @@ pub struct ToJson {
 }
 
 impl ToJson {
+    /// The `to_json` function.
     pub fn new() -> ToJson {
         ToJson {
             signature: Signature::any(1, Volatility::Immutable),
@@ -686,6 +690,7 @@ fn match_field() -> FieldRef {
 }
 
 impl RegexpExtractAll {
+    /// The `regexp_extract_all` function.
     pub fn new() -> RegexpExtractAll {
         RegexpExtractAll {
             signature: Signature::one_of(
