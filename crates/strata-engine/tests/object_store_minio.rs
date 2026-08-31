@@ -582,7 +582,7 @@ async fn a_bucket_table_lives_in_its_data_sources_catalog() {
         .await
         .expect("and it registers again");
 
-    sources.disconnect(LAKE);
+    let _ = sources.disconnect(LAKE);
 
     let refused = ws
         .query(RunTag(3), "SELECT * FROM regions".into(), 50)
@@ -786,7 +786,7 @@ async fn a_table_over_a_source_reads_through_the_object_store() {
         "the failure names the missing store: {refused}"
     );
 
-    sources.disconnect(&source(&endpoint, "ambient").named());
+    let _ = sources.disconnect(&source(&endpoint, "ambient").named());
     let forgotten = TableSpec {
         name: "forgotten".into(),
         ..table(&endpoint)

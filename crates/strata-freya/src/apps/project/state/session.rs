@@ -1163,7 +1163,7 @@ mod tests {
     fn generations() -> (CatalogGen, CatalogGen) {
         let engine = Engine::builder().build();
         let first = engine.catalog().generation();
-        engine.catalog().deregister("a name this engine never held");
+        let _ = engine.catalog().deregister("a name this engine never held");
         (first, engine.catalog().generation())
     }
 

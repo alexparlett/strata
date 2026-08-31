@@ -56,8 +56,8 @@ use uuid::Uuid;
 
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
-    catalog_settled, log_event, persisted_defs, use_catalog, use_registrations, use_report,
-    Catalog, Chan, LogLevel, ProjChan, ProjectState, RegistrationsCtx, ReportCtx, SessionState,
+    catalog_settled, log_event, persisted_defs, use_catalog, use_report, Catalog, Chan,
+    LogLevel, ProjChan, ProjectState, ReportCtx, SessionState,
 };
 use crate::apps::project::views::{CancelButtonThemePartial, CancelButtonThemePreference};
 use crate::components::badge::Badge;
@@ -260,7 +260,6 @@ impl Component for DropConfirm {
         let project = use_radio_station::<ProjectState, ProjChan>();
         let session = use_radio_station::<SessionState, Chan>();
         let catalog = use_catalog();
-        let registrations = use_registrations();
         let report = use_report();
         let tones = tones();
         let roles = use_roles();
@@ -273,15 +272,7 @@ impl Component for DropConfirm {
         let confirm = move |engine: &EngineCtx| {
             let mut slot = slot;
             if let Some(target) = slot.peek().clone() {
-                drop_row(
-                    engine,
-                    project,
-                    session,
-                    catalog,
-                    registrations,
-                    report,
-                    &target,
-                );
+                drop_row(engine, project, session, catalog, report, &target);
             }
             slot.set(None);
         };
@@ -441,13 +432,14 @@ fn alive(catalog: Catalog, report: ReportCtx) -> bool {
 /// **A Forget moves the catalog generation**, because `Sources::disconnect` takes a catalog off the
 /// session — the discrete catalog mutation [`catalog_settled`] exists for. Without it a query
 /// naming the forgotten database keeps whatever verdict it last had, and completion goes on
-/// offering names nothing resolves.
+/// offering names nothing resolves. Every arm adopts the stamp its own engine call answers with;
+/// a drop that **failed** has no report to carry one, so that arm alone asks the engine where it
+/// is now — which is what the whole call used to do.
 fn drop_row(
     engine: &EngineCtx,
     mut project: RadioStation<ProjectState, ProjChan>,
     mut session: RadioStation<SessionState, Chan>,
     catalog: Catalog,
-    registrations: RegistrationsCtx,
     report: ReportCtx,
     target: &DropTarget,
 ) {
@@ -475,14 +467,18 @@ fn drop_row(
                 if !alive(catalog, report) {
                     return;
                 }
-                if let Err(e) = outcome {
-                    log_event(
-                        report.log,
-                        LogLevel::Warning,
-                        format!("The engine could not finish dropping table '{name}': {e}"),
-                    );
-                }
-                catalog_settled(catalog, registrations, &engine);
+                let at = match outcome {
+                    Ok(dropped) => dropped.at,
+                    Err(e) => {
+                        log_event(
+                            report.log,
+                            LogLevel::Warning,
+                            format!("The engine could not finish dropping table '{name}': {e}"),
+                        );
+                        engine.catalog().generation()
+                    }
+                };
+                catalog_settled(catalog, at);
             });
         }
         DropTarget::View(name) => {
@@ -511,14 +507,18 @@ fn drop_row(
                 if !alive(catalog, report) {
                     return;
                 }
-                if let Err(e) = outcome {
-                    log_event(
-                        report.log,
-                        LogLevel::Warning,
-                        format!("The engine kept view '{name}' until the next re-scan: {e}"),
-                    );
-                }
-                catalog_settled(catalog, registrations, &engine);
+                let at = match outcome {
+                    Ok(dropped) => dropped.at,
+                    Err(e) => {
+                        log_event(
+                            report.log,
+                            LogLevel::Warning,
+                            format!("The engine kept view '{name}' until the next re-scan: {e}"),
+                        );
+                        engine.catalog().generation()
+                    }
+                };
+                catalog_settled(catalog, at);
             });
         }
         DropTarget::Source { name, .. } => {
@@ -534,8 +534,7 @@ fn drop_row(
             if !landed {
                 return;
             }
-            engine.sources().disconnect(name);
-            catalog_settled(catalog, registrations, engine);
+            catalog_settled(catalog, engine.sources().disconnect(name));
         }
         DropTarget::Query { id, .. } => {
             let landed = {

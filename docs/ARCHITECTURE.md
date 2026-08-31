@@ -286,14 +286,21 @@ Connecting a client is [MCP_CLIENTS.md](MCP_CLIENTS.md).
   reported. There is no additive whole-catalog call beside it — a defs file that shrank would
   otherwise leave a ghost table answering for the rest of the session. Both hosts make the same
   call: the app's scan driver over the store's rows, and the headless host over the defs it loaded.
-  Narrower gestures are their own calls (`register` for one table, `create_views` for a set), and a
-  row Refresh is deliberately one of those — a work list handed to the reconciliation would read as
-  "the project is now one table".
+  Narrower gestures are their own calls (`register` for one table, `refresh(tables, views)` for a
+  work list), and a row Refresh is deliberately one of those — a work list handed to the
+  reconciliation would read as "the project is now one table".
 
   Each pass leaves the engine at a **catalog generation** (`catalog().generation()`), a number the
   engine mints on every registry write and on nothing else. The window adopts it rather than
   counting its own: it is what a tab's diagnostics are stamped against and what the remote-columns
   cache is keyed by, so a gesture that changed nothing re-derives nothing.
+
+  The window keeps that number as **two clocks** (`CatalogState`): the one names resolve against,
+  which a pass in flight withholds because the catalog is applied row by row, and the one the
+  engine's answers are stamped with, which moves per outcome mid-pass included and is what the
+  window's view of the registration ledger derives from. Every engine answer carries its stamp —
+  a registration outcome, a statement report, the number a `disconnect` hands back — so a gesture
+  that folds an answer adopts the clock in the same act.
 
   What each registration **answered** is the engine's too, and it keeps it: the *ledger*
   (`catalog().registrations()`), one `Ready`-or-`Failed`-with-its-reason entry per def, stamped

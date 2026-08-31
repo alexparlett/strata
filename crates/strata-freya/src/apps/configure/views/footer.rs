@@ -26,7 +26,8 @@ use crate::apps::project::{
     log_event, settle, use_report, use_settle, LogLevel, ReportCtx, Settle,
 };
 use crate::apps::project::{
-    persisted_defs, refresh_catalog, refresh_table, Catalog, CatalogRescan, ProjChan, ProjectState,
+    catalog_settled, persisted_defs, refresh_catalog, refresh_table, Catalog, CatalogRescan,
+    ProjChan, ProjectState,
 };
 use crate::components::divider::Divider;
 use crate::components::metrics::ACTION_HEIGHT;
@@ -252,7 +253,7 @@ fn save(
     }
 
     if let Some(old) = &renamed_from {
-        engine.catalog().deregister(old);
+        catalog_settled(to.catalog, engine.catalog().deregister(old));
         log_event(
             report.log,
             LogLevel::Info,

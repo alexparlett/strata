@@ -10,8 +10,8 @@ use strata_model::TableDef;
 use strata_model::ViewDef;
 
 use crate::catalog::{self, deregister_anywhere, TableMeta, TableSpec, ViewMeta};
-use crate::register::{self, CatalogSpec, PassReport, RegOutcome};
-use crate::statements::arms::{self, stamped};
+use crate::register::{self, Stamped, CatalogSpec, PassReport};
+use crate::statements::arms::{self, unsettled};
 use crate::statements::report::StatementOutcome;
 use crate::statements::{StatementReport, StmtKind, StoreEffect};
 use crate::{
@@ -35,7 +35,7 @@ impl Catalog<'_> {
     ///
     /// `desired` is the entire catalog, never a work list: what it does not name is taken out and
     /// reported. See [`register::sync`](crate::register::sync) for the rest of the contract.
-    pub async fn sync(self, desired: CatalogSpec, settled: impl FnMut(RegOutcome)) -> PassReport {
+    pub async fn sync(self, desired: CatalogSpec, settled: impl FnMut(Stamped)) -> PassReport {
         register::sync(self.engine, desired, settled).await
     }
 
@@ -102,13 +102,17 @@ impl Catalog<'_> {
     /// Drops a registered table. Its data is untouched; deleting an internal table's files is
     /// [`drop_table`](Self::drop_table)'s.
     ///
-    /// Moves the [`generation`](Self::generation) whether or not `table` was registered.
-    pub fn deregister(self, table: &str) {
+    /// Moves the [`generation`](Self::generation) whether or not `table` was registered, and
+    /// **answers the generation it moved to** — the number a host's view of the ledger is keyed
+    /// on. `must_use` for that reason: a caller that drops it has made the engine answer
+    /// differently and told nothing, which is a surface left showing the answer before this one.
+    #[must_use]
+    pub fn deregister(self, table: &str) -> CatalogGen {
         self.cancel_profile(table);
         deregister_anywhere(&self.engine.ctx, table);
         self.engine.note_origin(table, false);
         self.engine.note_scans(table, None);
-        self.engine.forget_registration(table);
+        self.engine.forget_registration(table)
     }
 
     /// What `name`'s row says **now** — its columns and free row count — read from the files
@@ -193,7 +197,10 @@ impl Catalog<'_> {
     /// than for the statement.
     ///
     /// Moves the [`generation`](Self::generation) on either arm: a failed redefinition leaves
-    /// the name resolving to a definition the caller has just been told is wrong.
+    /// the name resolving to a definition the caller has just been told is wrong. Its bookkeeping
+    /// is [`register_view`](Self::register_view)'s, so there is no effect left for
+    /// `settle_effect` to settle — the report is stamped here, after that call and never
+    /// before it.
     pub async fn create_view(
         self,
         name: String,
@@ -201,7 +208,7 @@ impl Catalog<'_> {
     ) -> Result<StatementReport, EngineError> {
         let start = Instant::now();
         let meta = self.register_view(name.clone(), sql.clone()).await?;
-        Ok(stamped(
+        Ok(unsettled(
             StmtKind::CreateView,
             start,
             StatementOutcome {
@@ -212,11 +219,12 @@ impl Catalog<'_> {
                     meta,
                 }),
             },
-        ))
+        )
+        .at(self.generation()))
     }
 
     /// [`create_view`](Self::create_view) without the report — the registration pass's entry,
-    /// which wants the [`ViewMeta`] for a [`RegOutcome::View`].
+    /// which wants the [`ViewMeta`] for a [`RegOutcome::View`](crate::register::RegOutcome::View).
     ///
     /// The engine's own bookkeeping is here rather than in the report's
     /// [`settle_effect`](Engine::settle_effect), because a replay has no sentence to ask for and
@@ -249,15 +257,30 @@ impl Catalog<'_> {
         created.map_err(EngineError::from)
     }
 
-    /// Creates (or redefines) each of `views`, handing `settled` each one's final answer.
+    /// Registers `tables`, then creates (or redefines) `views`, handing `settled` each answer as
+    /// it lands — [`sync`](Self::sync)'s additive half, **without its reconciliation**.
     ///
-    /// Rounds repeat until one makes no progress, so a view whose dependency is created earlier
-    /// in the same call succeeds on a later round and the rest settle with the errors they last
-    /// produced. Where the views may already exist, hand them in dependency order: every
+    /// What a caller whose question is about *part* of the catalog asks: a row's Refresh
+    /// re-registers one table and re-creates the views over it, and has no opinion about the rest
+    /// of the catalog. `sync` would read the same work list as "the project is now this", and take
+    /// everything else out.
+    ///
+    /// Views repeat in rounds until one makes no progress, so a view whose dependency is created
+    /// earlier in the same call succeeds on a later round and the rest settle with the errors they
+    /// last produced. Where the views may already exist, hand them in dependency order: every
     /// `CREATE OR REPLACE` then succeeds on the first round, and an outer view inlines the
     /// definition this call is replacing.
-    pub async fn create_views(self, views: Vec<ViewDef>, settled: impl FnMut(RegOutcome)) {
-        register::create_views(self.engine, views, settled).await;
+    ///
+    /// Data sources are not among the phases, deliberately: connecting one is a whole-catalog
+    /// gesture (`sync`'s first phase), and re-resolving a credential chain behind a question about
+    /// one table's files would put a network round trip where none belongs.
+    pub async fn refresh(
+        self,
+        tables: Vec<TableSpec>,
+        views: Vec<ViewDef>,
+        settled: impl FnMut(Stamped),
+    ) {
+        register::register_pass(self.engine, Vec::new(), tables, views, settled).await;
     }
 
     /// Drop the SQL view `name` (idempotent — `IF EXISTS`) — the catalog pane's entry into
@@ -283,9 +306,9 @@ impl Catalog<'_> {
             count: None,
             effect: Some(StoreEffect::ViewRemoved { name }),
         };
-        let report = stamped(StmtKind::DropView, start, outcome);
-        self.engine.settle_effect(report.effect.as_ref());
-        Ok(report)
+        Ok(self
+            .engine
+            .settle_effect(unsettled(StmtKind::DropView, start, outcome)))
     }
 
     /// Drop the registered table `name` — **the one funnel both surfaces drop through**.
@@ -320,9 +343,9 @@ impl Catalog<'_> {
             })
             .await
             .map_err(|e| EngineError::task("drop table", e))??;
-        let report = stamped(StmtKind::DropTable, start, outcome);
-        self.engine.settle_effect(report.effect.as_ref());
-        Ok(report)
+        Ok(self
+            .engine
+            .settle_effect(unsettled(StmtKind::DropTable, start, outcome)))
     }
 
     /// Whether `name` is a table whose data Strata owns — the one question the internal-name set

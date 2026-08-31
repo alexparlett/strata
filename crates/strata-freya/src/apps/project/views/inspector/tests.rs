@@ -202,7 +202,12 @@ fn runner_at(width: f32) -> (TestingRunner, Handles) {
                 engine
             });
             let profile_target = r.provide_root_context(|| State::create(None::<ProfileTarget>));
-            r.provide_root_context(|| State::create(CatalogState::Settled(CatalogGen::default())));
+            r.provide_root_context(|| {
+                State::create(CatalogState::Settled {
+                    generation: CatalogGen::default(),
+                    answers: CatalogGen::default(),
+                })
+            });
             r.provide_root_context(|| State::create(Registrations::default()));
             r.provide_root_context(|| State::create(BTreeMap::<RemoteRef, ScanId>::new()));
             (selection, project, session, profile_target)

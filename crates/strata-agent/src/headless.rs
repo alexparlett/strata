@@ -120,7 +120,9 @@ impl HeadlessHost {
         let mut outcomes = Vec::new();
         engine
             .catalog()
-            .sync(engine.catalog().spec(&root, &defs), |o| outcomes.push(o))
+            .sync(engine.catalog().spec(&root, &defs), |a| {
+                outcomes.push(a.outcome);
+            })
             .await;
         Ok(HeadlessHost::settled(root, defs, engine, outcomes))
     }
@@ -593,7 +595,7 @@ mod tests {
         let mut outcomes = Vec::new();
         host.engine
             .catalog()
-            .sync(CatalogSpec::default(), |o| outcomes.push(o))
+            .sync(CatalogSpec::default(), |a| outcomes.push(a.outcome))
             .await;
 
         let removed: Vec<(&str, RegKind)> = outcomes
@@ -644,7 +646,7 @@ mod tests {
         let report = host
             .engine
             .catalog()
-            .sync(desired, |o| outcomes.push(o))
+            .sync(desired, |a| outcomes.push(a.outcome))
             .await;
 
         assert!(

@@ -200,7 +200,7 @@ async fn ready(engine: &Engine, port: u16) {
             }
         }
     }
-    engine.sources().disconnect(&conn.named());
+    let _ = engine.sources().disconnect(&conn.named());
 }
 
 /// The data source under test. `ssl=disabled` because the container's certificate is
@@ -411,7 +411,7 @@ async fn enumeration(engine: &Engine) {
          ours"
     );
 
-    engine
+    let _ = engine
         .sources()
         .show_schemas(CATALOG, &["shop".to_string(), "warehouse".to_string()]);
     let listing = schemas_of(engine, CATALOG);
@@ -444,7 +444,7 @@ async fn enumeration(engine: &Engine) {
         ]),
         "a remote view is listed as one, off information_schema's own TABLE_TYPE"
     );
-    engine
+    let _ = engine
         .sources()
         .show_schemas(CATALOG, &["shop".to_string()]);
 
@@ -1121,7 +1121,7 @@ async fn unqualified_names(engine: &Engine, port: u16) {
         "a database the data source does not show must not capture a bare name"
     );
 
-    engine
+    let _ = engine
         .sources()
         .show_schemas(CATALOG, &["shop".to_string(), "analytics".to_string()]);
     assert_eq!(
@@ -1144,7 +1144,7 @@ async fn unqualified_names(engine: &Engine, port: u16) {
         "the refusal names every candidate: {why}"
     );
 
-    engine
+    let _ = engine
         .sources()
         .show_schemas(CATALOG, &["shop".to_string()]);
     assert_eq!(
@@ -1576,7 +1576,7 @@ async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
          an identity, so nothing the engine sees tells a rename from a second source"
     );
 
-    engine.sources().disconnect(&was.named());
+    let _ = engine.sources().disconnect(&was.named());
     assert!(
         engine
             .ws(WsId(1))
@@ -1590,7 +1590,7 @@ async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
         "and retiring it is the renaming gesture's own call, which is what Save makes"
     );
 
-    engine.sources().disconnect(&renamed.named());
+    let _ = engine.sources().disconnect(&renamed.named());
     assert!(
         engine
             .ws(WsId(1))

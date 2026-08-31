@@ -41,7 +41,7 @@
 //!     }],
 //!     ..Default::default()
 //! };
-//! futures::executor::block_on(engine.catalog().sync(spec, |_outcome| {}));
+//! futures::executor::block_on(engine.catalog().sync(spec, |_stamped| {}));
 //!
 //! // 2. Run a statement. `run` classifies first: a query executes, a statement the engine
 //! //    intercepts is performed, and anything the caller may not do is refused.
@@ -79,7 +79,7 @@
 //! **`sync` is the whole catalog, not a work list.** It reconciles: a name the
 //! [`CatalogSpec`](crate::register::CatalogSpec) does not hold is deregistered. A narrower
 //! gesture is a narrower *call* — [`Catalog::register`](crate::Catalog::register) for one table,
-//! [`Catalog::create_views`](crate::Catalog::create_views) for views — never a narrower spec.
+//! [`Catalog::refresh`](crate::Catalog::refresh) for a work list — never a narrower spec.
 //! The `settled` closure is called per def as the engine answers for it, so a host can flip one
 //! row at a time rather than waiting for the pass.
 //!
