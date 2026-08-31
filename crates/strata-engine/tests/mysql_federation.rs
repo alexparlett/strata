@@ -83,6 +83,9 @@ const CATALOG: &str = "my";
 /// The grants are the fixture too: `shop` is writable and `analytics` is not, so a write the
 /// server refuses has somewhere to be refused.
 ///
+/// `shop.notes` carries a plain `TEXT` column, which is what shows the driver's text-result gap is
+/// not about JSON at all.
+///
 /// `shop` and `analytics` both hold an `orders`, which is the ambiguity [`unqualified_names`]
 /// needs; `shop.big_orders` is a **view**, so the tree's Tables / Views split has something to be
 /// about; `shop.events` carries a `JSON` column whose documents [`json_pushdown`] asks both sides
@@ -106,6 +109,8 @@ INSERT INTO shop.events VALUES
   (2, '{\"type\":\"view\",\"source\":{\"campaign\":\"winter\"}}'),
   (3, '{\"type\":\"click\",\"bot\":true,\"z\":\"null\"}'),
   (4, NULL);
+CREATE TABLE shop.notes (id INT PRIMARY KEY, body TEXT);
+INSERT INTO shop.notes VALUES (1, 'shipped late');
 CREATE TABLE analytics.sessions (id INT PRIMARY KEY, minutes INT);
 INSERT INTO analytics.sessions VALUES (1, 5), (2, 9);
 CREATE TABLE analytics.orders (id INT PRIMARY KEY);
@@ -398,6 +403,7 @@ async fn enumeration(engine: &Engine) {
             vec!["shop".to_string(), "big_orders".to_string()],
             vec!["shop".to_string(), "customers".to_string()],
             vec!["shop".to_string(), "events".to_string()],
+            vec!["shop".to_string(), "notes".to_string()],
             vec!["shop".to_string(), "orders".to_string()],
         ],
         "every database the account was granted, and every relation in them — and 'hidden' is \
@@ -433,6 +439,7 @@ async fn enumeration(engine: &Engine) {
             ("big_orders", true),
             ("customers", false),
             ("events", false),
+            ("notes", false),
             ("orders", false)
         ]),
         "a remote view is listed as one, off information_schema's own TABLE_TYPE"
@@ -503,6 +510,7 @@ async fn qualified_offer(engine: &Engine) {
             "big_orders".to_string(),
             "customers".to_string(),
             "events".to_string(),
+            "notes".to_string(),
             "orders".to_string()
         ],
         "every relation the listing holds, remote view included"
@@ -947,6 +955,11 @@ async fn json_pushdown(engine: &Engine, dir: &Path) {
 /// **The driver cannot read a computed text column back from `MySQL`**, which is why every question
 /// above is asked as a filter — pinned here so it fails loudly the day that stops being true.
 ///
+/// **It is not a JSON problem**, and the last two assertions are what say so: a stored `TEXT`
+/// column reads, and `upper()` over that same column does not. Nothing about that expression is
+/// Strata's — it is the plainest possible query — so the gap is the driver's and the JSON mapping
+/// merely reaches it on the ordinary path.
+///
 /// `datafusion-table-providers-mysql` maps `MYSQL_TYPE_BLOB` and refuses `MYSQL_TYPE_TINY_BLOB`,
 /// `MEDIUM_BLOB` and `LONG_BLOB`, on the belief (its own comment says so) that the first covers the
 /// whole `TEXT` family. It does — for a **stored** column. A *computed* one is reported by its
@@ -986,6 +999,34 @@ async fn a_projected_json_value_is_the_drivers_own_gap(engine: &Engine) {
         vec![vec!["1".to_string()]],
         "the document itself still reads: MYSQL_TYPE_JSON is mapped, and only the computed \
          text is not"
+    );
+
+    assert_eq!(
+        rows(
+            engine,
+            92,
+            &format!("SELECT body FROM {CATALOG}.shop.notes")
+        )
+        .await,
+        vec![vec!["shipped late".to_string()]],
+        "a stored TEXT column reads, because the server reports it as MYSQL_TYPE_BLOB"
+    );
+    let Err(why) = engine
+        .ws(WsId(1))
+        .query(
+            RunTag(93),
+            format!("SELECT upper(body) FROM {CATALOG}.shop.notes"),
+            200,
+        )
+        .await
+    else {
+        panic!("the driver has learned to read MySQL's computed text results");
+    };
+    assert!(
+        why.to_string().contains("MEDIUM_BLOB"),
+        "**and none of this is about JSON**: uppercasing a plain TEXT column reports the same \
+         family of type and is refused by the same arm, which is what makes the gap the driver's \
+         rather than the JSON mapping's: {why}"
     );
 }
 
