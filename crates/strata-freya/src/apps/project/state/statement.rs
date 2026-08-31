@@ -149,6 +149,13 @@ pub fn settle(to: Settle, engine: &EngineCtx, report: &StatementReport) -> bool 
 /// the catalog generation is [`settle`]'s, before any of this runs. That is the difference between
 /// an invariant and four copies of it — an arm added by a later ED task cannot forget either half,
 /// because it never writes either half.
+///
+/// **The one synchronous read of the ledger is here, and what makes it sound is what it asks.**
+/// `RegistrationsCtx` derives from a queued effect (see its own doc), so a read taken in the same
+/// breath as [`settle`]'s adoption can still answer the moment before — but `views_to_refresh`
+/// asks it only which **views** are failing, while a `TableUpserted` answers for the *table*. The
+/// entry this fold moves is never one this read consults. An arm that grows a synchronous read of
+/// an entry its own effect moves would have to wait for the derivation instead.
 fn apply(to: Settle, engine: &EngineCtx, effect: &StoreEffect) -> bool {
     match effect {
         StoreEffect::TableUpserted { def, meta } => {

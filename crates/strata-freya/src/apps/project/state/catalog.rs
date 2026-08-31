@@ -236,6 +236,13 @@ impl CatalogState {
 /// true by adopting the stamp its answer already carries. Nothing refreshes it by hand, and
 /// nothing can forget to.
 ///
+/// **The bound that comes with being derived**: a Freya side effect re-runs from a queued poll,
+/// not inline, so a *synchronous* read taken in the same breath as the adoption that should move
+/// it can still answer the moment before. Every consumer is reactive and simply re-derives a poll
+/// later; the one synchronous reader is the statement fold's table-upsert arm, and what makes that
+/// sound is stated where it reads (`state::statement::apply`). A fold that grows a synchronous
+/// read of an entry **its own answer moves** is the case this bound is about.
+///
 /// A `State` rather than a `Memo` because a surface's tests seed it with answers no engine holds
 /// — the ledger a window renders is a value, and a test about how a refusal draws must be able to
 /// hand one over.
