@@ -84,6 +84,8 @@ impl Default for EngineBuilder {
             .with_source(crate::sources::store::http::Http);
         #[cfg(feature = "postgres")]
         let builder = builder.with_source(crate::sources::postgres::Pg);
+        #[cfg(feature = "mysql")]
+        let builder = builder.with_source(crate::sources::mysql::My);
         builder
     }
 }

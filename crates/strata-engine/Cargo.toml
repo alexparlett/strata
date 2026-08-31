@@ -6,10 +6,17 @@ description = "Strata's DataFusion boundary: the direct-call async `Engine` faca
 license = "MIT"
 
 [features]
-default = ["postgres"]
+default = ["postgres", "mysql"]
 postgres = [
     "dep:datafusion-table-providers-common",
     "dep:datafusion-table-providers-postgres",
+    "dep:secrecy",
+]
+mysql = [
+    "dep:datafusion-table-providers-common",
+    "dep:datafusion-table-providers-mysql",
+    "dep:mysql_async",
+    "dep:sea-query",
     "dep:secrecy",
 ]
 
@@ -21,6 +28,9 @@ datafusion = "54"
 datafusion-functions-json = "0.54"
 datafusion-federation = { version = "0.5.5", features = ["sql"] }
 datafusion-table-providers-postgres = { version = "0.13", optional = true }
+datafusion-table-providers-mysql = { version = "0.13", optional = true }
+mysql_async = { version = "0.37", optional = true, default-features = false, features = ["minimal"] }
+sea-query = { version = "1.0", optional = true }
 datafusion-table-providers-common = { version = "0.13", optional = true }
 secrecy = { version = "0.10", optional = true }
 object_store = { version = "0.13", features = ["aws", "gcp", "http"] }
@@ -38,7 +48,7 @@ tracing = "0.1.44"
 
 [dev-dependencies]
 testcontainers = { version = "0.27", features = ["properties-config"] }
-testcontainers-modules = { version = "0.15", features = ["minio", "postgres"] }
+testcontainers-modules = { version = "0.15", features = ["minio", "postgres", "mysql"] }
 tokio-postgres = "0.7"
 aws-sdk-s3 = "1"
 flate2 = "1"
