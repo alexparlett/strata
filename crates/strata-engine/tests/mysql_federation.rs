@@ -28,9 +28,13 @@
 //! phases, container held for the duration: a second `#[tokio::test]` would race this one for the
 //! single cloud worker.
 //!
-//! **Read-only.** `MySQL` ships without the write half (`SourceKind::WRITABLE` is `false`), so the
-//! write phases `postgres_federation.rs` carries have no counterpart here; what is asserted instead
-//! is that every write refuses ([`statement_policy`]).
+//! **Both sides of the write gate are driven.** The fixture connects `read_only: true`, which is
+//! the shipped default, so every phase before [`remote_writes`] runs through exactly the data
+//! source a user gets and [`statement_policy`] asserts that each write is refused by name. The
+//! write phases then re-connect with the toggle off — which is all the data source editor's Save
+//! does — and drive the two statements DataFusion can plan and the ones only the server can run.
+//! The refusals are the **def's** `read_only`, never a kind-wide restriction: `SourceKind::WRITABLE`
+//! is `true` for `MySQL`, which is what offers that toggle at all.
 //!
 //! Gated on the `mysql` feature, because the source it drives rides that feature: an engine built
 //! without it has no `MySQL` in its tree, and neither does this.
@@ -197,6 +201,9 @@ async fn ready(engine: &Engine, port: u16) {
 /// The data source under test. `ssl=disabled` because the container's certificate is
 /// self-generated; the two encrypting modes are the driver's and would need a certificate this
 /// fixture has no way to produce.
+///
+/// **Read-only**, which is the shipped default — [`writable`] is what the write phases connect
+/// with, so every phase before them is driven through exactly the data source a user gets.
 fn source(port: u16, catalog: &str, schemas: &[&str]) -> SourceDef {
     SourceDef {
         kind: "mysql".into(),
@@ -982,12 +989,15 @@ async fn a_projected_json_value_is_the_drivers_own_gap(engine: &Engine) {
     );
 }
 
-/// **Every write refuses, and the reserved namespace is the workspace's own** — a phase of the
-/// test above.
+/// **Every write refuses while the toggle is on, and the reserved namespace is the workspace's
+/// own** — a phase of the test above.
 ///
-/// `MySQL` ships read-only, so the two write statements DataFusion can plan are refused here as
-/// well as the five the router intercepts. What each refusal has to do is name the **data source**,
-/// so the sentence is about the target rather than about SQL.
+/// The data source is connected `read_only: true`, the shipped default, so the two write
+/// statements DataFusion can plan are refused here as well as the five the router intercepts —
+/// **by the def's own gate**, not by anything about the kind. [`remote_writes`] is the other half:
+/// it re-connects with the toggle off and every one of these statements lands. What each refusal
+/// has to do is name the **data source**, so the sentence is about the target rather than about
+/// SQL.
 async fn statement_policy(engine: &Engine, dir: &Path) {
     engine.set_data_dir(dir);
     for sql in [
