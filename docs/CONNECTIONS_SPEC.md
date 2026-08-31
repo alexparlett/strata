@@ -117,6 +117,41 @@ open map the kind declares and reads:
 under — the values themselves live in the keystore or arrive through the kind's environment
 convention, never here.
 
+### Persistence, and what moved
+
+Recorded here because a future reader looking for "can Strata still open a project written before
+X" looks at the file that describes the thing that changed shape.
+
+**One shape change, staged.** Data sources went from a typed `Provider` enum — one arm per
+first-party kind, each with its own fields — to the one flat `SourceDef` above, in two steps: the
+database arm became a generic registrant's def first, then the three object-store arms followed and
+the enum died. Everything the arms carried is a declared setting now, `address` included, which is
+what makes a fifth kind a registration rather than a model change.
+
+**Migration-on-read where the mapping is trivial; pre-release breaks accepted where it is not; no
+converter, ever.** A converter is a second reader of the file with its own idea of what the file
+means, and it goes stale the moment the shape moves again. So:
+
+- **Read forward** where a field's older spelling determines the new one on sight — a missing
+  `read_only` reads `true` (a def predating the field is read-only, which is the safe answer, not
+  the convenient one), a missing `schemas` reads as none shown, and a `secrets` set written before
+  slots were recorded derives its own slots and is adopted once at load.
+- **Break** where it does not. A `project.json` whose data sources are still typed `Provider` arms
+  is **not read**: the enum's arms and the flat def do not correspond field for field, the address
+  was trimmed of its scheme in one arm and not another, and a table's `connection` held a URL where
+  `source` now holds a name. Recovering that faithfully is exactly the second reader the rule
+  forbids, and Strata is pre-release, so the call was made explicitly rather than approximated.
+  What such a file does today is open with **no data sources** — the old `connections` key is not a
+  field any more, so nothing reads it — and every table that read through one becomes a local table
+  whose bucket-relative paths match nothing on disk, which is a failed catalog row with its own
+  reason on it. Redeclare the sources and re-point the tables; there is nothing to recover but the
+  typing.
+
+The rest of `.strata/` needs no posture: the snapshot spool is disposable and swept on startup,
+`history.jsonl` drops a line it cannot parse (`filter_map(… .ok())`) and a chat whose stored
+memory will not read back degrades to an empty conversation. All three are records rather than
+declarations, so losing one costs nothing a user typed.
+
 ## Auth modes
 
 Per kind, and only secret-free options exist, each declared as an ordinary setting:
@@ -247,11 +282,11 @@ folds against what is *registered*, because a data source that failed to connect
 
 ## Client options
 
-`client_config` is `object_store`'s own `ClientConfigKey` map, offered on every provider because
-all three stores are built on one HTTP client: timeouts, connection pooling, proxy settings, HTTP
-version and keep-alive, user agent, certificate trust — 16 keys, enumerated in
-`strata_arrow::client::CLIENT_KEYS` with a description each (the editor offers them with
-autocomplete).
+The client options are `object_store`'s own `ClientConfigKey` map, declared as ordinary settings by
+every store kind because all three are built on one HTTP client: timeouts, connection pooling,
+proxy settings, HTTP version and keep-alive, user agent, certificate trust — 16 keys, enumerated in
+`strata_arrow::client::CLIENT_KEYS` with a description each and turned into `SourceSetting` rows
+from that table rather than retyped, so the editor draws them like any other row.
 `check_client_config` validates the map in both the editor and `connect`: an unknown name or a
 blank value is refused by name rather than silently dropped at build time.
 
@@ -919,7 +954,7 @@ schema switched off cannot capture a bare name, and — the case that made this 
 collide with a relation in a schema you left on. Without the scoping, `sessions` in a hidden
 `analytics` refuses a query about the `sessions` the tree is showing, naming a schema the user
 cannot see. The set is one live cell shared between the data source and its catalog provider
-(`db::Shown`), written by `connect` and by the Schemas… picker through `Sources::show_schemas` —
+(`sources::Shown`), written by `connect` and by the Schemas… picker through `Sources::show_schemas` —
 the picker does not reconnect, so a copy taken at connect would be stale by the time it was read.
 
 What a bare name means can still change — creating a workspace `orders` takes the name back, and
@@ -980,8 +1015,8 @@ a filter.
 `TableDef::source` holds the chosen data source's **name** — a *reference*, never a copy of the
 bucket, provider or auth — and it is the one field that says a table is remote. Exactly when it
 is set, the table's sources are **bucket-relative** (`events/2024/**/*.parquet`), stored as
-typed. A def written when the field held a URL or an identity migrates on read
-(`TableDef::migrated`), because both older spellings carry the address a name is minted from.
+typed. The field held a URL under the pre-EA shape and is not migrated — see
+[Persistence, and what moved](#persistence-and-what-moved).
 
 Composing the two halves is the **engine's**: `register::table_spec` turns the name into the
 address that source's store is registered under and hands

@@ -67,6 +67,26 @@ In the app the handle is `EngineCtx` — an `Arc<Engine>` with `Deref`, held in 
 per project window; the headless host builds the same engine over the same project without any of
 the app around it.
 
+**An engine is built one way, and everything an embedder may decide is decided there.**
+`Engine::builder()` carries one `with_*` slot per seam — the data directory, the config overrides,
+the secret provider, the data sources, the file formats, the snapshot store, the internal-table
+store, UDF packages, the memory pool and the policy provider — each taking `impl Trait + 'static`
+by value and Arc'd internally, so no caller ever constructs an `Arc<dyn …>`; the repeatable ones
+(`with_source`, `with_format`, `with_udfs`) are additive. `build()` answers an `Arc<Engine>`
+through `Arc::new_cyclic`, which is why every method is on `&self` and a handle needs no
+forwarders. `SessionState`, `RuntimeEnv` and `CacheManager` are never exposed.
+
+**Every public call is reached through one of six group handles**, each borrowing the engine and
+carrying the identity the call is about: `ws(id)` (run, explain, cancel — the nonce family),
+`snapshot(id)` (page, chart, trend, export, pin, live), `catalog()` (registration, `sync`,
+profiling, the generation and the ledger), `sources()` (connect, disconnect, the one listing read
+and the registry questions), `lang()` (validation, the policy verdicts the agent gate reads, and
+the function and prepared-statement catalogues completion is assembled from) and `work()` (the
+engine-owned in-flight flag).
+Beside them sits a short root set — `builder`, `id`, `set_data_dir`, `formats` and the config
+trio. The mapping is **total**: a doc test in `facade/mod.rs` fails when a new public method
+escapes it, so a new call goes on the handle its subject names.
+
 ## The query round trip: snapshots
 
 Raw SQL is never a cache key — the same SQL over the same tables can read different files a
@@ -120,14 +140,15 @@ The full read model — identity, the lock-file sweep, pins, the ordinal measure
 ## The statement pipeline
 
 One pipeline sits in front of dispatch — `statements::accept`, three typed stages
-(`Parsed → Qualified → Admitted`) whose order the types enforce — and `Workspace::run` spends
-answer.
+(`Parsed → Qualified → Admitted`) whose order the types enforce — and `Workspace::run` spends the
+answer. Each `Admitted` variant carries a `Proof` whose constructor is private, so holding one
+*means* classification ran: the order is the types end to end, with no trust step.
 
 ```mermaid
 flowchart LR
     RUN["Workspace::run<br/>(one statement per press)"] --> C{"accept<br/>parse → qualify → classify"}
     C -->|Query| Q["query()<br/>SELECT · EXPLAIN · SHOW · DESCRIBE<br/>→ snapshot pipeline"]
-    C -->|Statement| I["statements::arms::execute<br/>CREATE EXTERNAL TABLE · CREATE TABLE / CTAS ·<br/>INSERT · DROP TABLE · CREATE / DROP VIEW ·<br/>COPY · SET / RESET · PREPARE / DEALLOCATE ·<br/>CREATE / DROP FUNCTION"]
+    C -->|Statement| I["statements::arms::execute<br/>CREATE EXTERNAL TABLE · CREATE TABLE / CTAS ·<br/>INSERT · DROP TABLE · CREATE / DROP VIEW ·<br/>COPY · SET / RESET · PREPARE / DEALLOCATE ·<br/>CREATE / DROP FUNCTION · UPDATE · DELETE"]
     C -->|Refusal| R["the engine's own message,<br/>before DataFusion can plan<br/>(same string as the squiggle)"]
 ```
 
@@ -143,8 +164,10 @@ flowchart LR
 - **Dispatch is one axis and one contract.** `Target` says where a managed name points, `Mechanism`
   says how a kind reaches one that is not the workspace's (planned into the source's sink,
   dispatched to the server as text, or refused), and `StmtCtx` is what the engine hands every arm —
-  so all sixteen share the signature `(&StmtCtx, &Principal, &Qualified) -> StatementOutcome` and
-  adding a kind is five compile errors.
+  so all sixteen share the signature
+  `(&StmtCtx, &Principal, &Qualified) -> Result<StatementOutcome, String>` and adding a kind is
+  five compile errors. A remote write then passes three named gates in order — the caller's grants,
+  the caller's remote scope, and the source def's own caller-blind `read_only`.
 - An interception lands in an app funnel that already exists: `CREATE TABLE` / CTAS publishes
   its result through the engine's internal-table store (`engine::tables`, the EA-08 seam — under
   the default store, Arrow IPC in `.strata/tables/<slug>/`) and registers through the ordinary
@@ -207,11 +230,15 @@ update is a restart. The status is app-global; the question the dialog asks is p
 restart, or the report the menubar item raises, which answers the check where it was asked and
 shows the release's own Markdown when there is something to install.
 
-Config never holds a secret. The one class of secret the app must keep — third-party provider keys
-for the assistant — lives in the OS keystore (`strata_core::secret`, opened once in `main`), and
-config carries only a minted `SecretRef` to it. That is enforced by the types rather than by care:
-the in-memory `Secret` derives no `Serialize`, so there is no path from a pasted key to
-`config.json` at all.
+**No file Strata writes holds a secret.** There are two classes and both resolve the same way,
+through the OS keystore (`strata_core::secret`, opened once in `main`). The app's own — third-party
+provider keys for the assistant — is referenced from `config.json` by a minted `SecretRef`. A data
+source's is referenced from the committed `project.json` the same way: the def records which of the
+kind's secret-typed settings this machine has filed and **which slot each is in**, recorded rather
+than derived so a rename moves nothing and a colleague entering their own password writes their own
+entry under the id already in the file. Both are enforced by the types rather than by care: the
+in-memory `Secret` derives no `Serialize`, so there is no path from a pasted key to either file at
+all.
 
 The full design — the channel vocabulary, persistence, the menu seam, the diagnostics driver —
 is [FREYA_STATE_ARCHITECTURE.md](FREYA_STATE_ARCHITECTURE.md).
@@ -274,10 +301,24 @@ Connecting a client is [MCP_CLIENTS.md](MCP_CLIENTS.md).
   headless host's catalog answers, and the agent's `list_tables`, which is where a refused data
   source is finally named in the engine's own words instead of only through the tables it took
   down with it.
+- **Data sources** — everything the project reads that is not local disk is one kind of thing.
+  `DataSource` is a single publicly implementable trait; a companion `SourceKind` carries the
+  identity as consts, `NAME` among them, and `EngineBuilder::with_source` registers under it. The
+  shipped four — `s3`, `gcs`, `http`, `postgres` — are ordinary registrants of that call, so an
+  embedder adds a fifth exactly the way we added ours. `connect` answers the **mode**:
+  `Sourced::Store` for a bucket, `Sourced::Catalog` for something that enumerates itself, and the
+  mode-specific vocabulary rides those arms so a bucket cannot be asked what relations it holds —
+  the method is not there. Everything a source *takes* is declared too: `settings()` answers a
+  table of `SourceSetting` rows, and the source editor renders that table rather than knowing any
+  kind's fields. One persisted `SourceDef` serves them all — a kind, the name the user gave it,
+  the settings that kind declared, and which of its secret keys this machine has filed.
+  [CONNECTIONS_SPEC.md](CONNECTIONS_SPEC.md).
 - **Databases** — a PostgreSQL source registers a DataFusion **catalog** of relations the server
   enumerates, so the whole database is queryable as `pg.public.orders` with no per-table declaration,
   and a same-source subplan is pushed back to the server as one statement
-  (`datafusion-federation`). Discovery gets catalogs; declaration gets defs.
+  (`datafusion-federation`). Discovery gets catalogs; declaration gets defs. An object store
+  registers a catalog too, but a **def-fed** one: its relations are the project's own table rows
+  bound to that source, which is what makes forgetting a bucket take its tables with it.
   [CONNECTIONS_SPEC.md](CONNECTIONS_SPEC.md).
 - **Export** — the export window renders an `ExportSpec` into one `COPY … TO` over the pinned
   snapshot, with per-format options and Hive partitioning. [EXPORT_OPTIONS.md](EXPORT_OPTIONS.md).

@@ -235,7 +235,7 @@ whoever is deciding.
 
 **The shipped provider is data.** `CapabilityPolicyProvider` answers from a `Capability`: a bitset
 of `Grant::{Read, Write(Locality), Ddl(Locality), ViewDdl, CopyOut, Session, Functions}` plus a
-`RemoteScope::{All, Only([Kind|Connection])}` refining the remote half — so "this MCP may write the
+`RemoteScope::{All, Only([Kind|Source])}` refining the remote half — so "this MCP may write the
 sqlite sources, never the RDS postgres" is one expression. `Locality::{Local, Remote}` is shared
 with the Target axis, so the fine check is derived from the resolved target and an arm never names
 a scope.
@@ -245,11 +245,31 @@ agent. **A caller's capability narrows the provider's and never widens it**, whi
 engine serve a full editor and a read-only agent while an engine built read-only — the headless
 host's — stays read-only whatever a caller asks for. The ceiling and the caller are asked
 *separately* rather than merged into one capability: a `RemoteScope` has no lossless intersection,
-since `Kind("postgres")` and `Connection("postgres://acme/orders")` can denote the same source
+since `Kind("postgres")` and `Source("warehouse")` can denote the same source
 while being different selectors, so merging the selector sets would refuse a source both
 operands reach. `EngineBuilder::with_policy` is the one slot;
 unset it is `CapabilityPolicyProvider::new(Capability::full())`, so an engine nobody restricted
 refuses nothing and restriction is explicit data.
+
+**A remote write passes three named gates, in order, and each answers a different question.**
+The caller's *grants* (may this principal write remotely at all), then the caller's *remote scope*
+(may it write **this** source), then the source def's own `read_only` — which is caller-blind on
+purpose, because a data source is committed and shared, so the answer about it must be the same on
+every colleague's machine. The third is the arm's own and names the setting in its refusal; folding
+it into the target resolution would move a gate without removing one, and `resolve_target` has to
+stay a pure function of the session because the diagnostics pass asks it of statements it is only
+judging.
+
+**The SQL-text ledger.** The engine-wide invariant is that a statement is executed **as the user's
+parsed statement, or as a plan derived from it — never as re-rendered text**, and the way that is
+kept checkable is a closed list of the sites where text still travels: `sql::qualify` (an AST
+rewrite feeding the planner), `bind_parameters` (AST, pre-plan), the span splice that sends a
+statement to a server in the bytes the user typed (§6.9), the JSON accessor spellings on a source's
+own unparser dialect, `ViewDef.sql` (persistence), `profile_sql` (display) and the `column_type`
+probe (which plans and never runs). Nothing else re-renders. Export's SQL renderer and typed view
+DDL's text re-render both died to this rule; its matching half is that **a rendered spelling is
+never a lookup key** — matching happens on recorded reference forms, compared the way the thing
+that resolves them compares.
 
 **Order: grammar, then policy, then the statement's own fault.** A caller the policy phase refuses
 the form to outright is owed *that* sentence — a read-only agent asking for `INSERT OVERWRITE`
@@ -538,7 +558,7 @@ thing.
 
 The target is resolved **before** the project folder is looked at, because since DB-10 a CTAS whose
 target is qualified into a writable database source needs no project folder: it branches to
-`db::create_table_as` and everything below is the workspace's path
+`arms::tables::materialize` and everything below is the workspace's path
 (`docs/CONNECTIONS_SPEC.md` for the remote half). The duplicate-column check is in front of both.
 A workspace CTAS whose *query* reads a source executes that read federated exactly as a
 typed query would — the input is executed to a stream, and only its scans reach §6.8's rules.
@@ -618,7 +638,7 @@ settings, so the panel asks the planner rather than declaring anything.
 
 **`INSERT` is DataFusion's own plan behind a target gate.** The statement is planned (side-effect
 free) and the gate reads what the plan names — first whether it is remote, since DB-10, which
-branches to `db::insert_into` and reports without a store effect; then, for a workspace name, the
+drives the source's own sink and reports without a store effect; then, for a workspace name, the
 rest of this section. A target outside `Catalog::is_internal` is refused
 (`arms::tables::INSERT_EXTERNAL` — a view is the same refusal, neither being data a
 `CREATE TABLE` published), and any write op that is not `Append` is refused
@@ -1204,7 +1224,7 @@ fewer.
 
 A **`CopyTo` cannot be driven** that way: its sink is the file format's, built by DataFusion's
 physical planner from the node itself. So it is kept out of the rule's reach instead —
-`db::federate::optimizer_rules` wraps the crate's federation rule so a write root federates its
+`sources::sql::optimizer_rules` wraps the crate's federation rule so a write root federates its
 **input** and is rebuilt around the result. The crate already draws this line two nodes short: it
 exempts `LogicalPlan::Analyze` in the same recursion, with "cannot be converted to SQL by the
 Unparser" written beside it.
