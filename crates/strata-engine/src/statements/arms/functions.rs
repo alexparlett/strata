@@ -671,15 +671,8 @@ mod tests {
     /// What completion offers for `prefix`, through the language service's own snapshot of the
     /// engine — which is the thing the editor rebuilds on a catalog epoch, not the registry.
     fn offered(eng: &Engine, prefix: &str) -> Vec<(String, String)> {
-        let catalog = Catalog::build(
-            [],
-            [],
-            eng.lang().functions(),
-            eng.lang().prepared(),
-            eng.formats(),
-            "generic".into(),
-        );
-        complete(prefix, prefix.len(), &catalog, false)
+        let catalog = Catalog::build([], [], eng.lang().bundle(), "generic".into());
+        complete(&catalog, prefix, prefix.len(), false)
             .into_iter()
             .filter(|c| c.kind == CompletionKind::Function)
             .map(|c| (c.label, c.detail.unwrap_or_default()))
@@ -729,15 +722,8 @@ mod tests {
         );
 
         let dropped = |eng: &Engine| {
-            let catalog = Catalog::build(
-                [],
-                [],
-                eng.lang().functions(),
-                eng.lang().prepared(),
-                eng.formats(),
-                "generic".into(),
-            );
-            complete("DROP FUNCTION ", 14, &catalog, false)
+            let catalog = Catalog::build([], [], eng.lang().bundle(), "generic".into());
+            complete(&catalog, "DROP FUNCTION ", 14, false)
                 .into_iter()
                 .map(|c| c.label)
                 .collect::<Vec<_>>()
@@ -1008,7 +994,7 @@ mod tests {
 
     /// **A created function is known to the diagnostics pass too, not only to completion.**
     /// Those are two different readers of the swap: completion resolves against the language
-    /// service's `Catalog` snapshot, while `Lang::validate` dry-plans against the live
+    /// service's `Catalog` snapshot, while `Lang::analyze` dry-plans against the live
     /// `SessionContext` and takes the catalog by handle for its lexical lints. A squiggle left
     /// under a call the very same buffer can Run is the disagreement the epoch bump exists to
     /// prevent, and it is worth pinning from this end because the app-side wiring
@@ -1018,7 +1004,7 @@ mod tests {
         let eng = Engine::builder().build();
         let sql = "SELECT add_one(41)";
         assert!(
-            !eng.lang().validate(sql.into()).await.is_empty(),
+            !eng.lang().analyze(sql.into()).await.is_empty(),
             "unknown before it is created"
         );
 
@@ -1029,7 +1015,7 @@ mod tests {
         .await
         .expect("created");
         assert_eq!(
-            eng.lang().validate(sql.into()).await,
+            eng.lang().analyze(sql.into()).await,
             vec![],
             "and clean the moment it is"
         );
@@ -1038,7 +1024,7 @@ mod tests {
             .await
             .expect("dropped");
         assert!(
-            !eng.lang().validate(sql.into()).await.is_empty(),
+            !eng.lang().analyze(sql.into()).await.is_empty(),
             "unknown again once it is gone"
         );
     }

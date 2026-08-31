@@ -1,6 +1,6 @@
 //! What one intercepted statement did, as a value the caller folds.
 //!
-//! An arm answers with a [`StatementOutcome`]; [`execute`](super::arms::execute) stamps the kind
+//! An arm answers with a [`StatementOutcome`]; `arms::execute` stamps the kind
 //! and the clock onto it and hands back a [`StatementReport`], so a report can never disagree
 //! with the statement that produced it. The catalog mutation rides along as a [`StoreEffect`].
 

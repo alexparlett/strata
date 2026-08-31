@@ -10,6 +10,7 @@
 use std::sync::Arc;
 
 use crate::formats::FormatInfo;
+use crate::generation::CatalogGen;
 use crate::sql::FunctionCatalog;
 use strata_model::ColumnInfo;
 
@@ -78,6 +79,32 @@ impl PreparedSym {
     }
 }
 
+/// **Everything the language service needs off the engine, read as of one moment** — the sync
+/// half of the wiring, from [`Lang::bundle`](crate::Lang::bundle).
+///
+/// One value rather than five calls because these are five reads of one session that must
+/// describe one instant: a completion offering a function the registry no longer holds, against
+/// a database list from before a connect, is the drift a single read makes impossible. It is
+/// lock-reads only — no I/O, no plan, no dial-out — which is what lets the consumer take it in a
+/// side effect on the render thread whenever [`generation`](Self::generation) moves.
+///
+/// The consumer folds it into a [`Catalog`] with its own rows and its own dialect
+/// ([`Catalog::build`]); nothing here is the consumer's to decide.
+#[derive(Clone, Default, PartialEq)]
+pub struct LangBundle {
+    /// The engine's registered functions, **by handle** — see [`Catalog::functions`].
+    pub functions: Arc<FunctionCatalog>,
+    /// The statements `PREPARE` has left in this session.
+    pub prepared: Vec<PreparedSym>,
+    /// The file formats the engine reads, with each one's `OPTIONS` keys.
+    pub formats: Vec<FormatInfo>,
+    /// The project's database sources, derived from the sources snapshot.
+    pub databases: Vec<DatabaseSym>,
+    /// The catalog generation every field above was read at — **the one invalidation clock**.
+    /// Re-take the bundle when [`Catalog::generation`](crate::Catalog::generation) stops matching.
+    pub generation: CatalogGen,
+}
+
 /// One **data source's catalog**, as a qualified name's first segment (DB-06).
 ///
 /// The two halves come from two places on purpose. The [`name`](Self::name) is the data source's
@@ -89,6 +116,13 @@ impl PreparedSym {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DatabaseSym {
     pub name: String,
+    /// Whether a write may target a relation in it — the def's own
+    /// [`read_only`](strata_model::SourceDef::read_only), inverted.
+    ///
+    /// The offer at a write position is conditional on it: an `INSERT`/`UPDATE`/`DELETE` target
+    /// on a read-only connection is refused by the arm, and offering one would bait the user into
+    /// a statement the engine has already decided against.
+    pub writable: bool,
     pub schemas: Vec<SchemaSym>,
 }
 
@@ -123,9 +157,8 @@ pub struct RelationSym {
 pub struct Catalog {
     /// Registered tables and saved views (both address columns).
     pub tables: Vec<TableSym>,
-    /// The project's database sources, for the qualified offer (DB-06). Set through
-    /// [`with_databases`](Self::with_databases) rather than taken by [`build`](Self::build),
-    /// because a project with no database says nothing about them.
+    /// The project's database sources, for the qualified offer (DB-06) and the write-target
+    /// pools — off the [`LangBundle`], which is where the engine answers for them.
     pub databases: Vec<DatabaseSym>,
     /// The engine's function catalog, **by handle**: the snapshot is rebuilt on every catalog
     /// epoch and the function set is by far its largest part, so it rides as the `Arc` the engine
@@ -150,17 +183,25 @@ pub struct Catalog {
 }
 
 impl Catalog {
-    /// Build from the project catalog + the engine's function names and parser dialect. Takes
-    /// `(name, columns, internal)` triples for tables and `(name, columns)` pairs for views
-    /// (a view is never internal) — the columns are what registration *learned* (they live
-    /// on the UI project store's rows, not on the defs), so the caller projects them, and
-    /// `internal` is the def's own `TableOrigin`.
+    /// **The one constructor** — the consumer's own rows, the engine's [`LangBundle`], and the
+    /// dialect from the consumer's own settings.
+    ///
+    /// Three inputs, from the three places that own them, because the assembly used to be five
+    /// arguments gathered from five calls and every one of them was a thing that could go stale
+    /// on its own. Re-build when [`LangBundle::generation`] moves.
+    ///
+    /// Tables are `(name, columns, internal)` triples and views `(name, columns)` pairs (a view
+    /// is never internal). The rows are the **store's**, deliberately: the columns are what
+    /// registration *learned* (they live on the consumer's project rows, not on the defs), and a
+    /// def whose registration **failed** is still offered by name — what the user wrote down is
+    /// what the editor knows about, and the failure has its own surface.
+    ///
+    /// The dialect is the consumer's `datafusion.sql_parser.dialect` setting rather than the
+    /// bundle's, because it is a setting the user edits and the engine is not its author.
     pub fn build<'a>(
         tables: impl IntoIterator<Item = (&'a str, &'a [ColumnInfo], bool)>,
         views: impl IntoIterator<Item = (&'a str, &'a [ColumnInfo])>,
-        functions: Arc<FunctionCatalog>,
-        prepared: Vec<PreparedSym>,
-        formats: Vec<FormatInfo>,
+        bundle: LangBundle,
         dialect: String,
     ) -> Self {
         let mut out = Vec::new();
@@ -170,9 +211,16 @@ impl Catalog {
         for (name, cols) in views {
             out.push(TableSym::from_cols(name, true, false, cols));
         }
+        let LangBundle {
+            functions,
+            prepared,
+            formats,
+            databases,
+            generation: _,
+        } = bundle;
         Catalog {
             tables: out,
-            databases: Vec::new(),
+            databases,
             functions,
             prepared,
             formats,
@@ -185,12 +233,6 @@ impl Catalog {
         self.formats
             .iter()
             .find(|f| f.name.eq_ignore_ascii_case(name))
-    }
-
-    /// The project's data sources — see [`DatabaseSym`].
-    pub fn with_databases(mut self, databases: Vec<DatabaseSym>) -> Self {
-        self.databases = databases;
-        self
     }
 
     /// The data source addressed as `name`, case-insensitively as SQL resolves it.

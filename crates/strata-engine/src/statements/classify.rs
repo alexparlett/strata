@@ -26,7 +26,7 @@ use crate::sql::unwrap_statement;
 /// a new variant is five compile errors before it can run at all: [`label`](StmtKind::label), the
 /// grant family ([`Form::family`]), the refusal wording (`refusal_for`),
 /// the mechanism ([`mechanism`](fn@crate::statements::mechanism)) and the arm
-/// ([`execute`](crate::statements::arms::execute)).
+/// (`arms::execute`).
 ///
 /// Two sites the compiler cannot demand, stated so they are not forgotten: `form_of` carries
 /// the one deliberate wildcard, since what AST shape a kind is read off is not something an enum

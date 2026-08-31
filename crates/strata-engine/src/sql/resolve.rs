@@ -38,7 +38,8 @@ use datafusion::sql::sqlparser::tokenizer::Span;
 
 use crate::sql::fuzzy;
 use crate::sql::lex::byte_span;
-use crate::sql::validate::diag;
+use crate::sql::oracle::{Columns as OracleColumns, NameOracle};
+use crate::sql::spans::diag;
 use strata_model::{Diagnostic, Severity};
 
 /// The outcome of resolving one statement's names.
@@ -61,22 +62,13 @@ impl Resolution {
     }
 }
 
-/// What the session knows about one referenced relation.
-enum SchemaEntry {
-    /// Definitely not in the catalog.
-    Missing,
-    /// Exists (or provider errored) but its columns are unavailable — stay quiet.
-    Opaque,
-    /// Fully known column names.
-    Known(Vec<String>),
-}
-
-/// Relation key → what the session knows, prefetched before the sync walk.
-type SchemaMap = HashMap<String, SchemaEntry>;
+/// Relation key → what the [`NameOracle`] knows, prefetched before the sync walk.
+type SchemaMap = HashMap<String, OracleColumns>;
 
 /// Resolve all table/column names in `stmt` (the statement at `stmt_start` whose
 /// text is `slice`) against the live session. Read-only; never plans.
 pub(crate) async fn resolve(
+    names: &NameOracle<'_>,
     ctx: &SessionContext,
     stmt: &DFStatement,
     slice: &str,
@@ -91,7 +83,7 @@ pub(crate) async fn resolve(
         .config_options()
         .sql_parser
         .enable_ident_normalization;
-    let schemas = prefetch(ctx, inner, normalize).await;
+    let schemas = prefetch(names, inner, normalize).await;
     resolve_statement(inner, &schemas, normalize, slice, stmt_start, sql)
 }
 
@@ -116,9 +108,10 @@ pub(crate) fn unwrap_statement(stmt: &DFStatement) -> Option<&SqlStatement> {
     }
 }
 
-/// Fetch what the session knows about every relation the statement references.
-/// CTE names get looked up too and simply miss — they are shadowed at walk time.
-async fn prefetch(ctx: &SessionContext, stmt: &SqlStatement, normalize: bool) -> SchemaMap {
+/// Fetch what the session knows about every relation the statement references, through the one
+/// [`NameOracle`] every rung asks. CTE names get looked up too and simply miss — they are
+/// shadowed at walk time.
+async fn prefetch(oracle: &NameOracle<'_>, stmt: &SqlStatement, normalize: bool) -> SchemaMap {
     let mut names: Vec<ObjectName> = Vec::new();
     let _ = visit_relations(stmt, |name: &ObjectName| {
         names.push(name.clone());
@@ -133,21 +126,7 @@ async fn prefetch(ctx: &SessionContext, stmt: &SqlStatement, normalize: bool) ->
         if map.contains_key(&key) {
             continue;
         }
-        let entry = match ctx.table_provider(table_ref.clone()).await {
-            Ok(provider) => SchemaEntry::Known(
-                provider
-                    .schema()
-                    .fields()
-                    .iter()
-                    .map(|f| f.name().clone())
-                    .collect(),
-            ),
-            Err(_) => match ctx.table_exist(table_ref) {
-                Ok(false) => SchemaEntry::Missing,
-                _ => SchemaEntry::Opaque,
-            },
-        };
-        map.insert(key, entry);
+        map.insert(key, oracle.columns(table_ref).await);
     }
     map
 }
@@ -479,8 +458,8 @@ impl Resolver<'_> {
             return Cols::Unknown;
         };
         match self.schemas.get(&table_ref.to_string()) {
-            Some(SchemaEntry::Known(cols)) => Cols::Known(cols.clone()),
-            Some(SchemaEntry::Missing) => {
+            Some(OracleColumns::Known(cols)) => Cols::Known(cols.clone()),
+            Some(OracleColumns::Missing) => {
                 let span = self.byte_span(name.span());
                 self.push(format!("Table or view '{table_ref}' not found"), span);
                 Cols::Unknown
@@ -886,7 +865,7 @@ mod tests {
         for (name, cols) in tables {
             schemas.insert(
                 (*name).to_string(),
-                SchemaEntry::Known(cols.iter().map(ToString::to_string).collect()),
+                OracleColumns::Known(cols.iter().map(ToString::to_string).collect()),
             );
         }
         let stmt = Parser::parse_sql(&GenericDialect {}, sql)

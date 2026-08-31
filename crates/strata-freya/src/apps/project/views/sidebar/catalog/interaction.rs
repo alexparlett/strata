@@ -2405,15 +2405,14 @@ fn the_tree_lays_out_within_its_panel_at_stub_width() {
 /// enumeration held beside a live pool, so the rendered pane cannot reach one without a server.
 /// What a real server does with these names is
 /// `strata-engine/tests/postgres_federation.rs`, which runs the same
-/// [`qualified`](strata_engine::sql::qualified) rendering these templates wrap.
+/// [`SessionName::qualified`](strata_engine::sql::SessionName) rendering these templates wrap.
 mod gestures {
     use super::super::menu::{pin_view_sql, select_sql};
-    use strata_engine::quote_ident;
-    use strata_engine::sql::qualified;
+    use strata_engine::sql::{SessionName, WorkspaceName};
 
     #[test]
     fn a_query_reads_the_whole_relation_at_the_row_limit() {
-        let address = qualified(["pg", "public", "orders"]);
+        let address = SessionName::qualified(["pg", "public", "orders"]).to_string();
         assert_eq!(
             select_sql(&address, 100),
             "SELECT *\nFROM pg.public.orders\nLIMIT 100;"
@@ -2430,16 +2429,16 @@ mod gestures {
     /// while the relation's spelling is the server's.
     #[test]
     fn pinning_folds_the_view_name_and_preserves_the_relations() {
-        let address = qualified(["pg", "public", "Orders"]);
+        let address = SessionName::qualified(["pg", "public", "Orders"]).to_string();
         assert_eq!(
-            pin_view_sql(&quote_ident("Orders"), &address),
+            pin_view_sql(WorkspaceName::of("Orders").as_str(), &address),
             "CREATE VIEW orders AS\nSELECT *\nFROM pg.public.\"Orders\";"
         );
     }
 
     #[test]
     fn a_name_a_statement_cannot_say_bare_is_quoted_per_segment() {
-        let address = qualified(["pg", "sales eu", "order"]);
+        let address = SessionName::qualified(["pg", "sales eu", "order"]).to_string();
         assert_eq!(
             select_sql(&address, 10),
             "SELECT *\nFROM pg.\"sales eu\".\"order\"\nLIMIT 10;"

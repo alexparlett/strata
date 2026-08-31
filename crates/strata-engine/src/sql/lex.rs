@@ -226,13 +226,9 @@ pub enum TokKind {
     Punct,
     /// An operator (`=`, `<`, `||`, `::`, …).
     Op,
-    Other,
 }
 
 impl Tok {
-    pub fn is(&self, kind: TokKind) -> bool {
-        self.kind == kind
-    }
     /// Case-insensitive text compare (for keyword / clause matching).
     pub fn eq_ci(&self, s: &str) -> bool {
         self.text.eq_ignore_ascii_case(s)

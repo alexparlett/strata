@@ -136,7 +136,7 @@ impl EngineBuilder {
     /// against a policy service. A caller's own capability narrows this one and never widens it,
     /// so this is a ceiling.
     ///
-    /// Asked by [`Workspace::run`](crate::Workspace::run), [`Lang::validate`](crate::Lang::validate) and [`Lang::policy_verdicts`](crate::Lang::policy_verdicts) — the
+    /// Asked by [`Workspace::run`](crate::Workspace::run), [`Lang::analyze`](crate::Lang::analyze) and [`Lang::policy_verdicts`](crate::Lang::policy_verdicts) — the
     /// entries that classify a statement. [`Workspace::query`](crate::Workspace::query) and [`Workspace::explain`](crate::Workspace::explain) are handed a
     /// statement to read and are limited to reading by the read path's own `SQLOptions`; they do
     /// not consult this.

@@ -24,10 +24,10 @@ use crate::providers::{
     take_table,
 };
 use crate::snapshots::is_snapshot_name;
-use crate::sql::qualified;
+use crate::sql::{SessionName, WorkspaceName};
 use crate::statements::Fault;
 use crate::tables::InternalTableStore;
-use crate::{fold_ident, quote_ident, CATALOG, SCHEMA};
+use crate::{fold_ident, CATALOG, SCHEMA};
 
 /// What a (re)registration learned about a table: its columns, plus the free row count
 /// (`None` when the source doesn't report one).
@@ -1032,18 +1032,18 @@ async fn readers(
 ///
 /// **Whose name it is decides both the expressions and the renderer**, and that is one decision
 /// made once: a workspace name executes here, so it gets the whole expression set and the
-/// fold-preserving [`quote_ident`] its registered identity needs; a name in a database
+/// fold-preserving [`WorkspaceName`] its registered identity needs; a name in a database
 /// data source's catalog federates into one statement on the server, so it gets [`Profiled`]'s
-/// restricted set and the case-preserving [`qualified`], which prints the segments the server
+/// restricted set and the case-preserving [`SessionName::qualified`], which prints the segments the server
 /// itself spells. Reaching for either one alone is silently wrong in opposite directions.
 pub async fn run_profile(ctx: &SessionContext, name: &str) -> Result<CatalogProfile, String> {
     let reference = TableReference::parse_str(name);
     let parts = reference.to_vec();
     let (at, from) = match in_workspace(&reference) {
-        true => (Profiled::Workspace, quote_ident(name)),
+        true => (Profiled::Workspace, WorkspaceName::of(name).to_string()),
         false => (
             Profiled::Database,
-            qualified(parts.iter().map(String::as_str)),
+            SessionName::qualified(parts.iter().map(String::as_str)).to_string(),
         ),
     };
     let df = ctx

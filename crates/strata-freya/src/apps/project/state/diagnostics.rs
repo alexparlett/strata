@@ -171,7 +171,7 @@ async fn pass(
         return;
     };
 
-    let diagnostics = engine.lang().validate(sql).await;
+    let diagnostics = engine.lang().analyze(sql).await;
 
     let introduces_new = diagnostics.iter().any(|d| !shown.contains(d));
     if let Some(wait) = hold(previous, revision, introduces_new) {

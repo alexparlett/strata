@@ -22,7 +22,7 @@
 
 use freya::prelude::*;
 use strata_engine::sources::{SchemaListingView, SchemaVisibility};
-use strata_engine::sql::qualified;
+use strata_engine::sql::SessionName;
 use strata_engine::RemoteRelation;
 use strata_model::{CatalogKind, ColOwner, RemoteRef};
 
@@ -181,11 +181,12 @@ fn database(
                     true,
                     NodeKind::Relation(Remote {
                         label: reference.label(),
-                        address: qualified([
+                        address: SessionName::qualified([
                             reference.source.as_str(),
                             reference.schema.as_str(),
                             reference.relation.as_str(),
-                        ]),
+                        ])
+                        .to_string(),
                         name: relation.name.clone(),
                         reference: reference.clone(),
                         view: views,

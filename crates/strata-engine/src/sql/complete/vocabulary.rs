@@ -174,6 +174,12 @@ pub(super) fn continuation_keywords(clause: Clause) -> Vec<&'static str> {
         Clause::Insert => {
             v.extend(["SELECT", "VALUES"]);
         }
+        Clause::Update => {
+            v.extend(["SET", "WHERE"]);
+        }
+        Clause::Delete => {
+            v.push("WHERE");
+        }
         Clause::Copy => {
             v.extend(["TO", "STORED AS", "PARTITIONED BY", "OPTIONS"]);
         }

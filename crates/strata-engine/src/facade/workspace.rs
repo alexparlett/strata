@@ -24,7 +24,7 @@ pub struct Workspace<'a> {
 impl Workspace<'_> {
     /// Runs `sql`, as a query or as a statement the engine performs itself.
     ///
-    /// One pipeline in front of dispatch, the same one [`Lang::validate`](crate::Lang::validate)
+    /// One pipeline in front of dispatch, the same one [`Lang::analyze`](crate::Lang::analyze)
     /// reports from, so a statement the editor did not underline is one this is prepared to
     /// perform.
     ///

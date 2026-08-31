@@ -8,7 +8,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 
 use crate::formats::Formats;
-use crate::sql::FunctionCatalog;
+use crate::sql::{complete, FunctionCatalog, LangBundle};
 use strata_arrow::column_info;
 use strata_model::ColumnInfo;
 
@@ -36,22 +36,31 @@ fn catalog() -> Catalog {
     Catalog::build(
         [("events", &events[..], false), ("users", &users[..], false)],
         [("spenders", &spenders[..])],
-        Arc::new(FunctionCatalog {
+        bundle(Arc::new(FunctionCatalog {
             scalar: vec!["round".into(), "lower".into(), "set_bit".into()],
             aggregate: vec!["sum".into(), "count".into()],
             window: vec!["row_number".into()],
-        }),
-        Vec::new(),
-        Formats::shipped().registrants(),
+        })),
         "generic".into(),
     )
+}
+
+/// The engine half of a completion snapshot, as these tests need it: the shipped formats and
+/// whichever function set the case is about. A test that cares about databases sets
+/// [`LangBundle::databases`] on the value this returns.
+fn bundle(functions: Arc<FunctionCatalog>) -> LangBundle {
+    LangBundle {
+        functions,
+        formats: Formats::shipped().registrants(),
+        ..Default::default()
+    }
 }
 
 /// Run `complete` with the caret at the `|` marker in `sql`.
 fn at(sql_with_caret: &str) -> Vec<Completion> {
     let caret = sql_with_caret.find('|').expect("caret marker");
     let sql = sql_with_caret.replace('|', "");
-    complete(&sql, caret, &catalog(), false)
+    complete(&catalog(), &sql, caret, false)
 }
 
 fn labels(items: &[Completion]) -> Vec<&str> {
@@ -269,20 +278,18 @@ fn a_column_named_execute_does_not_govern_its_clause() {
     let cat = Catalog::build(
         [("jobs", &cols[..], false)],
         [],
-        Arc::default(),
-        Vec::new(),
-        Formats::shipped().registrants(),
+        bundle(Arc::default()),
         "generic".into(),
     );
     for sql in ["SELECT execute, ", "SELECT deallocate, "] {
-        let items = complete(&format!("{sql} FROM jobs"), sql.len(), &cat, false);
+        let items = complete(&cat, &format!("{sql} FROM jobs"), sql.len(), false);
         assert!(
             items.iter().any(|c| c.label == "amount"),
             "{sql}| lost its columns: {:?}",
             items.iter().map(|c| c.label.as_str()).collect::<Vec<_>>()
         );
     }
-    assert!(complete("EXECUTE ", 8, &cat, false).is_empty());
+    assert!(complete(&cat, "EXECUTE ", 8, false).is_empty());
 }
 
 #[test]
@@ -397,7 +404,7 @@ fn function_inserts_open_paren() {
 fn replace_span_covers_the_partial_token() {
     let sql = "SELECT sta FROM events";
     let caret = "SELECT sta".len();
-    let items = complete(sql, caret, &catalog(), false);
+    let items = complete(&catalog(), sql, caret, false);
     let p = pos(&items, "status");
     assert_eq!(items[p].replace, 7..10);
 }
@@ -414,7 +421,7 @@ fn empty_position_replace_span_is_caret_caret() {
 fn mid_word_caret_yields_no_partial_and_stays_quiet_on_symbols() {
     let sql = "SELECT status FROM events";
     let caret = "SELECT sta".len();
-    let items = complete(sql, caret, &catalog(), false);
+    let items = complete(&catalog(), sql, caret, false);
     assert!(items.iter().all(|c| c.replace == (caret..caret)));
 }
 
@@ -469,12 +476,10 @@ fn weird_identifiers_insert_quoted() {
     let cat = Catalog::build(
         [("t", &cols[..], false)],
         [],
-        Arc::default(),
-        Vec::new(),
-        Formats::shipped().registrants(),
+        bundle(Arc::default()),
         "generic".into(),
     );
-    let items = complete("SELECT  FROM t", 7, &cat, false);
+    let items = complete(&cat, "SELECT  FROM t", 7, false);
     let find = |l: &str| items.iter().find(|c| c.label == l).unwrap().insert.clone();
     assert_eq!(find("Amount USD"), "\"Amount USD\"");
     assert_eq!(find("order"), "\"order\"");
@@ -601,12 +606,10 @@ fn grammar_vocabulary_columns_insert_quoted() {
     let cat = Catalog::build(
         [("t", &cols[..], false)],
         [],
-        Arc::default(),
-        Vec::new(),
-        Formats::shipped().registrants(),
+        bundle(Arc::default()),
         "generic".into(),
     );
-    let items = complete("SELECT  FROM t", 7, &cat, false);
+    let items = complete(&cat, "SELECT  FROM t", 7, false);
     let find = |l: &str| items.iter().find(|c| c.label == l).unwrap().insert.clone();
     assert_eq!(find("null"), "\"null\"");
     assert_eq!(find("case"), "\"case\"");
@@ -662,9 +665,9 @@ fn untokenizable_buffers_stay_quiet_everywhere() {
 
 #[test]
 fn manual_trigger_lifts_the_tail_gate() {
-    let auto = complete("SELECT s FROM events", 8, &catalog(), false);
+    let auto = complete(&catalog(), "SELECT s FROM events", 8, false);
     absent(&auto, "SERDE");
-    let manual = complete("SELECT s FROM events", 8, &catalog(), true);
+    let manual = complete(&catalog(), "SELECT s FROM events", 8, true);
     pos(&manual, "SERDE");
 }
 
@@ -778,13 +781,13 @@ fn statement_leads_offered_at_start_and_not_at_restarts() {
 #[test]
 fn set_key_completes_and_replaces_the_whole_dotted_chain() {
     let sql = "SET datafusion.exec";
-    let items = complete(sql, sql.len(), &catalog(), false);
+    let items = complete(&catalog(), sql, sql.len(), false);
     let p = pos(&items, "datafusion.execution.batch_size");
     assert_eq!(items[p].insert, "datafusion.execution.batch_size");
     assert_eq!(items[p].replace, 4..19, "{:?}", items[p].replace);
     assert_eq!(items[p].detail.as_deref(), Some("8192"));
     let sql = "SET datafusion.";
-    let items = complete(sql, sql.len(), &catalog(), false);
+    let items = complete(&catalog(), sql, sql.len(), false);
     let p = pos(&items, "datafusion.execution.batch_size");
     assert_eq!(items[p].replace, 4..15);
 }
@@ -839,41 +842,37 @@ fn drop_and_insert_operands_filter_by_statement() {
             ("scratch", &scratch[..], true),
         ],
         [("spenders", &cols[..])],
-        Arc::default(),
-        Vec::new(),
-        Formats::shipped().registrants(),
+        bundle(Arc::default()),
         "generic".into(),
     );
-    let items = complete("DROP TABLE ", 11, &cat, false);
+    let items = complete(&cat, "DROP TABLE ", 11, false);
     pos(&items, "events");
     pos(&items, "scratch");
     absent(&items, "spenders");
-    let items = complete("DROP TABLE IF EXISTS ", 21, &cat, false);
+    let items = complete(&cat, "DROP TABLE IF EXISTS ", 21, false);
     pos(&items, "events");
-    let items = complete("DROP VIEW ", 10, &cat, false);
+    let items = complete(&cat, "DROP VIEW ", 10, false);
     assert_eq!(labels(&items), vec!["spenders"]);
-    let items = complete("INSERT INTO ", 12, &cat, false);
+    let items = complete(&cat, "INSERT INTO ", 12, false);
     assert_eq!(labels(&items), vec!["scratch"]);
-    assert!(complete("CREATE TABLE ", 13, &cat, false).is_empty());
-    assert!(complete("PREPARE ", 8, &cat, false).is_empty());
-    let items = complete("INSERT INTO scratch (", 21, &cat, false);
+    assert!(complete(&cat, "CREATE TABLE ", 13, false).is_empty());
+    assert!(complete(&cat, "PREPARE ", 8, false).is_empty());
+    let items = complete(&cat, "INSERT INTO scratch (", 21, false);
     assert_eq!(labels(&items), vec!["id", "ts"]);
-    assert!(complete("INSERT INTO events (", 20, &cat, false).is_empty());
-    assert!(complete("INSERT INTO scratch VALUES (1, ", 31, &cat, false).is_empty());
+    assert!(complete(&cat, "INSERT INTO events (", 20, false).is_empty());
+    assert!(complete(&cat, "INSERT INTO scratch VALUES (1, ", 31, false).is_empty());
     let sql = "INSERT INTO scratch (id, ";
-    let items = complete(sql, sql.len(), &cat, false);
+    let items = complete(&cat, sql, sql.len(), false);
     assert_eq!(labels(&items), vec!["ts", "id"]);
     let vals = [col("values"), col("n")];
     let vcat = Catalog::build(
         [("v", &vals[..], true)],
         [],
-        Arc::default(),
-        Vec::new(),
-        Formats::shipped().registrants(),
+        bundle(Arc::default()),
         "generic".into(),
     );
     let sql = "INSERT INTO v (\"values\", ";
-    let items = complete(sql, sql.len(), &vcat, false);
+    let items = complete(&vcat, sql, sql.len(), false);
     assert!(items.iter().any(|c| c.label == "n"), "{:?}", labels(&items));
 }
 
@@ -888,19 +887,19 @@ fn a_parenthesized_body_after_as_restarts_the_ladder() {
 #[test]
 fn copy_partition_list_offers_the_sources_columns() {
     let sql = "COPY events TO 'x.parquet' PARTITIONED BY (";
-    let items = complete(sql, sql.len(), &catalog(), false);
+    let items = complete(&catalog(), sql, sql.len(), false);
     pos(&items, "user_id");
     pos(&items, "status");
     absent(&items, "name");
     absent(&items, "SELECT");
     let sql = "COPY (SELECT user_id, amount FROM events) TO 'x' PARTITIONED BY (us";
-    let items = complete(sql, sql.len(), &catalog(), false);
+    let items = complete(&catalog(), sql, sql.len(), false);
     assert_eq!(labels(&items), vec!["user_id"]);
     let sql = "COPY s.events TO 'x' PARTITIONED BY (";
-    let items = complete(sql, sql.len(), &catalog(), false);
+    let items = complete(&catalog(), sql, sql.len(), false);
     pos(&items, "user_id");
     let sql = "COPY events TO 'x' PARTITIONED BY (user_id, ";
-    let items = complete(sql, sql.len(), &catalog(), false);
+    let items = complete(&catalog(), sql, sql.len(), false);
     assert!(
         pos(&items, "amount") < pos(&items, "user_id"),
         "{:?}",
@@ -908,7 +907,7 @@ fn copy_partition_list_offers_the_sources_columns() {
     );
     pos(&items, "user_id");
     let sql = "COPY events TO 'x' OPTIONS (";
-    assert!(complete(sql, sql.len(), &catalog(), false).is_empty());
+    assert!(complete(&catalog(), sql, sql.len(), false).is_empty());
 }
 
 #[test]
@@ -920,12 +919,13 @@ fn deallocate_prepare_still_offers_prepared_names() {
     let cat = Catalog::build(
         [],
         [],
-        Arc::default(),
-        prepared,
-        Formats::shipped().registrants(),
+        LangBundle {
+            prepared,
+            ..bundle(Arc::default())
+        },
         "generic".into(),
     );
-    let items = complete("DEALLOCATE PREPARE ", 19, &cat, false);
+    let items = complete(&cat, "DEALLOCATE PREPARE ", 19, false);
     assert_eq!(labels(&items), vec!["spend"]);
 }
 
@@ -946,14 +946,12 @@ fn lead_named_columns_never_govern() {
     let cat = Catalog::build(
         [("jobs", &cols[..], false)],
         [],
-        Arc::default(),
-        Vec::new(),
-        Formats::shipped().registrants(),
+        bundle(Arc::default()),
         "generic".into(),
     );
     for lead in ["set", "copy", "drop", "insert", "create", "prepare"] {
         let sql = format!("SELECT {lead}, ");
-        let items = complete(&format!("{sql} FROM jobs"), sql.len(), &cat, false);
+        let items = complete(&cat, &format!("{sql} FROM jobs"), sql.len(), false);
         assert!(
             items.iter().any(|c| c.label == "amount"),
             "{sql}| lost its columns: {:?}",
@@ -967,7 +965,7 @@ fn lead_named_columns_never_govern() {
 #[test]
 fn stored_as_offers_exactly_the_registered_formats() {
     let sql = "CREATE EXTERNAL TABLE t STORED AS ";
-    let items = complete(sql, sql.len(), &catalog(), false);
+    let items = complete(&catalog(), sql, sql.len(), false);
     assert_eq!(labels(&items), vec!["PARQUET", "CSV", "JSON", "ARROW"]);
     assert_eq!(items[0].insert, "PARQUET ");
 }
@@ -977,29 +975,29 @@ fn options_keys_complete_inside_their_quotes() {
     let prefix = "CREATE EXTERNAL TABLE t STORED AS CSV OPTIONS ('";
     let sql = format!("{prefix}format.h')");
     let caret = prefix.len() + "format.h".len();
-    let items = complete(&sql, caret, &catalog(), false);
+    let items = complete(&catalog(), &sql, caret, false);
     let p = pos(&items, "format.has_header");
     assert_eq!(items[p].insert, "format.has_header");
     assert_eq!(items[p].replace, prefix.len()..caret);
     assert_eq!(items[p].detail.as_deref(), Some("header row"));
     let sql = format!("{prefix}format.h");
-    let items = complete(&sql, sql.len(), &catalog(), false);
+    let items = complete(&catalog(), &sql, sql.len(), false);
     let p = pos(&items, "format.has_header");
     assert_eq!(items[p].replace, prefix.len()..sql.len());
     let sql = format!("{prefix}formatx");
     let caret = prefix.len() + "form".len();
-    let items = complete(&sql, caret, &catalog(), false);
+    let items = complete(&catalog(), &sql, caret, false);
     let p = pos(&items, "format.has_header");
     assert_eq!(items[p].replace, prefix.len()..sql.len());
     let sql = prefix.to_string();
-    let items = complete(&sql, sql.len(), &catalog(), false);
+    let items = complete(&catalog(), &sql, sql.len(), false);
     pos(&items, "format.delimiter");
     pos(&items, "format.compression");
 }
 
 #[test]
 fn options_keys_follow_the_written_format() {
-    let at_open = |sql: &str| complete(sql, sql.len(), &catalog(), false);
+    let at_open = |sql: &str| complete(&catalog(), sql, sql.len(), false);
     let items = at_open("CREATE EXTERNAL TABLE t STORED AS JSON OPTIONS ('");
     pos(&items, "format.newline_delimited");
     absent(&items, "format.has_header");
@@ -1016,7 +1014,7 @@ fn options_keys_follow_the_written_format() {
 
 #[test]
 fn options_values_ride_the_keys_kind() {
-    let at_open = |sql: &str| complete(sql, sql.len(), &catalog(), false);
+    let at_open = |sql: &str| complete(&catalog(), sql, sql.len(), false);
     let items = at_open("CREATE EXTERNAL TABLE t STORED AS CSV OPTIONS ('format.has_header' '");
     assert_eq!(labels(&items), vec!["true", "false"]);
     let items = at_open("CREATE EXTERNAL TABLE t STORED AS CSV OPTIONS ('format.compression' '");
@@ -1034,7 +1032,7 @@ fn options_values_ride_the_keys_kind() {
 #[test]
 fn create_function_body_offers_arguments_and_functions_only() {
     let sql = "CREATE FUNCTION f(price DOUBLE, qty BIGINT) RETURNS DOUBLE RETURN ";
-    let items = complete(sql, sql.len(), &catalog(), false);
+    let items = complete(&catalog(), sql, sql.len(), false);
     let p = pos(&items, "price");
     assert_eq!(items[p].detail.as_deref(), Some("argument"));
     pos(&items, "qty");
@@ -1043,7 +1041,7 @@ fn create_function_body_offers_arguments_and_functions_only() {
     absent(&items, "events");
     absent(&items, "amount");
     let sql = "CREATE FUNCTION f(price DOUBLE, qty BIGINT) RETURNS DOUBLE RETURN price * ";
-    let items = complete(sql, sql.len(), &catalog(), false);
+    let items = complete(&catalog(), sql, sql.len(), false);
     pos(&items, "qty");
 }
 
@@ -1054,16 +1052,14 @@ fn drop_function_offers_only_created_functions() {
     let cat = Catalog::build(
         [],
         [],
-        Arc::new(FunctionCatalog {
+        bundle(Arc::new(FunctionCatalog {
             scalar: vec!["round".into(), created],
             aggregate: vec!["sum".into()],
             window: Vec::new(),
-        }),
-        Vec::new(),
-        Formats::shipped().registrants(),
+        })),
         "generic".into(),
     );
-    let items = complete("DROP FUNCTION ", 14, &cat, false);
+    let items = complete(&cat, "DROP FUNCTION ", 14, false);
     assert_eq!(labels(&items), vec!["my_udf"]);
     assert_eq!(
         items[0].insert, "my_udf",
@@ -1202,7 +1198,7 @@ fn torture_sweep_every_caret_position() {
             if !sql.is_char_boundary(caret) {
                 continue;
             }
-            let items = complete(sql, caret, &cat, false);
+            let items = complete(&cat, sql, caret, false);
             assert!(items.len() <= 50, "cap breached at {caret} in {sql:?}");
             for c in &items {
                 assert!(
@@ -1219,7 +1215,7 @@ fn torture_sweep_every_caret_position() {
 #[test]
 fn torture_probes_window_query() {
     let sql = "SELECT user_id, sum(amount) OVER (PARTITION BY ";
-    let items = complete(sql, sql.len(), &catalog(), false);
+    let items = complete(&catalog(), sql, sql.len(), false);
     assert_eq!(
         items[0].kind,
         CompletionKind::Column,
@@ -1227,7 +1223,7 @@ fn torture_probes_window_query() {
         labels(&items)
     );
     let sql = "SELECT user_id FROM events QUALIFY user_id > 100 o";
-    let items = complete(sql, sql.len(), &catalog(), false);
+    let items = complete(&catalog(), sql, sql.len(), false);
     pos(&items, "ORDER BY");
     absent(&items, "FROM");
 }
@@ -1235,33 +1231,33 @@ fn torture_probes_window_query() {
 #[test]
 fn torture_probes_cte_of_cte() {
     let sql = "WITH base AS (SELECT user_id FROM events), agg AS (SELECT user_id FROM ba";
-    let items = complete(sql, sql.len(), &catalog(), false);
+    let items = complete(&catalog(), sql, sql.len(), false);
     pos(&items, "base");
     let sql = "WITH base AS (SELECT user_id, amount FROM events), \
                agg AS (SELECT user_id FROM base) SELECT agg.";
-    let items = complete(sql, sql.len(), &catalog(), false);
+    let items = complete(&catalog(), sql, sql.len(), false);
     assert_eq!(labels(&items), vec!["user_id"]);
 }
 
 #[test]
 fn torture_probes_subquery_positions() {
     let sql = "SELECT name FROM users WHERE user_id > (SELECT avg(amount) FROM ev";
-    let items = complete(sql, sql.len(), &catalog(), false);
+    let items = complete(&catalog(), sql, sql.len(), false);
     pos(&items, "events");
     let sql = "SELECT t. FROM (SELECT user_id FROM events) t";
-    let items = complete(sql, "SELECT t.".len(), &catalog(), false);
+    let items = complete(&catalog(), sql, "SELECT t.".len(), false);
     assert_eq!(labels(&items), vec!["user_id"]);
 }
 
 #[test]
 fn torture_probes_union_and_comments() {
     let sql = "SELECT ts FROM events UNION ALL ";
-    let items = complete(sql, sql.len(), &catalog(), false);
+    let items = complete(&catalog(), sql, sql.len(), false);
     assert_eq!(pos(&items, "SELECT"), 0, "{:?}", labels(&items));
     let sql = "-- roll|up\nSELECT ts FROM events";
     let caret = sql.find('|').unwrap();
     let clean = sql.replace('|', "");
-    assert!(complete(&clean, caret, &catalog(), false).is_empty());
+    assert!(complete(&catalog(), &clean, caret, false).is_empty());
 }
 
 #[test]
@@ -1291,13 +1287,24 @@ mod qualified {
         }
     }
 
+    /// The fixture's catalog with `databases` on it — the shape a
+    /// [`LangBundle`](crate::sql::LangBundle) puts there, set directly because these tests author
+    /// the databases rather than take an engine's.
+    fn with_databases(databases: Vec<DatabaseSym>) -> Catalog {
+        Catalog {
+            databases,
+            ..catalog()
+        }
+    }
+
     /// The fixture's catalog plus one live database, `pg`, with two enabled schemas. `orders`
     /// deliberately shares a bare name with nothing in the workspace and `users` deliberately
     /// does — the workspace fixture has a `users` table, which is what proves the two namespaces
     /// are answered apart.
     fn with_pg() -> Catalog {
-        catalog().with_databases(vec![DatabaseSym {
+        with_databases(vec![DatabaseSym {
             name: "pg".into(),
+            writable: false,
             schemas: vec![
                 SchemaSym {
                     name: "public".into(),
@@ -1318,15 +1325,16 @@ mod qualified {
 
     /// A second data source that has never answered: a name from the def, and nothing under it.
     fn unconnected() -> Catalog {
-        catalog().with_databases(vec![DatabaseSym {
+        with_databases(vec![DatabaseSym {
             name: "warehouse".into(),
+            writable: false,
             schemas: Vec::new(),
         }])
     }
 
     fn offer(sql_with_caret: &str, cat: &Catalog) -> Vec<Completion> {
         let caret = sql_with_caret.find('|').expect("caret marker");
-        complete(&sql_with_caret.replace('|', ""), caret, cat, false)
+        complete(cat, &sql_with_caret.replace('|', ""), caret, false)
     }
 
     #[test]
@@ -1403,8 +1411,9 @@ mod qualified {
     /// in-scope name wins a collision there.
     #[test]
     fn a_single_segment_prefers_a_relation_in_scope() {
-        let clashing = catalog().with_databases(vec![DatabaseSym {
+        let clashing = with_databases(vec![DatabaseSym {
             name: "users".into(),
+            writable: false,
             schemas: vec![SchemaSym {
                 name: "public".into(),
                 relations: vec![relation("orders", false)],
@@ -1459,8 +1468,9 @@ mod qualified {
     /// offered under the bare spelling that would be refused — both are offered qualified.
     #[test]
     fn a_name_two_shown_schemas_hold_is_offered_qualified() {
-        let both = catalog().with_databases(vec![DatabaseSym {
+        let both = with_databases(vec![DatabaseSym {
             name: "pg".into(),
+            writable: false,
             schemas: vec![
                 SchemaSym {
                     name: "public".into(),
@@ -1478,12 +1488,150 @@ mod qualified {
         absent(&items, "sessions");
     }
 
-    /// The server's own spelling, quoted the way a statement has to say it — `quote_verbatim`'s
+    /// The server's own spelling, quoted the way a statement has to say it — [`SessionName`]'s
     /// rule reaching the bare offer as well as the qualified one.
     #[test]
     fn a_remote_relation_that_needs_quoting_gets_it() {
         let items = offer("SELECT * FROM |", &with_pg());
         let p = pos(&items, "Mixed Case");
         assert_eq!(items[p].insert, "\"Mixed Case\"");
+    }
+
+    /// **A read position offers a remote relation bare**, and completes it to the bare spelling —
+    /// because qualify resolves the bare name across the connected databases, so what is offered
+    /// is what typing it reaches.
+    #[test]
+    fn a_read_target_offers_a_remote_relation_bare() {
+        let items = offer("SELECT * FROM ord|", &with_pg());
+        assert_eq!(items[pos(&items, "orders")].insert, "orders");
+    }
+}
+
+/// **Position-conditional completion**: what is offered is what *resolves at the caret* under the
+/// rules execution itself applies (§7). The candidate set is the arm's, read forwards — a write
+/// target that dispatch would refuse is never offered, and a create target resolves to nothing at
+/// all.
+#[cfg(test)]
+mod positions {
+    use super::*;
+    use crate::sql::symbols::{DatabaseSym, RelationSym, SchemaSym};
+
+    fn relation(name: &str) -> RelationSym {
+        RelationSym {
+            name: name.into(),
+            view: false,
+        }
+    }
+
+    /// `events` and `spenders` are the fixture's own; `scratch` is a table Strata owns (the only
+    /// kind an `INSERT` may target). `open_pg` accepts writes and `locked_pg` does not.
+    fn catalog_with(databases: Vec<DatabaseSym>) -> Catalog {
+        fn col(name: &str) -> ColumnInfo {
+            column_info(&Field::new(name, DataType::Int64, true))
+        }
+        let cols = [col("id")];
+        Catalog {
+            databases,
+            ..Catalog::build(
+                [("events", &cols[..], false), ("scratch", &cols[..], true)],
+                [("spenders", &cols[..])],
+                bundle(Arc::default()),
+                "generic".into(),
+            )
+        }
+    }
+
+    fn database(name: &str, writable: bool) -> DatabaseSym {
+        DatabaseSym {
+            name: name.into(),
+            writable,
+            schemas: vec![SchemaSym {
+                name: "public".into(),
+                relations: vec![relation(&format!("{name}_rows"))],
+            }],
+        }
+    }
+
+    fn offer(sql_with_caret: &str, cat: &Catalog) -> Vec<Completion> {
+        let caret = sql_with_caret.find('|').expect("caret marker");
+        complete(cat, &sql_with_caret.replace('|', ""), caret, false)
+    }
+
+    fn both() -> Catalog {
+        catalog_with(vec![
+            database("open_pg", true),
+            database("locked_pg", false),
+        ])
+    }
+
+    /// **A create target is never resolved remotely** — `CREATE TABLE orders` names a relation
+    /// that does not exist yet, so there is nothing to resolve *to*, and offering a server's
+    /// relation there would read a plainly local intent as "make it on the server".
+    #[test]
+    fn a_create_target_offers_no_remote_candidate() {
+        for sql in ["CREATE TABLE |", "CREATE VIEW |"] {
+            let items = offer(sql, &both());
+            absent(&items, "open_pg_rows");
+            absent(&items, "locked_pg_rows");
+            absent(&items, "open_pg");
+        }
+    }
+
+    /// **An `UPDATE` target is remote-only**: a workspace relation is refused by the arm
+    /// (`arms::remote`'s workspace-DML sentence), so offering one would bait the user into a
+    /// statement the engine has already decided against.
+    #[test]
+    fn an_update_target_offers_no_workspace_table() {
+        let items = offer("UPDATE |", &both());
+        absent(&items, "events");
+        absent(&items, "scratch");
+        absent(&items, "spenders");
+        pos(&items, "open_pg_rows");
+    }
+
+    /// The same rule seen through `DELETE`'s own `FROM`, which is a write target rather than a
+    /// read list — the one position where that keyword does not mean what it usually means.
+    #[test]
+    fn a_delete_target_offers_no_workspace_table() {
+        let items = offer("DELETE FROM |", &both());
+        absent(&items, "events");
+        pos(&items, "open_pg_rows");
+    }
+
+    /// **A read-only connection is offered at no write position** — the same fence the arm
+    /// applies (`SourceDef::read_only`), read forwards.
+    #[test]
+    fn a_read_only_database_is_never_a_write_target() {
+        for sql in ["UPDATE |", "DELETE FROM |", "INSERT INTO |"] {
+            absent(&offer(sql, &both()), "locked_pg_rows");
+        }
+        pos(&offer("SELECT * FROM |", &both()), "locked_pg_rows");
+    }
+
+    /// **An `INSERT` target is the internal tables plus the writable remote relations** — the two
+    /// halves `arms::tables` and `arms::remote` between them accept, and nothing else.
+    #[test]
+    fn an_insert_target_offers_internal_tables_and_writable_relations() {
+        let items = offer("INSERT INTO |", &both());
+        pos(&items, "scratch");
+        pos(&items, "open_pg_rows");
+        absent(&items, "events");
+        absent(&items, "spenders");
+    }
+
+    /// **A def whose registration failed is still offered by name.** The language catalog's rows
+    /// are the *store's* — what the user wrote down is what the editor knows about — so a table
+    /// registration learned nothing about (no columns) still completes as a relation. Its failure
+    /// has its own surface; the editor is not it.
+    #[test]
+    fn a_def_that_failed_to_register_is_still_offered() {
+        let failed = Catalog::build(
+            [("unreachable", &[][..], false)],
+            [],
+            bundle(Arc::default()),
+            "generic".into(),
+        );
+        let items = offer("SELECT * FROM unre|", &failed);
+        pos(&items, "unreachable");
     }
 }

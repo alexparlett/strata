@@ -312,6 +312,7 @@ async fn a_database_source_registers_a_federated_catalog() {
     unqualified_names(&engine, port).await;
     remote_writes(&engine, port).await;
     remote_statements(&engine, port).await;
+    analyze_agrees_with_run(&engine, port).await;
     remote_source_into_a_workspace_table(&engine, &fixtures).await;
     cross_source_views(port, &fixtures).await;
     reconnect_and_disconnect(&engine, port).await;
@@ -425,15 +426,15 @@ fn schemas_of(engine: &Engine, name: &str) -> Vec<SchemaListingView> {
 ///
 /// The offer is unit-tested against a hand-built listing next door; what only a server can settle
 /// is that the two halves agree — that the names `Sources::database_syms` carries are the names
-/// the catalog actually resolves, rendered the way [`sql::qualified`] renders them. Which is also
+/// the catalog actually resolves, rendered the way [`sql::SessionName::qualified`] renders them. Which is also
 /// the tree gestures' half: they wrap this same address in `SELECT *` / `CREATE VIEW`.
 ///
 /// The offers are compared **sorted**, because what only a server can pin is *which* names the
 /// offer holds; their ranking is `complete/tests.rs`'s and needs no server.
 async fn qualified_offer(engine: &Engine) {
-    let catalog = sql::Catalog::default().with_databases(engine.sources().database_syms());
+    let catalog = sql::Catalog::build([], [], engine.lang().bundle(), String::new());
     let offer = |sql: &str| {
-        let mut labels = sql::complete(sql, sql.len(), &catalog, false)
+        let mut labels = sql::complete(&catalog, sql, sql.len(), false)
             .into_iter()
             .map(|c| c.label)
             .collect::<Vec<_>>();
@@ -461,7 +462,7 @@ async fn qualified_offer(engine: &Engine) {
         "a remote relation's columns are an introspection, so the chain stops here"
     );
 
-    let address = sql::qualified([CATALOG, "public", "orders"]);
+    let address = sql::SessionName::qualified([CATALOG, "public", "orders"]).to_string();
     assert_eq!(
         rows(
             engine,
@@ -478,7 +479,7 @@ async fn qualified_offer(engine: &Engine) {
         "the address the tree's gestures compose is one the engine runs"
     );
 
-    let not_enabled = sql::qualified([CATALOG, "analytics", "sessions"]);
+    let not_enabled = sql::SessionName::qualified([CATALOG, "analytics", "sessions"]).to_string();
     assert_eq!(
         rows(
             engine,
@@ -1553,6 +1554,76 @@ async fn remote_statements(engine: &Engine, port: u16) {
         panic!("the toggle is what allows the statement, and it is off again");
     };
     assert!(why.to_string().contains("read-only"), "{why}");
+}
+
+/// **The no-divergence property**, on the statements only a server can settle: for every
+/// statement this suite executes successfully, `Lang::analyze` draws no error.
+///
+/// The bug this exists to catch shipped (DB-11): the editor red-squiggled a statement Run
+/// performed, because a rung of the mid-edit ladder asked the *workspace* catalog what the
+/// statement pass asked the connected databases. So the corpus is deliberately the shapes that
+/// only resolve through a data source — a bare remote read, a bare remote **write target**, a
+/// qualified DML, and the statements dispatched to the server as text — and each one is analyzed
+/// **before** it is run, which is the order the editor sees them in.
+///
+/// A phase, not a test of its own, for the reason every phase here is one: a second
+/// `#[tokio::test]` would race this one for the single container worker.
+async fn analyze_agrees_with_run(engine: &Engine, port: u16) {
+    let conn = writable(port, CATALOG, &["public"]);
+    engine
+        .sources()
+        .connect(conn)
+        .await
+        .expect("opted in to writes");
+
+    let corpus = [
+        "SELECT * FROM orders".to_string(),
+        "SELECT id, total FROM big_orders".to_string(),
+        format!("SELECT count(*) FROM {CATALOG}.public.orders"),
+        "SELECT o.id, c.name FROM orders o JOIN customers c ON o.customer = c.id".to_string(),
+        "SELECT payload->>'type' FROM events".to_string(),
+        "EXPLAIN SELECT * FROM orders".to_string(),
+        format!(
+            "CREATE TABLE {CATALOG}.public.divergence AS \
+             SELECT id, total FROM {CATALOG}.public.orders"
+        ),
+        format!(
+            "INSERT INTO {CATALOG}.public.divergence \
+             SELECT id, total FROM {CATALOG}.public.orders"
+        ),
+        "UPDATE divergence SET total = total".to_string(),
+        "DELETE FROM divergence WHERE total < 0".to_string(),
+        format!(
+            "CREATE VIEW {CATALOG}.public.divergence_view AS \
+             SELECT id FROM {CATALOG}.public.divergence"
+        ),
+        format!("DROP VIEW {CATALOG}.public.divergence_view"),
+        format!("DROP TABLE {CATALOG}.public.divergence"),
+    ];
+
+    for (i, sql) in corpus.iter().enumerate() {
+        let diagnostics = engine.lang().analyze(sql.clone()).await;
+        let errors: Vec<&str> = diagnostics
+            .iter()
+            .filter(|d| d.is_error())
+            .map(|d| d.message.as_str())
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "the editor squiggles a statement Run performs: {sql:?}: {errors:?}"
+        );
+        engine
+            .ws(WsId(1))
+            .run(RunTag(300 + i as u128), sql.clone(), 200)
+            .await
+            .unwrap_or_else(|e| panic!("the corpus entry must run — fix the corpus: {sql:?}: {e}"));
+    }
+
+    engine
+        .sources()
+        .connect(source(port, CATALOG, &["public"]))
+        .await
+        .expect("the data source back to read-only");
 }
 
 /// **The clause Strata does not model reaches the server intact** — the whole claim of splicing

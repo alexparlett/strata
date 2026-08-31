@@ -373,6 +373,43 @@ pub trait DataSource: Send + Sync + fmt::Debug + 'static {
     }
 }
 
+/// An identifier the engine composes into a statement bound for a **source**, spelled by that
+/// source's own rule ([`SourceCatalog::server_ident`]).
+///
+/// The fourth of the crate's four identifier renderers, and the only one whose rule is not SQL's
+/// own or DataFusion's — a `PostgreSQL` server reserves words sqlparser does not, and a MySQL one
+/// quotes with backticks. It is a type for the same reason the other three are
+/// ([`sql::name`](crate::sql::name)): the four are silently wrong when confused, and a signature
+/// naming this one cannot be handed a workspace name by mistake. It lives here rather than beside
+/// them because `sources` and `sql` are peers inside this crate and neither may import the other
+/// (`boundaries.rs`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServerIdent(String);
+
+impl ServerIdent {
+    /// SQL's own rule: double-quoted unconditionally, embedded quotes doubled — the default
+    /// [`SourceCatalog::server_ident`] supplies.
+    pub fn standard(name: &str) -> Self {
+        ServerIdent(format!("\"{}\"", name.replace('"', "\"\"")))
+    }
+
+    /// A source stating its own spelling of `name` — the escape the other rules refuse, and the
+    /// reason this is a type rather than a fifth free function.
+    pub fn spelled(rendered: String) -> Self {
+        ServerIdent(rendered)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ServerIdent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// A connected source that answers with a catalog of relations.
 ///
 /// Three methods have no default, because no catalog can be read without them; the rest default
@@ -423,15 +460,15 @@ pub trait SourceCatalog: Send + Sync + fmt::Debug + 'static {
 
     /// Returns `name` as a statement the source parses may say it.
     ///
-    /// The default is SQL's own rule, double-quoted unconditionally with embedded quotes doubled;
-    /// override it for a source that spells identifiers another way. Quoted always rather than
-    /// only where it is needed, because the reserved words are the source's and no local table
-    /// knows them.
+    /// The default is SQL's own rule, [`ServerIdent::standard`] — double-quoted unconditionally
+    /// with embedded quotes doubled; override it (through [`ServerIdent::spelled`]) for a source
+    /// that spells identifiers another way. Quoted always rather than only where it is needed,
+    /// because the reserved words are the source's and no local table knows them.
     ///
     /// This is the rule for identifiers the engine *composes*. What a user typed travels to the
     /// source exactly as typed, for the source to judge.
-    fn server_ident(&self, name: &str) -> String {
-        format!("\"{}\"", name.replace('"', "\"\""))
+    fn server_ident(&self, name: &str) -> ServerIdent {
+        ServerIdent::standard(name)
     }
 
     /// Rewords a failure the source reported, or returns `None` to keep the source's own answer.

@@ -1166,6 +1166,7 @@ mod tests {
                     status: Some(RegStatus::Ready),
                     detail: SourceDetail::Catalog {
                         catalog: "pg".into(),
+                        writable: false,
                         schemas: Vec::new(),
                     },
                 },

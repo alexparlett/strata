@@ -160,7 +160,8 @@ mod tests {
             "Lang",
             include_str!("lang.rs"),
             &[
-                "validate",
+                "analyze",
+                "bundle",
                 "policy_verdicts",
                 "column_type",
                 "functions",

@@ -9,7 +9,7 @@
 //!
 //! Pure functions over strings and picks — no Freya types, so the golden tests read as SQL.
 
-use strata_engine::export::quote_col;
+use strata_engine::sql::ResultColumn;
 use strata_model::ChartRole;
 
 /// The aggregate a measure row offers — rendered to DataFusion's own function names.
@@ -164,11 +164,11 @@ impl ShapeForm {
 /// **Subquery form, not a CTE** — `FROM (…) AS q` — so a run whose SQL already opens with
 /// `WITH` nests instead of colliding. The inner SQL sits on its own lines, which is also
 /// what keeps a trailing line comment from swallowing the closing paren. A settled rows
-/// result is one statement by construction (`sql::validate` refuses a multi-statement Run
+/// result is one statement by construction (`Workspace::run` refuses a multi-statement Run
 /// outright), so the only terminator to shed is a trailing semicolon.
 ///
 /// **Ordinal `GROUP BY`**, so a `date_bin` expression is stated once; idents through
-/// [`quote_col`], which quotes a result column exactly as the user's query produced it.
+/// [`ResultColumn`], which quotes a result column exactly as the user's query produced it.
 pub fn compose(form: &ShapeForm, sql: &str) -> Option<String> {
     if !form.has_output() {
         return None;
@@ -179,7 +179,7 @@ pub fn compose(form: &ShapeForm, sql: &str) -> Option<String> {
     let mut named: Vec<String> = Vec::new();
     let mut group_count = 0usize;
     for group in &form.groups {
-        let col = quote_col(&group.column);
+        let col = ResultColumn::of(&group.column).to_string();
         match group.by {
             GroupBy::Off => {}
             GroupBy::Exact => {
@@ -210,15 +210,15 @@ pub fn compose(form: &ShapeForm, sql: &str) -> Option<String> {
             select.push(format!(
                 "{}({}) AS {}",
                 agg.func(),
-                quote_col(&measure.column),
-                quote_col(alias)
+                ResultColumn::of(&measure.column),
+                ResultColumn::of(alias)
             ));
             measure_count += 1;
         }
     }
     if form.count_rows {
         let alias = unique("rows".to_string(), &mut named);
-        select.push(format!("count(*) AS {}", quote_col(alias)));
+        select.push(format!("count(*) AS {}", ResultColumn::of(alias)));
         measure_count += 1;
     }
 

@@ -1,6 +1,6 @@
 //! What the engine does with one statement.
 //!
-//! [`pipeline`] turns SQL text into an accepted statement; [`classify`] says what a parsed
+//! `pipeline` turns SQL text into an accepted statement; [`classify`] says what a parsed
 //! statement is. Who may perform it is [`crate::policy`], which this module maps its own forms
 //! onto through [`Form::family`].
 //!
@@ -15,13 +15,13 @@ pub mod classify;
 pub(crate) mod copy_job;
 pub mod ctx;
 pub mod mechanism;
-pub mod pipeline;
+pub(crate) mod pipeline;
 pub mod report;
 pub mod target;
 
 pub use classify::{classify_stmt, Classified, Fault, Form, StmtKind};
 pub use ctx::{DataRoot, StmtCtx};
 pub use mechanism::{mechanism, Mechanism};
-pub use pipeline::{accept, Admitted, Parsed, Pipeline, PolicyRefusal, Qualified, Reason, Refusal};
+pub use pipeline::{PolicyRefusal, Reason, Refusal};
 pub use report::{StatementOutcome, StatementReport, StoreEffect};
 pub use target::{resolve_target, Remote, Target};

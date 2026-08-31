@@ -49,7 +49,7 @@ use strata_model::{check_catalog_name, ColumnInfo, SourceDef};
 
 use self::providers::SourceCatalogProvider;
 use self::source::{
-    Listing, Registrants, Relation, SourceCatalog, SourceInfo, SourceMode, Sourced,
+    Listing, Registrants, Relation, ServerIdent, SourceCatalog, SourceInfo, SourceMode, Sourced,
 };
 use super::connect::{self, Registration};
 use super::fold_ident;
@@ -441,6 +441,11 @@ pub enum SourceDetail {
         /// Taken from the def, so a data source that has never answered still reports the name a
         /// query would have to write.
         catalog: String,
+        /// Whether a write may target a relation in it — the def's own
+        /// [`read_only`](SourceDef::read_only), inverted, and the same answer
+        /// [`writable`] gives an arm. From the def, like the name: a connection nothing has
+        /// reached still says what it would accept.
+        writable: bool,
         /// Its namespaces, scoped and tagged against [`SourceDef::schemas`]. Empty while the
         /// data source is not live.
         schemas: Vec<SchemaListingView>,
@@ -516,6 +521,7 @@ pub(crate) fn snapshot(
             let detail = match registrants.mode(&def.kind) {
                 Some(SourceMode::Catalog) => SourceDetail::Catalog {
                     catalog: name.clone(),
+                    writable: !def.read_only,
                     schemas: live
                         .listing(&name)
                         .map(|listing| scoped(&listing, def))
@@ -787,10 +793,10 @@ pub(crate) fn source_facts(sources: &Live, catalog: &str) -> TargetFacts {
 /// The standard spelling for a catalog no source registered: this is reached only from inside a
 /// statement already dispatched to a live one, and a fallback that quoted nothing would compose a
 /// statement rather than refuse to.
-pub(crate) fn server_ident(sources: &Live, catalog: &str, name: &str) -> String {
+pub(crate) fn server_ident(sources: &Live, catalog: &str, name: &str) -> ServerIdent {
     match sources.at(catalog) {
         Some(live) => live.source.server_ident(name),
-        None => format!("\"{}\"", name.replace('"', "\"\"")),
+        None => ServerIdent::standard(name),
     }
 }
 
@@ -1031,7 +1037,10 @@ mod snapshot_tests {
             TestDoc::BADGE,
             "its kind's own word, asked of the kind"
         );
-        let SourceDetail::Catalog { catalog, schemas } = &sales.detail else {
+        let SourceDetail::Catalog {
+            catalog, schemas, ..
+        } = &sales.detail
+        else {
             panic!("a source registers a catalog");
         };
         assert_eq!(catalog, "sales", "addressed by its own name");
@@ -1045,7 +1054,10 @@ mod snapshot_tests {
             "carrying the refusal, naming what it could not find: {:?}",
             void.problem()
         );
-        let SourceDetail::Catalog { catalog, schemas } = &void.detail else {
+        let SourceDetail::Catalog {
+            catalog, schemas, ..
+        } = &void.detail
+        else {
             panic!("a refused source is still a source");
         };
         assert_eq!(catalog, "void", "and still says what a query would write");

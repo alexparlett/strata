@@ -51,6 +51,14 @@ pub enum Clause {
     DropView,
     DropFunction,
     Insert,
+    /// `UPDATE <relation>` — the statement's write target. Its own clause because the offer
+    /// there is not a FROM list: a workspace relation is refused by the arm
+    /// (`arms::remote::workspace_dml`), so only a **writable** connected database's relations
+    /// resolve at that caret.
+    Update,
+    /// `DELETE FROM <relation>` — the same write target behind a `FROM` that is not a read
+    /// position. [`refine_statement_clause`] is what tells the two apart, by position.
+    Delete,
     Copy,
     /// `SET` / `RESET` — one clause for both, because both operate on the same
     /// config-key vocabulary. The key/value positions are decided in
@@ -236,6 +244,8 @@ fn clause_of(word: &str) -> Clause {
         "CREATE" => Clause::Create,
         "DROP" => Clause::Drop,
         "INSERT" => Clause::Insert,
+        "UPDATE" => Clause::Update,
+        "DELETE" => Clause::Delete,
         "COPY" => Clause::Copy,
         "SET" | "RESET" => Clause::SetOption,
         "PREPARE" => Clause::Prepare,
@@ -259,6 +269,8 @@ fn leads_statement_only(clause: Clause) -> bool {
         | Clause::Create
         | Clause::Drop
         | Clause::Insert
+        | Clause::Update
+        | Clause::Delete
         | Clause::Copy
         | Clause::SetOption
         | Clause::Prepare => true,
@@ -292,12 +304,13 @@ fn leads_statement_only(clause: Clause) -> bool {
 /// [`Clause::Create`]/[`Clause::Drop`], whose role is always `Continuation` — the
 /// object word comes next. `stmt` starts at the lead keyword (the position-0 guard
 /// is what puts it there).
-pub(crate) fn refine_statement_clause(stmt: &[Tok], clause: Clause) -> Clause {
+pub(crate) fn refine_statement_clause(stmt: &[Tok], gov: Option<usize>, clause: Clause) -> Clause {
     let word = |i: usize, w: &str| {
         stmt.get(i)
             .is_some_and(|t| t.kind == TokKind::Keyword && t.eq_ci(w))
     };
     match clause {
+        Clause::From if gov == Some(1) && word(0, "DELETE") => Clause::Delete,
         Clause::Create => {
             let mut i = 1;
             if word(i, "OR") && word(i + 1, "REPLACE") {
@@ -359,7 +372,7 @@ fn item_complete(prev: Option<&Tok>, prev2: Option<&Tok>) -> bool {
         TokKind::Keyword => {
             (is_name_like(t) && !OPERAND_EXPECTING.iter().any(|w| t.eq_ci(w))) || t.eq_ci("END")
         }
-        _ => false,
+        TokKind::Op => false,
     }
 }
 
@@ -441,6 +454,20 @@ fn role_at(
                 } else {
                     Role::Binding
                 }
+            } else {
+                Role::Continuation
+            }
+        }
+        Clause::Update => {
+            if prev_kw(&["UPDATE"]) {
+                Role::Operand
+            } else {
+                Role::Continuation
+            }
+        }
+        Clause::Delete => {
+            if prev_kw(&["FROM"]) {
+                Role::Operand
             } else {
                 Role::Continuation
             }
@@ -994,7 +1021,7 @@ pub fn analyze_caret(sql: &str, caret: usize, toks: &[Tok]) -> CaretAnalysis {
     let governing = gov_idx
         .map(|i| clause_of(&branch[i].text))
         .unwrap_or(Clause::Unknown);
-    let governing = refine_statement_clause(&branch, governing);
+    let governing = refine_statement_clause(&branch, gov_idx, governing);
 
     let column_list = match governing {
         Clause::Insert => insert_column_list(&stmt, caret),

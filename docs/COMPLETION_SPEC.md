@@ -30,6 +30,15 @@ completion detail is the surviving surface.
 5. **Mid-edit text is a valid prefix, not a mistake.** Guards and suppressions treat the
    draft as something being *composed*: quiet inside strings/comments/dangling decimals,
    no premature unresolved-column squiggles before a FROM exists (see §8).
+6. **The offer is what resolves at the caret** (EA-17). Not one flat pool filtered by
+   taste: the candidate rules at a position are *execution's own*, read forwards. A
+   create target is never resolved remotely, so it offers no remote candidate; an
+   `INSERT` target offers internal tables and writable remote relations; `UPDATE`/`DELETE`
+   targets are remote-only; a read position offers everything, **including remote
+   relations bare**, because qualify resolves bare names across the connected databases —
+   and a bare offer qualify would refuse as ambiguous stays offered, the refusal naming
+   the candidates being the better teaching surface. This is the no-divergence invariant
+   (`sql::service`) applied to the offer: what the popup promises is what Run performs.
 
 ## 2. The position model — clause × role
 
@@ -45,7 +54,7 @@ Clause  = Start | Restart
         | OrderBy | Limit | Offset | Describe | Execute
         | Create | CreateTable | CreateView | CreateExternal | CreateFunction
         | Drop | DropTable | DropView | DropFunction
-        | Insert | Copy | SetOption | Prepare | Unknown
+        | Insert | Update | Delete | Copy | SetOption | Prepare | Unknown
 Role    = Operand        — an item is being started
         | Continuation   — the item just written is complete
         | Binding        — a fresh name is being invented (`AS |`, `CREATE TABLE |`,
@@ -57,13 +66,16 @@ Role    = Operand        — an item is being started
 **Clause** comes from the nearest clause keyword scanning back from the caret
 (`last_clause` — derived from `clause_of`, so the two can't drift), within the
 caret's statement (split on top-level `;`). The statement leads (`CREATE`, `DROP`,
-`INSERT`, `COPY`, `SET`/`RESET`, `PREPARE`, `EXECUTE`/`DEALLOCATE`) only govern from
+`INSERT`, `UPDATE`, `DELETE`, `COPY`, `SET`/`RESET`, `PREPARE`, `EXECUTE`/`DEALLOCATE`) only govern from
 **position 0** (`leads_statement_only`) — sqlparser classes every dictionary word as
 a keyword, so without the guard a column named `set` or `copy` would govern its own
 SELECT list. `Create`/`Drop` are refined by the statement's head keywords
 (`refine_statement_clause`: `CREATE [OR REPLACE] TABLE|VIEW|FUNCTION`,
 `CREATE [OR REPLACE] EXTERNAL TABLE`, `DROP TABLE|VIEW|FUNCTION`); unrefined they
 stay `Create`/`Drop`, whose role is always Continuation — the object word comes next.
+The same refinement is what tells `DELETE FROM |` from a read list: it takes the
+governing keyword's **index**, so only the `FROM` a `DELETE` leads with becomes
+`Delete` — a subquery's `FROM` inside the same statement stays `From`.
 
 **Start vs Restart**: a truly blank statement is `Start` and offers query leads
 **and** statement leads. The *restart* positions are `Restart` — a fresh **query**
@@ -190,14 +202,15 @@ the rank pipeline, `tests.rs` = the suite):
 | `SetOption` operand, value (`set_key`) | the key's kind vocabulary: `Bool` ⇒ `true`/`false`, `Enum` ⇒ its options, else nothing — verbatim lowercase, no trailing space |
 | `DropTable` operand | tables and **not** views (`DROP VIEW` is the other statement) |
 | `DropView` operand | views only, for the mirror reason |
-| `Insert` operand | at the target: tables with `internal: true` only — the same answer `Catalog::is_internal` gives dispatch, read from the store; in the column list: the target's own columns (see the column-list rule below), offered only when the target is one an INSERT may reach |
+| `Insert` operand | at the target: **the write-target pool** — tables with `internal: true` (the same answer `Catalog::is_internal` gives dispatch, read from the store) plus the relations of every **writable** connected database; in the column list: the target's own columns (see the column-list rule below), offered only when the target is one an INSERT may reach |
+| `Update`/`Delete` operand | the write-target pool **without** the workspace half: a workspace relation is refused by the arm, so offering one would bait a statement the engine has already decided against |
 | `Copy` operand, in `PARTITIONED BY (…)` | the source's columns — the catalog's for a named table, the scraped projection for a `COPY (SELECT …)` source (the column-list rule below) |
 | `CreateExternal` operand (`STORED AS \|`) | the engine's registered formats as keyword items, uppercased, in registration order |
 | `DropFunction` operand | function syms with `created: true` — bare-name insert, detail `session function` |
 | `CreateFunction` operand (the body, after `RETURN`) | the declared argument names (scraped from the token stream, detail `argument`), then functions — **never** catalog columns or relations (the body may reference only its arguments) |
 | `Execute` operand | the session's prepared names |
 | `Limit`/`Offset` operand | **nothing** (numbers) |
-| any `Binding` position | **nothing** (a name is being invented) |
+| any `Binding` position | **nothing** (a name is being invented) — which is what a **create target** is, so `CREATE TABLE \|` offers no remote candidate: the name does not exist yet, and there is nothing to resolve it to |
 | any expression operand | in-scope columns (0) → select-aliases (1, **only** in GROUP BY/ORDER BY/HAVING/QUALIFY — where SQL allows them) → functions (2) → relations-as-qualifiers + core keywords (3) |
 | any continuation | `continuation_keywords(clause)` in curated order (0): clause-internal ops + **the ladder strictly after the clause** — never backwards; the statement clauses carry their own short lists (`CREATE \|` the object words, `CREATE EXTERNAL TABLE t \|` its clauses, `COPY t \|` `TO` first, drop statements nothing) |
 | `Dot(…, rel)` (workspace) | that relation's columns only |
@@ -310,14 +323,16 @@ Per kind, uniformly:
 - **Identifiers** (tables/views/columns/CTEs/remote names): the name exactly;
   double-quoted only when not a plain lowercase ident **or** when colliding with a
   *reserved* word (`order` → `"order"`; merely-known keywords like `name`, `status`,
-  `plain` stay bare). The rule is `sql::ident` — `needs_quoting` + `quote_verbatim`,
-  which DB-06 lifted out of this module so the data-sources tree's gestures compose
-  their `FROM` through the same function, and `qualified` renders a dotted name
-  **segment by segment** through it. It is deliberately *not* `engine::quote_ident`,
-  which is fold-preserving (it renders `DailySales` as `dailysales`, the identity a
-  workspace def is registered under) — a name whose spelling belongs to a server needs
-  the case-preserving one. Pick by whose identity the name is; `export::quote_col`,
-  which quotes unconditionally, is a third rule for a third reason.
+  `plain` stay bare). The rule is `sql::name::SessionName`, which DB-06 lifted out of
+  this module so the data-sources tree's gestures compose their `FROM` through the
+  same rule, and `SessionName::qualified` renders a dotted name **segment by segment**
+  through it. It is deliberately *not* `sql::WorkspaceName`, which is fold-preserving
+  (it renders `DailySales` as `dailysales`, the identity a workspace def is registered
+  under) — a name whose spelling belongs to a server needs the case-preserving one.
+  Pick by whose identity the name is: EA-17 made the four rules four **types**
+  (`WorkspaceName` · `SessionName` · `ResultColumn` · `ServerIdent`), so a helper that
+  composes a statement names the rule it needs in its signature and the wrong one does
+  not type-check.
 - **Keywords**: canonical UPPER + **trailing space** (a keyword is always followed by
   something) — skipped when the buffer already has whitespace after the span.
 - **Functions**: `name(` — caret inside the parens.
@@ -408,6 +423,30 @@ What is left is genuinely proportional to the offer:
 
 ## 8. Editor integration (strata-code-editor)
 
+**The wiring, since EA-17.** The language service has two doors and nothing else:
+`Lang::analyze(sql)` (async, the squiggles and the MCP validate tool) and
+`sql::complete(&catalog, buffer, caret, manual)` (pure, sync, engine-free). What
+`complete` reads is a `Catalog` snapshot the consumer **holds**, assembled once by the
+one constructor:
+
+```rust
+sql::Catalog::build(store_tables, store_views, engine.lang().bundle(), dialect)
+```
+
+Three inputs, from the three places that own them. `LangBundle` is the engine's own
+half — functions, prepared statements, formats, database sources and the
+`CatalogGen` they were read at — taken in **one** lock-read, because five separate
+calls could describe five different instants. Table and view rows are the **store's**
+(a def whose registration failed is still offered by name — what the user wrote down
+is what the editor knows about, and the failure has its own surface), and the dialect
+is the consumer's own setting, never the bundle's. The editor's tab re-assembles when
+`bundle.generation` moves; nothing else invalidates it.
+
+**An async completion tier is deferred, not closed.** `complete` being pure over a
+snapshot is exactly what lets one layer *above* it later — debounced, feeding a richer
+snapshot or appending late results, with a remote relation's columns (§10) as the
+natural first case. The sync core stays the answer a keystroke gets.
+
 The editor owns the **generic** machinery; `CompletionItem/Kind/Request` are its own
 types (no strata-core dependency), the provider is a component prop
 (`on_completions: Callback<CompletionRequest, Vec<CompletionItem>>`) wired at the mount
@@ -491,7 +530,7 @@ is the half doing the real work. Neither is reached by rewriting the popup.
   collector (`refs_in`) share the grammar tables and agree on depth/literal policy, but
   remain separate walks — a single parameterised scraper is a clean refactor deferred
   until it earns its keep.
-- The no-FROM grace in `validate.rs` keeps column references quiet before a FROM
+- The no-FROM grace in the service's name tier keeps column references quiet before a FROM
   exists (depth-0-scoped, so CTE drafts keep it) — mid-edit text is composition, not
   error (§1), even though the native resolver reports every unknown name once a scope
   exists.

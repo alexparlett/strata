@@ -1,181 +1,97 @@
-//! Validation sweep: the validator against a wide corpus of
+//! Validation sweep: the language service's `analyze` against a wide corpus of
 //! query shapes over a realistic multi-table catalog.
 //!
 //! Four properties:
 //! 1. **No false positives** — every valid query produces zero diagnostics, with a
-//!    guard that each corpus entry genuinely plans (so the corpus can't rot).
+//!    guard that each corpus entry genuinely *runs* (so the corpus can't rot). That guard is
+//!    also the **no-divergence invariant** in its plainest form: a statement `Workspace::run`
+//!    performs draws no error squiggle.
 //! 2. **Engine agreement on faults** — every bad-name query produces exactly the
-//!    expected spans, and the real planner rejects it too (the resolver never
+//!    expected spans, and a real Run rejects it too (the resolver never
 //!    invents an error the engine wouldn't).
 //! 3. **Mid-edit tolerance** — half-written drafts stay quiet.
-//! 4. **Prefix torture** — every prefix of every valid query validates without
+//! 4. **Prefix torture** — every prefix of every valid query analyzes without
 //!    panicking, and every emitted span is a well-formed slice of the buffer.
+//!
+//! Entered through the public door, `Engine::lang().analyze` — the same call the editor and the
+//! MCP validate tool make. The pipeline behind it is `pub(crate)`, which is the point: there is
+//! one way in, so a test cannot assemble a reading the app cannot.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::{env, fs, process};
 
-use datafusion::arrow::array::{
-    ArrayRef, Date32Array, Float64Array, Int64Array, ListBuilder, StringArray, StringBuilder,
-    StructArray,
-};
-use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema};
-use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::prelude::{SessionConfig, SessionContext};
-use strata_engine::sql::{validate, FunctionCatalog};
-use strata_engine::statements::pipeline::Pipeline;
-use strata_engine::{Capability, CapabilityPolicyProvider};
+use strata_engine::{Engine, MemTableStore, RunTag, WsId};
 use strata_model::Diagnostic;
 
 /// A catalog shaped like a real project: plain tables, a keyword-named table,
-/// a struct + list table, and a view.
-async fn fixture() -> SessionContext {
-    let mut config = SessionConfig::new().with_information_schema(true);
-    config.options_mut().sql_parser.collect_spans = true;
-    let ctx = SessionContext::new_with_config(config);
-
-    let t = RecordBatch::try_new(
-        Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int64, false),
-            Field::new("name", DataType::Utf8, true),
-        ])),
-        vec![
-            Arc::new(Int64Array::from(vec![1_i64, 2])),
-            Arc::new(StringArray::from(vec!["a", "b"])),
-        ],
-    )
-    .unwrap();
-    ctx.register_batch("t", t).unwrap();
-
-    let users = RecordBatch::try_new(
-        Arc::new(Schema::new(vec![
-            Field::new("user_id", DataType::Int64, false),
-            Field::new("name", DataType::Utf8, true),
-            Field::new("email", DataType::Utf8, true),
-            Field::new("created_at", DataType::Date32, true),
-        ])),
-        vec![
-            Arc::new(Int64Array::from(vec![1_i64, 2])),
-            Arc::new(StringArray::from(vec!["ann", "bob"])),
-            Arc::new(StringArray::from(vec!["a@x.io", "b@x.io"])),
-            Arc::new(Date32Array::from(vec![19000, 19100])),
-        ],
-    )
-    .unwrap();
-    ctx.register_batch("users", users).unwrap();
-
-    let orders = RecordBatch::try_new(
-        Arc::new(Schema::new(vec![
-            Field::new("order_id", DataType::Int64, false),
-            Field::new("user_id", DataType::Int64, false),
-            Field::new("amount", DataType::Float64, true),
-            Field::new("status", DataType::Utf8, true),
-        ])),
-        vec![
-            Arc::new(Int64Array::from(vec![10_i64, 11])),
-            Arc::new(Int64Array::from(vec![1_i64, 2])),
-            Arc::new(Float64Array::from(vec![9.5, 12.0])),
-            Arc::new(StringArray::from(vec!["open", "paid"])),
-        ],
-    )
-    .unwrap();
-    ctx.register_batch("orders", orders).unwrap();
-
-    let event = RecordBatch::try_new(
-        Arc::new(Schema::new(vec![
-            Field::new("day", DataType::Int64, false),
-            Field::new("kind", DataType::Utf8, true),
-        ])),
-        vec![
-            Arc::new(Int64Array::from(vec![1_i64])),
-            Arc::new(StringArray::from(vec!["click"])),
-        ],
-    )
-    .unwrap();
-    ctx.register_batch("event", event).unwrap();
-
-    let address_fields = Fields::from(vec![
-        Field::new("city", DataType::Utf8, true),
-        Field::new("zip", DataType::Utf8, true),
-    ]);
-    let address = StructArray::from(vec![
-        (
-            Arc::new(Field::new("city", DataType::Utf8, true)),
-            Arc::new(StringArray::from(vec!["berlin", "york"])) as ArrayRef,
-        ),
-        (
-            Arc::new(Field::new("zip", DataType::Utf8, true)),
-            Arc::new(StringArray::from(vec!["10115", "YO1"])) as ArrayRef,
-        ),
-    ]);
-    let mut tags = ListBuilder::new(StringBuilder::new());
-    tags.values().append_value("vip");
-    tags.append(true);
-    tags.values().append_value("new");
-    tags.append(true);
-    let tags = tags.finish();
-    let customers = RecordBatch::try_new(
-        Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int64, false),
-            Field::new("address", DataType::Struct(address_fields), true),
-            Field::new(
-                "tags",
-                DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
-                true,
-            ),
-        ])),
-        vec![
-            Arc::new(Int64Array::from(vec![1_i64, 2])),
-            Arc::new(address) as ArrayRef,
-            Arc::new(tags) as ArrayRef,
-        ],
-    )
-    .unwrap();
-    ctx.register_batch("customers", customers).unwrap();
-
-    let df = ctx
-        .sql("CREATE VIEW v_users AS SELECT user_id, name FROM users")
-        .await
-        .expect("create view");
-    df.collect().await.expect("apply view");
-    ctx
-}
-
-/// The registered-function names, as the engine snapshots them at startup —
-/// validation in production never runs with an empty function catalog.
-fn function_catalog(ctx: &SessionContext) -> FunctionCatalog {
-    let state = ctx.state();
-    FunctionCatalog {
-        scalar: state
-            .scalar_functions()
-            .keys()
-            .map(|n| n.as_str().into())
-            .collect(),
-        aggregate: state
-            .aggregate_functions()
-            .keys()
-            .map(|n| n.as_str().into())
-            .collect(),
-        window: state
-            .window_functions()
-            .keys()
-            .map(|n| n.as_str().into())
-            .collect(),
+/// a struct + list table, and a view — every one of them made by a statement this engine
+/// dispatches, because a fixture assembled behind the facade is a fixture the app could not
+/// have produced.
+///
+/// A [`MemTableStore`], so the tables live in memory; the project folder exists because a CTAS
+/// is refused without one, and nothing is written into it.
+async fn fixture() -> Arc<Engine> {
+    let root = env::temp_dir().join(format!(
+        "strata-sweep-{}-{}",
+        process::id(),
+        TAG.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("a project folder for the fixture");
+    let eng = Engine::builder()
+        .with_data_dir(&root)
+        .with_table_store(MemTableStore::new())
+        .build();
+    for sql in [
+        "CREATE TABLE t AS SELECT * FROM (VALUES (1, 'a'), (2, 'b')) AS v(id, name)",
+        "CREATE TABLE users AS SELECT * FROM (VALUES \
+            (1, 'ann', 'a@x.io', DATE '2022-01-01'), \
+            (2, 'bob', 'b@x.io', DATE '2022-04-01')) AS v(user_id, name, email, created_at)",
+        "CREATE TABLE orders AS SELECT * FROM (VALUES \
+            (10, 1, 9.5, 'open'), (11, 2, 12.0, 'paid')) AS v(order_id, user_id, amount, status)",
+        "CREATE TABLE event AS SELECT * FROM (VALUES (1, 'click')) AS v(day, kind)",
+        "CREATE TABLE customers AS \
+            SELECT 1 AS id, \
+                   named_struct('city', 'berlin', 'zip', '10115') AS address, \
+                   make_array('vip') AS tags \
+            UNION ALL \
+            SELECT 2, named_struct('city', 'york', 'zip', 'YO1'), make_array('new')",
+        "CREATE VIEW v_users AS SELECT user_id, name FROM users",
+    ] {
+        run_statement(&eng, sql)
+            .await
+            .unwrap_or_else(|e| panic!("fixture statement failed: {sql}: {e}"));
     }
+    eng
 }
 
-async fn run(ctx: &SessionContext, sql: &str) -> Vec<Diagnostic> {
-    let policy = CapabilityPolicyProvider::new(Capability::full());
-    validate(&Pipeline::new(ctx), &policy, &function_catalog(ctx), sql).await
-}
+/// A run tag per dispatch, because a Run is nonce-keyed and this suite makes hundreds.
+static TAG: AtomicU64 = AtomicU64::new(1);
 
-/// Whether the engine itself accepts `sql` — the same parse→plan→analyze chain
-/// the validator's dry-plan uses.
-async fn engine_accepts(ctx: &SessionContext, sql: &str) -> Result<(), String> {
-    let state = ctx.state();
-    let plan = state
-        .create_logical_plan(sql)
+/// Dispatch `sql` the way the app does, and report only whether the engine performed it.
+async fn run_statement(eng: &Engine, sql: &str) -> Result<(), String> {
+    eng.ws(WsId(1))
+        .run(
+            RunTag(TAG.fetch_add(1, Ordering::Relaxed).into()),
+            sql.into(),
+            10,
+        )
         .await
-        .map_err(|e| e.to_string())?;
-    state.optimize(&plan).map(|_| ()).map_err(|e| e.to_string())
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// Every diagnostic `sql` draws — the language service's one asynchronous door.
+async fn analyze(eng: &Engine, sql: &str) -> Vec<Diagnostic> {
+    eng.lang().analyze(sql.into()).await
+}
+
+/// Whether the engine itself performs `sql` — a real Run, which is what makes the
+/// no-divergence property a fact about the thing the user presses rather than about a
+/// re-derivation of it.
+async fn engine_accepts(eng: &Engine, sql: &str) -> Result<(), String> {
+    run_statement(eng, sql).await
 }
 
 fn messages(out: &[Diagnostic]) -> String {
@@ -288,12 +204,12 @@ const VALID: &[&str] = &[
 
 #[tokio::test]
 async fn valid_queries_stay_clean() {
-    let ctx = fixture().await;
+    let eng = fixture().await;
     for sql in VALID {
-        if let Err(e) = engine_accepts(&ctx, sql).await {
+        if let Err(e) = engine_accepts(&eng, sql).await {
             panic!("corpus entry does not plan — fix the corpus: {sql:?}: {e}");
         }
-        let out = run(&ctx, sql).await;
+        let out = analyze(&eng, sql).await;
         assert!(
             out.is_empty(),
             "false positive on {sql:?}: {}",
@@ -375,9 +291,9 @@ const BAD: &[(&str, &[&str])] = &[
 
 #[tokio::test]
 async fn bad_names_all_reported_and_engine_agrees() {
-    let ctx = fixture().await;
+    let eng = fixture().await;
     for (sql, expected) in BAD {
-        let out = run(&ctx, sql).await;
+        let out = analyze(&eng, sql).await;
         assert_spans_wellformed(sql, &out);
         let spans: Vec<&str> = out
             .iter()
@@ -394,7 +310,7 @@ async fn bad_names_all_reported_and_engine_agrees() {
             "non-error fault in {sql:?}"
         );
         assert!(
-            engine_accepts(&ctx, sql).await.is_err(),
+            engine_accepts(&eng, sql).await.is_err(),
             "resolver flagged {sql:?} but the engine accepts it"
         );
     }
@@ -402,8 +318,8 @@ async fn bad_names_all_reported_and_engine_agrees() {
 
 #[tokio::test]
 async fn exact_case_quoted_misses_stay_engine_authoritative() {
-    let ctx = fixture().await;
-    let out = run(&ctx, "SELECT \"Name\" FROM t").await;
+    let eng = fixture().await;
+    let out = analyze(&eng, "SELECT \"Name\" FROM t").await;
     assert!(!out.is_empty(), "quoted case miss must error");
     assert!(out.iter().all(Diagnostic::is_error));
 }
@@ -433,9 +349,9 @@ const DRAFTS: &[&str] = &[
 
 #[tokio::test]
 async fn mid_edit_drafts_stay_quiet() {
-    let ctx = fixture().await;
+    let eng = fixture().await;
     for sql in DRAFTS {
-        let out = run(&ctx, sql).await;
+        let out = analyze(&eng, sql).await;
         assert!(
             out.is_empty(),
             "premature diagnostics on draft {sql:?}: {}",
@@ -446,11 +362,11 @@ async fn mid_edit_drafts_stay_quiet() {
 
 #[tokio::test]
 async fn every_prefix_of_every_valid_query_validates() {
-    let ctx = fixture().await;
+    let eng = fixture().await;
     for sql in VALID {
         for (i, _) in sql.char_indices().skip(1) {
             let prefix = &sql[..i];
-            let out = run(&ctx, prefix).await;
+            let out = analyze(&eng, prefix).await;
             assert_spans_wellformed(prefix, &out);
         }
     }
@@ -458,7 +374,7 @@ async fn every_prefix_of_every_valid_query_validates() {
 
 #[tokio::test]
 async fn non_ascii_text_never_panics() {
-    let ctx = fixture().await;
+    let eng = fixture().await;
     let queries = [
         "SELECT 'héllo wörld' FROM t",
         "SELECT name FROM t WHERE name = 'ünïcode'",
@@ -467,8 +383,8 @@ async fn non_ascii_text_never_panics() {
     ];
     for sql in queries {
         for (i, _) in sql.char_indices().skip(1) {
-            let _ = run(&ctx, &sql[..i]).await;
+            let _ = analyze(&eng, &sql[..i]).await;
         }
-        let _ = run(&ctx, sql).await;
+        let _ = analyze(&eng, sql).await;
     }
 }
