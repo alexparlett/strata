@@ -31,16 +31,17 @@ at a time` — resolves its bare reads, and classifies the result for the caller
 
 **The three stages are typed, and the order is unforgeable.** `parse` mints a `Parsed`, `qualify`
 mints a `Qualified` from one, and `classify` takes only a `Qualified`; both have private fields and
-no constructor, so qualify-before-classify is a property of the types rather than a call discipline
-(a `compile_fail` doctest on `accept` pins it). That matters because the resolution can *change* a
-classification.
+no constructor, so qualify-before-classify is a property of the types rather than a call
+discipline. That matters because the resolution can *change* a classification.
 
 **And so is the admission.** A pub enum's variant fields cannot be private, so `Admitted` would be
 constructible around any `Qualified` — classification, and with it the policy check, skippable by
 hand. Every variant therefore carries a `proof: Proof`, a field of a private-constructor type only
 `classify` can mint; matching sites keep `..` and construction outside the module is a compile
-error (a second `compile_fail` doctest, on `Admitted`, pins it). Holding an `Admitted` *means*
-classify ran, so the order is the types end to end — parse, qualify, classify, dispatch, with no
+error. (Two `compile_fail` doctests pinned both properties until EA-17 made `pipeline` itself
+`pub(crate)`, which put them out of a doctest's reach and made the module boundary the stronger
+guard: the privacy now holds inside the crate as well as outside it.) Holding an `Admitted`
+*means* classify ran, so the order is the types end to end — parse, qualify, classify, dispatch, with no
 trust step. The two deliberate seams stand apart and are named: `resolved_one` is parse + qualify
 with no classification, for a statement an already-admitted arm composes, and `into_statement` /
 `Deref` hand the raw statement to the arm that was admitted — past dispatch the types' job is

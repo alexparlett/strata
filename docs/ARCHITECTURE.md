@@ -84,8 +84,10 @@ and the registry questions), `lang()` (`analyze` for every diagnostic a buffer d
 completion is assembled from, and the policy verdicts the agent gate reads) and `work()` (the
 engine-owned in-flight flag).
 Beside them sits a short root set — `builder`, `id`, `set_data_dir`, `formats` and the config
-trio. The mapping is **total**: a doc test in `facade/mod.rs` fails when a new public method
-escapes it, so a new call goes on the handle its subject names.
+trio. The mapping is **total**: two inventory tests in `facade/mod.rs`
+(`the_root_offers_the_groups_and_nothing_else`, `every_group_is_its_inventory`) read the engine's
+own sources through `include_str!` and fail when a new public method escapes the mapping, so a new
+call goes on the handle its subject names.
 
 ## The query round trip: snapshots
 
