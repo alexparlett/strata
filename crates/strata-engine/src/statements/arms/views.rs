@@ -110,8 +110,33 @@ pub async fn create(ctx: &SessionContext, name: &str, sql: &str) -> Result<ViewM
         columns,
         tables: deps.tables,
         remote: deps.remote,
-        aliases: deps.aliases,
+        views: views_read(ctx, name, deps.aliases).await,
     })
+}
+
+/// The registered views among `aliases`, with `name` — the view being created — held back so one
+/// is never recorded as reading itself.
+///
+/// Asked of the catalog, which is the only thing that can answer it: a plan inlines only a view
+/// that is already registered, so every view a body reads has an entry by the time this runs.
+/// An alias that is not a view is dropped and one that is is kept under the name it resolves by,
+/// which over-reports for [`ViewMeta::views`]'s stated reason.
+pub(crate) async fn views_read(
+    ctx: &SessionContext,
+    name: &str,
+    aliases: Vec<String>,
+) -> Vec<String> {
+    let own = fold_ident(name);
+    let mut views = Vec::new();
+    for alias in aliases {
+        if fold_ident(&alias) == own {
+            continue;
+        }
+        if existing(ctx, &alias).await == Some(TableType::View) {
+            views.push(alias);
+        }
+    }
+    views
 }
 
 /// Drop the SQL view `name` (idempotent — `IF EXISTS`), addressed as the same folded reference
@@ -591,14 +616,73 @@ mod tests {
         );
     }
 
+    /// **What a view reads is answered resolved, not raw.** [`ViewMeta::views`] is the registered
+    /// views the plan names, so a consumer keys on it directly rather than filtering a
+    /// `SubqueryAlias` set against whatever rows it happens to hold.
+    ///
+    /// Three cases, and only the first is obvious. A view over a view records it. A **CTE** named
+    /// after a registered view is recorded too — the plan cannot tell the two apart, and this is
+    /// the same over-report `dependents_of_view` keeps, in the same safe direction. And a view
+    /// **replacing itself** does not record itself: the body is planned against the old
+    /// registration, so its own name is in the alias set — along with everything that
+    /// registration read — and would otherwise come back as a dependency no drop should act on.
+    #[tokio::test]
+    async fn a_views_reads_are_resolved_to_the_views_it_actually_names() {
+        let root = scratch("views-read");
+        let eng = Engine::builder().build();
+        eng.set_data_dir(&root);
+        statement(&eng, "CREATE TABLE t AS SELECT 1 AS n")
+            .await
+            .expect("created");
+        statement(&eng, "CREATE VIEW inner_v AS SELECT n FROM t")
+            .await
+            .expect("created");
+
+        let over = statement(&eng, "CREATE VIEW outer_v AS SELECT n FROM inner_v")
+            .await
+            .expect("created");
+        let (_, meta) = upserted(&over);
+        assert_eq!(meta.views, vec!["inner_v".to_string()]);
+        assert_eq!(
+            meta.tables,
+            vec!["t".to_string()],
+            "the base table is still at the leaf, inlined"
+        );
+
+        let cte = statement(
+            &eng,
+            "CREATE VIEW pretender AS WITH inner_v AS (SELECT n FROM t) SELECT n FROM inner_v",
+        )
+        .await
+        .expect("created");
+        assert_eq!(
+            upserted(&cte).1.views,
+            vec!["inner_v".to_string()],
+            "a CTE of that name is indistinguishable in the plan, and over-reporting is the safe way to be wrong"
+        );
+
+        let replaced = statement(
+            &eng,
+            "CREATE OR REPLACE VIEW outer_v AS SELECT n FROM outer_v",
+        )
+        .await
+        .expect("replaced");
+        assert_eq!(
+            upserted(&replaced).1.views,
+            vec!["inner_v".to_string()],
+            "a view is never recorded as reading itself, and what the old body read still is"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
     /// **The reader set is raw, and deliberately biased to over-report.** `PlanDeps::aliases`
     /// cannot tell an inlined view from a local table alias or a CTE of the same name, so a view
     /// that merely writes `FROM t AS v` is named by a drop of the view `v`. That is the safe
-    /// direction and the *same* answer the catalog pane's confirm gives: the store's own filter
-    /// (`ProjectState::view_registered`) keeps an alias only where a view row of that name
-    /// exists, which is always true of the name being dropped — so it cannot subtract this case,
-    /// and the two surfaces still say one thing. Under-reporting is what would matter, and the
-    /// first half of this test is what pins it.
+    /// direction and the *same* answer the catalog pane's confirm gives: [`views_read`] keeps an
+    /// alias only where a *registered* view of that name exists, which is always true of the name
+    /// being dropped — so the resolution cannot subtract this case, and the two surfaces still
+    /// say one thing. Under-reporting is what would matter, and the first half of this test is
+    /// what pins it.
     #[tokio::test]
     async fn a_drops_readers_over_report_rather_than_miss_one() {
         let root = scratch("aliases");

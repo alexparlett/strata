@@ -431,7 +431,7 @@ mod tests {
                 columns: vec![col("day")],
                 tables: vec!["events".into()],
                 remote: Vec::new(),
-                aliases: Vec::new(),
+                views: Vec::new(),
             },
         );
         p

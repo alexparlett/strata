@@ -4,7 +4,8 @@
 //!
 //! A diagnostic is a **live fact about text**, not a log entry: every validation pass replaces a
 //! tab's slice wholesale, so fixing the SQL retracts the problem. Query *execution* failures belong
-//! to a run and are [`QueryError`](crate::QueryError) instead.
+//! to a run and never reach here: they live in that run's own query entry, which is where the
+//! results pane renders them.
 
 use std::ops::Range;
 

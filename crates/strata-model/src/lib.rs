@@ -10,7 +10,6 @@ mod chart;
 mod diagnostics;
 mod history;
 mod profile;
-mod query_error;
 mod results;
 mod schema;
 mod secret;
@@ -19,7 +18,7 @@ mod source;
 
 pub use catalog::{
     CatalogKind, ColOwner, ColRef, CsvRead, FileCompression, JsonRead, JsonShape, RemoteRef,
-    RemoveKind, RemoveTarget, SavedQuery, SourceFormat, TableDef, TableOrigin, ViewDef,
+    SavedQuery, SourceFormat, TableDef, TableOrigin, ViewDef,
 };
 pub use chart::{
     Axis, CapUnit, ChartBin, ChartConfig, ChartData, ChartMark, ChartPoint, ChartQuery,
@@ -28,7 +27,6 @@ pub use chart::{
 pub use diagnostics::{Diagnostic, Severity};
 pub use history::HistoryEntry;
 pub use profile::CatalogProfile;
-pub use query_error::QueryError;
 pub use results::{Cell, PageQuery, QueryOutput, SnapshotId};
 pub use schema::{ChartRole, ColumnInfo, Kind, Stat, StatKey};
 pub use secret::SecretRef;

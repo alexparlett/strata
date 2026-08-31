@@ -168,7 +168,7 @@ impl CatalogState {
 ///
 /// **Why it has to exist at all**, rather than each surface re-reading the engine on whatever
 /// already wakes it: a **data source** has no payload. A table's answer lands `TableMeta` on its
-/// row and a view's lands `ViewInfo`, so those surfaces are woken by the store write that carries
+/// row and a view's lands `ViewMeta`, so those surfaces are woken by the store write that carries
 /// it — but connecting learns nothing a row could carry, so a source outcome writes nothing and
 /// there is no channel to wake the tree. This is that channel, and once it exists it serves the
 /// rest, which is also what keeps every row on screen describing one instant.

@@ -338,11 +338,11 @@ mod tests {
 
     use datafusion::arrow::datatypes::{DataType, Field};
     use strata_arrow::column_info;
-    use strata_engine::{Answers, CatalogGen, RegStatus, TableMeta};
+    use strata_engine::{Answers, CatalogGen, RegStatus, TableMeta, ViewMeta};
     use strata_model::{ColumnInfo, SourceFormat, TableDef, TableOrigin, ViewDef};
 
     use super::*;
-    use crate::apps::project::state::{TableRow, ViewInfo, ViewRow};
+    use crate::apps::project::state::{TableRow, ViewRow};
 
     fn column(name: &str, dtype: DataType) -> ColumnInfo {
         column_info(&Field::new(name, dtype, true))
@@ -414,11 +414,11 @@ mod tests {
                     name: "revenue".to_string(),
                     sql: "SELECT 1".to_string(),
                 },
-                info: Some(ViewInfo {
+                info: Some(ViewMeta {
                     columns: vec![column("total", DataType::Float64)],
-                    deps: vec!["orders".to_string()],
-                    remote_deps: Vec::new(),
-                    view_deps: Vec::new(),
+                    tables: vec!["orders".to_string()],
+                    remote: Vec::new(),
+                    views: Vec::new(),
                 }),
                 profile: None,
             }],

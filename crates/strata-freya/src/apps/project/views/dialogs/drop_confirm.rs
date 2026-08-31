@@ -698,7 +698,7 @@ mod tests {
                 columns: Vec::new(),
                 tables: vec!["orders".into()],
                 remote: Vec::new(),
-                aliases: Vec::new(),
+                views: Vec::new(),
             },
         );
         p.view_registered(
@@ -707,7 +707,7 @@ mod tests {
                 columns: Vec::new(),
                 tables: vec!["orders".into()],
                 remote: Vec::new(),
-                aliases: vec!["orders_daily".into()],
+                views: vec!["orders_daily".into()],
             },
         );
         p

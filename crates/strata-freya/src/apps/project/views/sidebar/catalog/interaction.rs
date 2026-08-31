@@ -197,7 +197,7 @@ fn project_store() -> ProjectState {
             columns: vec![col("total", DataType::Int64)],
             tables: vec!["archive".into()],
             remote: Vec::new(),
-            aliases: Vec::new(),
+            views: Vec::new(),
         },
     );
     p.view_registered(
@@ -206,7 +206,7 @@ fn project_store() -> ProjectState {
             columns: vec![col("day", DataType::Date32)],
             tables: vec!["orders".into()],
             remote: Vec::new(),
-            aliases: Vec::new(),
+            views: Vec::new(),
         },
     );
     p.view_registered(
@@ -215,7 +215,7 @@ fn project_store() -> ProjectState {
             columns: vec![col("region", DataType::Utf8)],
             tables: Vec::new(),
             remote: Vec::new(),
-            aliases: Vec::new(),
+            views: Vec::new(),
         },
     );
     p

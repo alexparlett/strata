@@ -747,17 +747,18 @@ already uses (`arms::left_invalid`, shared so the two cannot describe one conseq
 Its dependents come from `catalog::dependents_of_view`, the sibling of the table drop's
 `dependent_views`: the inliner leaves a view's *name* behind as a `SubqueryAlias` and its base
 tables at the leaves, so a reader of `orders` and a reader of the view over `orders` are told
-apart by which half of `PlanDeps` the name is in — exactly the split the store keeps
-(`ViewInfo::deps` vs `view_deps`), which is what makes the typed drop's report and the catalog
+apart by which half of `PlanDeps` the name is in — exactly the split `ViewMeta` keeps
+(`tables` vs `views`), which is what makes the typed drop's report and the catalog
 pane's warning the same fact.
 
 That half is **raw**, so the report **over-reports on purpose**: a `SubqueryAlias` is what the
 inliner leaves and also what `FROM t AS v` and a CTE named `v` leave, and the plan cannot tell them
 apart — so dropping the view `v` also names a view that merely aliased something else `v`. Kept in
 the safe direction, because a *missed* reader is a destructive action reported as consequence-free
-where a spare one is a name the user can look at. It is not a divergence from the pane either: the
-store's filter keeps an alias only where a view row of that name exists, which is always true of
-the name being dropped, so it cannot subtract this case. Telling the two apart would mean comparing
+where a spare one is a name the user can look at. It is not a divergence from the pane either:
+`ViewMeta::views` resolves that same set against the same catalog, keeping an alias only where a
+*registered* view of that name exists — always true of the name being dropped, so the resolution
+cannot subtract this case. Telling the two apart would mean comparing
 the aliased subtree against the view's own registered plan — a change to what `PlanDeps` is, and
 one that would have to move both surfaces at once.
 
@@ -784,10 +785,17 @@ schema discarded, which made `pg.public.orders` indistinguishable from a workspa
 check cried wolf over a relation the store has no row for, and a forget of the source matched
 nothing anywhere. So `PlanDeps` has **two** lists — `tables`, workspace scans by bare name, and
 `remote`, non-workspace scans qualified whole — split by the same `providers::in_workspace` the
-statement gate uses. `ViewMeta` and the store's `ViewInfo` carry the split through
-(`deps` / `remote_deps`), because every question `deps` answers is asked of the project's own
-rows and a remote relation has none. An agent asking what a view *reads* gets both halves, since
-that question is not about rows.
+statement gate uses. `ViewMeta` carries the split through under those same two names, because
+every question `tables` answers is asked of the project's own rows and a remote relation has none.
+`remote` holds the plan's **recorded reference** form — every part bare — and never a rendered
+address, a rendering being a spelling meant for a message rather than a lookup key. An agent
+asking what a view *reads* gets both halves, since that question is not about rows.
+
+`ViewMeta`'s third list, `views`, is the same walk's `aliases` half **resolved**: the engine
+matches it against the views its own catalog has registered (`arms::views::views_read`, with the
+view being created held back) rather than shipping the raw set for a consumer to filter. It can
+only be answered here — a plan inlines only a view that is registered, so by the time a create
+has an answer every view its body reads has one too.
 
 That is also why a vanished remote relation is a **reconciliation** and not an event: nothing on
 our side can observe a server-side rename, the view goes on answering from the plan it inlined,

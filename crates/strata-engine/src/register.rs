@@ -189,10 +189,9 @@ pub fn table_spec(
 ///
 /// Kahn's algorithm over `deps`, restricted to the set being ordered: dependencies
 /// *outside* the set are already current, so they can't order anything. `deps` answers
-/// a view's known view-dependencies — for the app, the store's landed
-/// `ViewInfo::view_deps`; for a replayer, the previous pass's `ViewMeta::aliases`
-/// filtered to view names. Names compare case-insensitively (the engine folds unquoted
-/// identifiers). A view with no known deps sorts wherever it falls — from cold that is
+/// a view's known view-dependencies — the landed [`ViewMeta::views`], from a store row or
+/// from the previous pass's own answer. Names compare case-insensitively (the engine folds
+/// unquoted identifiers). A view with no known deps sorts wherever it falls — from cold that is
 /// every view, which is why [`Catalog::create_views`](crate::Catalog::create_views) keeps its
 /// fixed-point retry as well. A
 /// cycle is impossible (a view can't read itself, and DataFusion refuses mutual

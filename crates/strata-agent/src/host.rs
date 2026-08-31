@@ -27,8 +27,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use strata_arrow::plan::QueryPlan;
-use strata_engine::{Engine, EngineError, WsId};
-use strata_model::{ColumnInfo, QueryOutput};
+use strata_engine::{Engine, EngineError, RegStatus, TableMeta, ViewMeta, WsId};
+use strata_model::{ColumnInfo, QueryOutput, SavedQuery, TableDef, ViewDef};
 use uuid::Uuid;
 
 use crate::error::AgentError;
@@ -59,6 +59,18 @@ pub enum RegState {
     Failed(String),
 }
 
+impl RegState {
+    /// The engine's last answer for one def. `None` — a def no registration pass has reached —
+    /// is [`Pending`](RegState::Pending).
+    pub fn of(status: Option<&RegStatus>) -> RegState {
+        match status {
+            None => RegState::Pending,
+            Some(RegStatus::Ready) => RegState::Ready,
+            Some(RegStatus::Failed { reason }) => RegState::Failed(reason.clone()),
+        }
+    }
+}
+
 /// One row of the catalog **as the store shows it** — never DataFusion introspection, which
 /// would hide exactly the failed defs this exists to show (the P3-02 correction).
 #[derive(Clone, Debug, PartialEq)]
@@ -83,6 +95,39 @@ pub enum CatalogEntry {
 }
 
 impl CatalogEntry {
+    /// One catalog row for a table def and what the engine last answered about it.
+    ///
+    /// A row is a def's own facts joined onto the ledger, and the join is the same wherever a
+    /// [`Host`] is implemented. Build rows through these three rather than the variants, so a
+    /// second host cannot fill a field from the wrong side.
+    pub fn table(def: &TableDef, reg: RegState) -> CatalogEntry {
+        CatalogEntry::Table {
+            name: def.name.clone(),
+            format: def.format.name().to_string(),
+            sources: def.paths.clone(),
+            reg,
+        }
+    }
+
+    /// One catalog row for a view def and what the engine last answered about it.
+    pub fn view(def: &ViewDef, reg: RegState) -> CatalogEntry {
+        CatalogEntry::View {
+            name: def.name.clone(),
+            sql: def.sql.clone(),
+            reg,
+        }
+    }
+
+    /// One catalog row for a saved query, which has no registration state to join: it is text the
+    /// user parked, not an object the engine holds.
+    pub fn query(saved: &SavedQuery) -> CatalogEntry {
+        CatalogEntry::Query {
+            id: saved.id,
+            name: saved.name.clone(),
+            sql: saved.sql.clone(),
+        }
+    }
+
     /// The entry's name — what `list_tables`' 'matching' filters on, one accessor for all
     /// three kinds for [`Described::name`]'s reason.
     pub fn name(&self) -> &str {
@@ -141,6 +186,62 @@ pub enum Described {
 }
 
 impl Described {
+    /// What the catalog knows about one table def: its own facts, plus what registration read.
+    ///
+    /// The state follows from the pair — the ledger's answer, and the payload that answer came
+    /// with. A `Ready` def with nothing landed is [`Pending`](Described::Pending), and a refused
+    /// one reports its error rather than whatever an earlier pass read.
+    pub fn from_table(
+        def: &TableDef,
+        status: Option<&RegStatus>,
+        meta: Option<&TableMeta>,
+    ) -> Described {
+        match (status, meta) {
+            (Some(RegStatus::Ready), Some(meta)) => Described::Table {
+                name: def.name.clone(),
+                format: def.format.name().to_string(),
+                sources: def.paths.clone(),
+                partitions: def.partition_cols.clone(),
+                rows: meta.rows,
+                columns: meta.columns.clone(),
+            },
+            (Some(RegStatus::Failed { reason }), _) => Described::Failed {
+                name: def.name.clone(),
+                error: reason.clone(),
+            },
+            _ => Described::Pending {
+                name: def.name.clone(),
+            },
+        }
+    }
+
+    /// What the catalog knows about one view def, in the same states as
+    /// [`from_table`](Described::from_table).
+    ///
+    /// `reads` carries both halves of the view's dependencies. A cross-source view reads a
+    /// remote relation as truly as a workspace table, and the caller asked what it reads.
+    pub fn from_view(
+        def: &ViewDef,
+        status: Option<&RegStatus>,
+        meta: Option<&ViewMeta>,
+    ) -> Described {
+        match (status, meta) {
+            (Some(RegStatus::Ready), Some(meta)) => Described::View {
+                name: def.name.clone(),
+                sql: def.sql.clone(),
+                columns: meta.columns.clone(),
+                reads: meta.tables.iter().chain(&meta.remote).cloned().collect(),
+            },
+            (Some(RegStatus::Failed { reason }), _) => Described::Failed {
+                name: def.name.clone(),
+                error: reason.clone(),
+            },
+            _ => Described::Pending {
+                name: def.name.clone(),
+            },
+        }
+    }
+
     /// The def this describes, whichever state it is in — what a host matches a
     /// `describe_table` name against. On the type rather than beside each host, because
     /// every host has to answer the same question and a second copy of the match is a second
