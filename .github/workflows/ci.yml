@@ -164,7 +164,6 @@ jobs:
         run: |
           cargo test --workspace --locked -- \
             --skip a_table_over_a_source_reads_through_the_object_store \
-            --skip a_bucket_table_lives_in_its_data_sources_catalog \
             --skip a_database_source_registers_a_federated_catalog \
             --skip a_mysql_source_registers_a_federated_catalog
 
