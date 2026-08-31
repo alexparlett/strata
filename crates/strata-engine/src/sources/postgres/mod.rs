@@ -41,8 +41,8 @@ use self::settings::{PgSettings, PASSWORD, PASSWORD_ENV};
 use crate::catalog::readable;
 use crate::secrets::{SecretProvider, SecretRequest};
 use crate::sources::source::{
-    DataSource, FunctionMap, Listing, Located, Relation, SourceCatalog, SourceKind, SourceMode,
-    SourceSetting, Sourced,
+    ConnectRefusal, DataSource, FunctionMap, Listing, Located, Relation, SourceCatalog, SourceKind,
+    SourceMode, SourceSetting, Sourced,
 };
 use crate::sources::sql::{federated, SQLExecutor, SqlSpec};
 use crate::sources::{no_secret, secret_slot};
@@ -73,7 +73,7 @@ impl DataSource for Pg {
         &self,
         def: &SourceDef,
         secrets: Arc<dyn SecretProvider>,
-    ) -> Result<Sourced, String> {
+    ) -> Result<Sourced, ConnectRefusal> {
         let settings = PgSettings::read(&def.config)?;
         let passwords = secret_slot(def, PASSWORD, PASSWORD_ENV).map(|request| {
             Arc::new(SecretPassword { request, secrets }) as Arc<dyn PasswordProvider>
@@ -264,7 +264,7 @@ async fn build_pool(
     conn: &SourceDef,
     settings: &PgSettings,
     passwords: Option<Arc<dyn PasswordProvider>>,
-) -> Result<PostgresConnectionPool, String> {
+) -> Result<PostgresConnectionPool, ConnectRefusal> {
     let address = settings::parse_address(conn.setting("address"))?;
     let mut params = HashMap::from([
         ("host".to_string(), address.host.to_string()),
@@ -298,18 +298,28 @@ async fn build_pool(
 /// is a data source editor behind them. Nothing in any of it is a password: the crate builds its
 /// connection string without one on purpose, and our own provider's failure is
 /// [`SecretPassword`]'s sentence.
-fn refused(conn: &SourceDef, settings: &PgSettings, e: pool::Error) -> String {
+///
+/// **The rejected-credential arm carries a [`ConnectFault`] as well as its sentence**, so the
+/// editor's `PASSWORD` row can say the stored value was turned away rather than leaving that in a
+/// footer nobody sees on the next open. The recognition is the *server's*: `SQLSTATE` 28P01
+/// (`invalid_password`), which is what the crate matches to produce this variant — a code, never
+/// its prose.
+fn refused(conn: &SourceDef, settings: &PgSettings, e: pool::Error) -> ConnectRefusal {
     match e {
         pool::Error::InvalidHostOrPortError { host, port, .. } => format!(
             "Cannot reach a PostgreSQL server at '{host}:{port}'. Check the address, and that \
              the server is running."
+        )
+        .into(),
+        pool::Error::InvalidUsernameOrPassword { .. } => ConnectRefusal::rejected(
+            format!(
+                "The server refused the user '{}'. Check the user and its password.",
+                settings.user
+            ),
+            PASSWORD,
         ),
-        pool::Error::InvalidUsernameOrPassword { .. } => format!(
-            "The server refused the user '{}'. Check the user and its password.",
-            settings.user
-        ),
-        pool::Error::PasswordProviderError { source } => source.to_string(),
-        other => format!("Cannot connect to '{}': {other}", conn.named()),
+        pool::Error::PasswordProviderError { source } => source.to_string().into(),
+        other => format!("Cannot connect to '{}': {other}", conn.named()).into(),
     }
 }
 

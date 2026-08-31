@@ -52,7 +52,7 @@ use crate::apps::configure::views::{use_watch_registration, ConfigureBody, Foote
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::ReportCtx;
 use crate::apps::project::SourceRequest;
-use crate::apps::project::{Catalog, CatalogRescan, ProjChan, ProjectState};
+use crate::apps::project::{Catalog, CatalogRescan, ProjChan, ProjectState, RegistrationsCtx};
 use crate::components::window::window_theme;
 use crate::keymap::on_commands;
 use crate::menu::MenuScope;
@@ -81,6 +81,13 @@ pub struct ConfigureLaunch {
     /// that subtree rather than to the owner's window id, which outlives it both across a re-root
     /// and across an engine restart (see [`crate::platform::owner`]).
     pub subtree: Subtree,
+    /// The project window's **view of the engine's ledger**, shared in — what this window's row
+    /// watch settles on.
+    ///
+    /// Carried as a launch value rather than consumed, for the same reason
+    /// [`report`](Self::report) is: a separate OS window inherits no context, and
+    /// `use_registrations` panics rather than degrading when it is missing.
+    pub registrations: RegistrationsCtx,
     /// The project window's re-scan request. Save bumps it; the driver over there runs the pass.
     pub rescan: CatalogRescan,
     /// …and that driver's gate. A request raised while a pass is already in flight is **dropped**
@@ -233,6 +240,7 @@ pub struct ConfigureApp {
     pub app: AppCtx,
     pub project: RadioStation<ProjectState, ProjChan>,
     pub subtree: Subtree,
+    pub registrations: RegistrationsCtx,
     pub rescan: CatalogRescan,
     pub catalog: Catalog,
     pub engine: EngineCtx,
@@ -262,6 +270,7 @@ impl ConfigureApp {
         app: AppCtx,
         project: RadioStation<ProjectState, ProjChan>,
         subtree: Subtree,
+        registrations: RegistrationsCtx,
         rescan: CatalogRescan,
         catalog: Catalog,
         engine: EngineCtx,
@@ -281,6 +290,7 @@ impl ConfigureApp {
             app,
             project,
             subtree,
+            registrations,
             rescan,
             catalog,
             engine,
@@ -320,6 +330,8 @@ impl App for ConfigureApp {
         });
         let project = self.project;
         use_share_radio(move || project);
+        let registrations = self.registrations;
+        use_provide_context(move || registrations);
         let rescan = self.rescan;
         use_provide_context(move || rescan);
         let catalog = self.catalog;

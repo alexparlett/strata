@@ -301,10 +301,9 @@ read it. So S3 declares `label: "BUCKET"` with its own hint and placeholder, HTT
 
 **A `Field::Secret` row is the one thing not fully declared**, and deliberately: a secret has
 machine-local state no declaration can carry. The box is drawn beside a sentence about *this
-machine* (`SecretRow`) and a **Remove from this machine** press. What the declaration does decide
-is whether an absence is a demand: a key the kind marks `required: false` reads
-`SecretRow::Optional` — "No password is stored on this machine." — and asks for nothing. See
-`.agent/tasks/.../EA-29` for what is still open there.
+machine* (`SecretRow`) and a **Remove from this machine** press. The kind's `required` decides
+nothing here: it answers form validity one layer up, and what this row is about is what **this
+def** recorded against what **this machine** holds.
 
 A `When { key, values }` is how a setting says it only means something once another has a
 particular answer. A hidden setting **keeps its value** — moving the deciding key back brings the
@@ -347,13 +346,27 @@ holds, and a catalog name another database source holds (`check_catalog_name`).
 **A `Field::Secret` row reports this machine, not the def.** The settings window's API-key marker
 is honest because it minted the reference when it stored one; a def carries only the
 *expectation* (`SourceDef::secrets`), so each expected key probes the local keystore once at
-mount and shows one of: none expected, stored on this machine, expected but not stored here, still
-asking, or the keystore's own refusal. Every sentence names the key off its declared label, so a
-source with two credentials has two rows that read differently. The two clearing gestures are
-deliberately separate presses — *remove from this machine* deletes that one local entry and leaves
-the def's expectation standing, while *this data source uses no …* edits the shared def to expect
-none. Conflating them means one person casually breaking every colleague who has one. There is no
-mode pill: a secret is optional wherever its key says so, so absence is a state rather than a mode.
+mount and shows one of: none expected, stored on this machine, still asking, or the keystore's own
+refusal. Every sentence names the key off its declared label, so a source with two credentials has
+two rows that read differently.
+
+**Two of the states are errors, and both are facts rather than opinions.** *Expected here and not
+stored* — the def was saved with a secret and this machine has no entry, which is exactly what
+the next connect fails on; the def records the slot, so this genuinely means *never entered here*.
+And *stored here and refused* — the last connect was turned away over this very key, which the
+source recognised from its server's own code and carried on the refusal
+(`ConnectFault::Rejected`, read back as `RegStatus::rejected`). The second refines the first's
+opposite and nothing else: an entry this machine no longer holds never reached a server, and a
+replacement being typed is what the row is about instead. Neither blocks Save — writing the def is
+harmless and *connecting* is what fails, so the row previews the data source row's own failure
+rather than gating in front of it.
+
+The one press is *Remove from this machine*: it deletes that local entry and leaves the def's
+expectation standing, so a colleague keeps their own. The control that edited the shared def to
+expect none was removed — an empty box is a stored secret's resting state, so reading one as
+*there is none* would forget every password on every save; clearing the box drops only an
+expectation added in this session, and a shared def opened and saved untouched goes back
+byte-identical. There is no mode pill: absence is a state rather than a mode.
 
 Save writes the def through the store's own funnel, persists the project, **deregisters what the
 old name registered** when the edit moved it (nothing downstream ever sees the def it replaced),

@@ -66,7 +66,9 @@ pub fn use_watch_source(mut ctx: SourceCtx) {
         match registrations.read().sources.answered_since(&name, asked_at) {
             None => {}
             Some(RegStatus::Ready) => platform.close_current_window(),
-            Some(RegStatus::Failed { reason }) => ctx.status.set(Status::Failed(reason.clone())),
+            Some(RegStatus::Failed { reason, .. }) => {
+                ctx.status.set(Status::Failed(reason.clone()));
+            }
         }
     });
 }

@@ -17,7 +17,8 @@ use freya::prelude::*;
 use strata_engine::{Field, SourceInfo, SourceSetting};
 use strata_model::SecretRef;
 
-use crate::apps::source::model::{noun, SecretProbe, SecretRow};
+use crate::apps::project::use_registrations;
+use crate::apps::source::model::{noun, rejected_secret, SecretProbe, SecretRow};
 use crate::apps::source::SourceCtx;
 use crate::components::form::{
     form_theme, Form, PathField, Row, Section, ValueField, FIELD_HEIGHT,
@@ -269,8 +270,14 @@ impl Component for TextKey {
 ///
 /// **The tone is the row's own answer, not a second judgement** ([`SecretRow::fault`]): the
 /// sentence is painted in the error tone exactly where it is describing something wrong — a def
-/// that recorded a secret over a machine that has no entry for it — and in the hint colour
-/// wherever it is simply stating what is true here.
+/// that recorded a secret over a machine that has no entry for it, or a value the server turned
+/// away the last time it connected — and in the hint colour wherever it is simply stating what is
+/// true here.
+///
+/// That second one is the only thing this row cannot learn from the def and the keystore alone, so
+/// it is joined off the engine's ledger ([`rejected_secret`]) rather than read out of the
+/// footer's sentence: the source named its own declared key on the refusal, and this asks whether
+/// that key is the one being drawn.
 ///
 /// The box's buffer and the window's map are **mirrored rather than shared**, because a
 /// `ValueField` binds one `State<String>` while the window holds a value per declared key; both
@@ -298,6 +305,7 @@ impl Component for SecretField {
         let form = form_theme();
         let tones = tones();
         let ctx = use_consume::<SourceCtx>();
+        let registrations = use_registrations();
         let mut revealed = use_state(|| false);
         let name = self.declared.key;
         let noun = noun(&self.declared);
@@ -340,6 +348,11 @@ impl Component for SecretField {
                         .read()
                         .get(name)
                         .unwrap_or(&SecretProbe::Absent),
+                    rejected_secret(
+                        &registrations.read().sources,
+                        ctx.target.read().editing(),
+                        name,
+                    ),
                 )
                 .keeps_expectation();
             ctx.edit(move |draft| match expects {
@@ -366,6 +379,11 @@ impl Component for SecretField {
                 .read()
                 .get(name)
                 .unwrap_or(&SecretProbe::Absent),
+            rejected_secret(
+                &registrations.read().sources,
+                ctx.target.read().editing(),
+                name,
+            ),
         );
 
         Row::new(self.declared.label)

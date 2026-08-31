@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use strata_engine::{Field, SourceInfo, SourceSetting, When};
+use strata_engine::{Answers, Field, RegStatus, SourceInfo, SourceSetting, When};
 use strata_model::{check_catalog, SecretRef, Secrets, SourceDef};
 
 /// What this window is editing: a new data source, or an existing one by
@@ -77,9 +77,24 @@ pub enum SecretRow {
     },
     /// Expected, and this machine holds it.
     Stored,
-    /// **Expected, and this machine has no entry** — the row's [error](Self::fault), because the
-    /// def records the slot its secret was filed under, so this is *never entered here* and not
-    /// the shrug it used to have to be.
+    /// **Expected, this machine holds it, and the server would not take it** — the row's second
+    /// [error](Self::fault), and the only arm here that is about neither the def nor this
+    /// machine's keystore but about what happened when the two were last used together.
+    ///
+    /// It refines [`Stored`](Self::Stored) and nothing else. A value that is not here never
+    /// reached a server, so [`Missing`](Self::Missing) is the truer sentence for a machine whose
+    /// entry has since been deleted; a value being typed is about to replace this one, so
+    /// [`Typed`](Self::Typed) wins.
+    ///
+    /// The fact is the *engine's*, off the last connect
+    /// ([`RegStatus::rejected`](strata_engine::RegStatus::rejected)) and minted by the source
+    /// from its server's own code — never read back out of the failure's prose, and never
+    /// inferred here from a connect having failed at all: a server that was unreachable said
+    /// nothing about this credential.
+    Rejected,
+    /// **Expected, and this machine has no entry** — one of the row's two
+    /// [errors](Self::fault), because the def records the slot its secret was filed under, so
+    /// this is *never entered here* and not the shrug it used to have to be.
     ///
     /// Keyed on the expectation and not on [`required`](SourceSetting::required): a key the kind
     /// does not require is one a data source may simply not have, but a def that **was saved
@@ -99,12 +114,23 @@ pub enum SecretRow {
 
 impl SecretRow {
     /// What the def expects with the box empty, whether anything is typed, whether a removal is
-    /// pending, and what the keystore said.
+    /// pending, what the keystore said, and whether the last connect was refused over this key
+    /// ([`rejected_secret`]).
     ///
     /// The kind's `required` is not among them, and that is the point: what this row is about is
     /// what **this def** recorded against what **this machine** holds, and the declaration
     /// answers a different question one layer up (form validity, in [`SourceDraft::blocker`]).
-    pub fn of(expected: bool, typed: bool, removed: bool, probe: &SecretProbe) -> Self {
+    ///
+    /// `rejected` is asked for at every call rather than folded in afterwards, so a caller cannot
+    /// draw this row without answering it — the arm it reaches is an error, and an error nobody
+    /// remembered to ask about is one nobody sees.
+    pub fn of(
+        expected: bool,
+        typed: bool,
+        removed: bool,
+        probe: &SecretProbe,
+        rejected: bool,
+    ) -> Self {
         if typed {
             return Self::Typed;
         }
@@ -115,6 +141,7 @@ impl SecretRow {
             true if removed => Self::Removing,
             true => match probe {
                 SecretProbe::Asking => Self::Asking,
+                SecretProbe::Stored if rejected => Self::Rejected,
                 SecretProbe::Stored => Self::Stored,
                 SecretProbe::Refused(why) => Self::Refused(why.clone()),
                 SecretProbe::Absent => Self::Missing,
@@ -125,11 +152,13 @@ impl SecretRow {
     /// Whether this row is stating something **wrong** rather than something true, which is what
     /// puts its sentence in the error tone.
     ///
-    /// Only [`Missing`](Self::Missing). [`Refused`](Self::Refused) is not one: a keystore that
+    /// The two the engine or the def can be shown to be wrong about — a secret this machine does
+    /// not have ([`Missing`](Self::Missing)), and one the server turned away
+    /// ([`Rejected`](Self::Rejected)). [`Refused`](Self::Refused) is neither: a keystore that
     /// would not answer leaves whether an entry is here *unknown*, and painting unknown as wrong
     /// asserts a fact nobody established — the same rule that keeps the two probe answers apart.
     pub fn fault(&self) -> bool {
-        matches!(self, Self::Missing)
+        matches!(self, Self::Missing | Self::Rejected)
     }
 
     /// Whether Save should keep the def's expectation of this secret.
@@ -168,6 +197,10 @@ impl SecretRow {
             Self::Stored => {
                 format!("A {noun} is stored on this machine. Type a new one to replace it.")
             }
+            Self::Rejected => format!(
+                "The server refused this data source's sign-in the last time it connected. Type a \
+                 new {noun} to replace the one stored on this machine."
+            ),
             Self::Missing => format!(
                 "This data source was saved with a {noun} and none is stored on this machine. \
                  Connecting fails until you enter it here."
@@ -182,9 +215,30 @@ impl SecretRow {
     }
 
     /// Whether **Remove from this machine** is offered: there has to be an entry here to remove.
+    ///
+    /// A [`Rejected`](Self::Rejected) entry is still an entry, and abandoning a value the server
+    /// will not take is a reasonable thing to want — the press says what it does either way.
     pub fn offers_removal(&self) -> bool {
-        matches!(self, Self::Stored)
+        matches!(self, Self::Stored | Self::Rejected)
     }
+}
+
+/// Whether the engine's last connect for `source` was refused **over the declared key `key`** —
+/// [`SecretRow::of`]'s fifth answer.
+///
+/// The one join between this window and the ledger, and it is a join rather than a reading: the
+/// source said which of its own keys the server would not take
+/// ([`RegStatus::rejected`](strata_engine::RegStatus::rejected)), and this asks whether the row
+/// being drawn is that key. A failure the source could not classify answers `false` here, which
+/// is what keeps an unreachable server from being drawn as a wrong password.
+///
+/// `source` is the name the window **opened on**, not the one in the draft: the ledger's answer is
+/// about the def the engine last connected, and a name being typed has never been one.
+pub fn rejected_secret(answers: &Answers, source: Option<&str>, key: &str) -> bool {
+    source
+        .and_then(|name| answers.status(name))
+        .and_then(RegStatus::rejected)
+        == Some(key)
 }
 
 /// A declared key's label, set in prose — what the sentences about it call it.
@@ -385,7 +439,7 @@ impl SourceDraft {
 
 #[cfg(test)]
 mod tests {
-    use strata_engine::SourceMode;
+    use strata_engine::{CatalogGen, ConnectFault, SourceMode};
 
     use super::*;
 
@@ -739,7 +793,9 @@ mod tests {
     fn a_secret_row_reports_this_machine_rather_than_the_def() {
         use SecretProbe as P;
 
-        let row = SecretRow::of;
+        let row = |expected, typed, removed, probe: &SecretProbe| {
+            SecretRow::of(expected, typed, removed, probe, false)
+        };
 
         assert_eq!(
             row(false, false, false, &P::Absent),
@@ -789,7 +845,7 @@ mod tests {
     /// expectation stands, so a colleague keeps their own secret.
     #[test]
     fn removing_a_secret_locally_is_not_declaring_the_source_has_none() {
-        let removing = SecretRow::of(true, false, true, &SecretProbe::Stored);
+        let removing = SecretRow::of(true, false, true, &SecretProbe::Stored, false);
         assert_eq!(removing, SecretRow::Removing);
         assert!(
             removing
@@ -799,7 +855,7 @@ mod tests {
             removing.note("password")
         );
 
-        let unused = SecretRow::of(false, false, true, &SecretProbe::Stored);
+        let unused = SecretRow::of(false, false, true, &SecretProbe::Stored, false);
         assert_eq!(unused, SecretRow::Unused { forgetting: true });
         assert!(
             unused.note("password").contains("without a password"),
@@ -820,7 +876,7 @@ mod tests {
     fn an_empty_box_is_an_answer_over_a_def_that_expects_nothing() {
         use SecretProbe as P;
 
-        let unused = SecretRow::of(false, false, false, &P::Absent);
+        let unused = SecretRow::of(false, false, false, &P::Absent, false);
         assert_eq!(unused, SecretRow::Unused { forgetting: false });
         assert!(!unused.fault(), "nothing is expected, so nothing is wrong");
         assert!(
@@ -829,7 +885,7 @@ mod tests {
             unused.note("password")
         );
 
-        let missing = SecretRow::of(true, false, false, &P::Absent);
+        let missing = SecretRow::of(true, false, false, &P::Absent, false);
         assert_eq!(missing, SecretRow::Missing);
         assert!(missing.fault());
         assert!(
@@ -868,7 +924,7 @@ mod tests {
         use SecretProbe as P;
 
         for probe in [P::Stored, P::Asking, P::Refused("locked".into())] {
-            let row = SecretRow::of(true, false, false, &probe);
+            let row = SecretRow::of(true, false, false, &probe, false);
             assert!(
                 row.keeps_expectation(),
                 "{row:?}: nothing here established that there is no secret"
@@ -876,11 +932,108 @@ mod tests {
         }
     }
 
+    /// **A credential the server turned away is an error on its own row**, and it is the
+    /// *engine's* fact: the source recognised its server's code and named the declared key, so
+    /// this window joins the ledger against the row it is drawing rather than reading a sentence.
+    #[test]
+    fn a_credential_the_server_refused_is_an_error_on_that_key_s_row() {
+        let answers = Answers::recorded(
+            [(
+                "warehouse".to_string(),
+                RegStatus::Failed {
+                    reason: "The server refused the user 'reader'. Check the user and its \
+                             password."
+                        .into(),
+                    fault: Some(ConnectFault::Rejected { key: "password" }),
+                },
+            )],
+            CatalogGen::default(),
+        );
+        assert!(rejected_secret(&answers, Some("warehouse"), "password"));
+        assert!(
+            !rejected_secret(&answers, Some("warehouse"), "sslrootcert"),
+            "and only that key's row: another secret on the same source is not implicated"
+        );
+
+        let rejected = SecretRow::of(true, false, false, &SecretProbe::Stored, true);
+        assert_eq!(rejected, SecretRow::Rejected);
+        assert!(rejected.fault(), "it is wrong, not merely true");
+        assert!(
+            rejected.note("password").contains("refused"),
+            "and it names the fix: {}",
+            rejected.note("password")
+        );
+        assert!(
+            rejected.keeps_expectation(),
+            "a rejected value is still a value the def expects"
+        );
+    }
+
+    /// **The rejection refines the one arm it can be true of, and nothing else claims it.**
+    ///
+    /// A value that is not on this machine never reached a server, so a stale rejection over a
+    /// deleted entry reads as [`SecretRow::Missing`] — what is true *now* — and a value being
+    /// typed is about to replace the refused one.
+    #[test]
+    fn a_rejection_only_refines_a_secret_this_machine_is_holding() {
+        use SecretProbe as P;
+
+        assert_eq!(
+            SecretRow::of(true, false, false, &P::Absent, true),
+            SecretRow::Missing,
+            "the entry is gone: enter one, rather than being told the missing one was wrong"
+        );
+        assert_eq!(
+            SecretRow::of(true, true, false, &P::Stored, true),
+            SecretRow::Typed
+        );
+        assert_eq!(
+            SecretRow::of(true, false, true, &P::Stored, true),
+            SecretRow::Removing
+        );
+        assert_eq!(
+            SecretRow::of(true, false, false, &P::Asking, true),
+            SecretRow::Asking,
+            "and a keystore that has not answered is still unknown"
+        );
+    }
+
+    /// **A failure the source could not classify is not a wrong password.** An unreachable
+    /// server, a missing region, a kind nothing is registered for: all `Failed`, none of them a
+    /// fact about this credential.
+    #[test]
+    fn an_unclassified_connect_failure_says_nothing_about_a_credential() {
+        let answers = Answers::recorded(
+            [
+                (
+                    "warehouse".to_string(),
+                    RegStatus::failed("Cannot reach a PostgreSQL server at 'db:5432'."),
+                ),
+                ("lake".to_string(), RegStatus::Ready),
+            ],
+            CatalogGen::default(),
+        );
+        assert!(!rejected_secret(&answers, Some("warehouse"), "password"));
+        assert!(!rejected_secret(&answers, Some("lake"), "password"));
+        assert!(
+            !rejected_secret(&answers, None, "password"),
+            "and a data source being created has no answer to join against"
+        );
+        assert!(
+            !rejected_secret(&answers, Some("gone"), "password"),
+            "nor does one no pass has reached"
+        );
+    }
+
     /// **Remove from this machine is offered where there is something to remove**, and nowhere
     /// else.
     #[test]
     fn the_secret_press_is_offered_where_it_does_something() {
         assert!(SecretRow::Stored.offers_removal());
+        assert!(
+            SecretRow::Rejected.offers_removal(),
+            "a value the server will not take is still a value this machine is holding"
+        );
         for row in [
             SecretRow::Typed,
             SecretRow::Missing,

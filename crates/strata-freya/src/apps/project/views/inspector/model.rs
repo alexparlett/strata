@@ -846,9 +846,7 @@ mod tests {
             workspace: Answers::recorded(
                 [(
                     "events".to_string(),
-                    RegStatus::Failed {
-                        reason: "No such file or directory (os error 2)".into(),
-                    },
+                    RegStatus::failed("No such file or directory (os error 2)"),
                 )],
                 CatalogGen::default(),
             ),

@@ -1312,9 +1312,7 @@ mod tests {
                 },
                 SourceListing {
                     name: "lake".into(),
-                    status: Some(RegStatus::Failed {
-                        reason: "This S3 data source needs a region.".into(),
-                    }),
+                    status: Some(RegStatus::failed("This S3 data source needs a region.")),
                     detail: SourceDetail::Store,
                 },
             ],

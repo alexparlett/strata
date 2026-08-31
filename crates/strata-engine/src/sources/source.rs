@@ -331,6 +331,78 @@ pub fn unsupported_function(function: &str, source: &str, why: &str) -> String {
     format!("'{function}' cannot run on the data source '{source}'.{why} {MATERIALIZE}")
 }
 
+/// **Why a connect failed**: the sentence the data source's row shows, and — where the source
+/// recognised one — the same failure in a form a surface can act on.
+///
+/// A refusal is a sentence first, so [`String`] converts into one and a source with nothing to add
+/// writes `Err("...".into())` exactly as it did before. The facet is the exception, and it earns
+/// its place by being what a surface *points with*: a sentence says what is wrong and cannot say
+/// which control it is about, and recovering that by matching the prose makes a working fix depend
+/// on wording nobody promised to keep.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConnectRefusal {
+    /// Why, in the source's own words — the data source row's whole sentence.
+    pub reason: String,
+    /// The same failure as a fact, where the source could tell.
+    pub fault: Option<ConnectFault>,
+}
+
+impl ConnectRefusal {
+    /// A refusal the source recognised as a **rejected credential**, naming the declared key
+    /// whose value the server would not take.
+    ///
+    /// `key` is one of this source's own [`SourceSetting::key`]s, which is why it is `&'static
+    /// str`: a fault naming something the kind never declared points at no control, and the
+    /// declaration is what a surface joins it against.
+    pub fn rejected(reason: impl Into<String>, key: &'static str) -> Self {
+        ConnectRefusal {
+            reason: reason.into(),
+            fault: Some(ConnectFault::Rejected { key }),
+        }
+    }
+}
+
+impl From<String> for ConnectRefusal {
+    fn from(reason: String) -> Self {
+        ConnectRefusal {
+            reason,
+            fault: None,
+        }
+    }
+}
+
+impl From<&str> for ConnectRefusal {
+    fn from(reason: &str) -> Self {
+        ConnectRefusal::from(reason.to_string())
+    }
+}
+
+impl fmt::Display for ConnectRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.reason)
+    }
+}
+
+/// **What a connect refusal is about**, for a surface to key on rather than read.
+///
+/// One arm per fact a surface has a control to point at: a failure nothing can be pointed at is a
+/// sentence and belongs in [`ConnectRefusal::reason`] alone. Minting one is the *source's* job,
+/// off whatever its server said in codes — never off prose, here or anywhere else.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConnectFault {
+    /// **The server refused a sign-in the credential `key` names was part of.**
+    ///
+    /// Not the same as absent: a secret the def expects and this machine does not have never
+    /// reaches a server at all, and fails with the source's own no-secret sentence instead. How
+    /// precisely it is *this* value that was refused is the server's to say and the source's to
+    /// know — `28P01` means the password, MySQL's 1045 does not separate a wrong password from an
+    /// unknown user — so a surface pointing with this should word what it draws accordingly.
+    Rejected {
+        /// The declared [`SourceSetting::key`] whose value was refused.
+        key: &'static str,
+    },
+}
+
 /// One data source the engine can connect to.
 ///
 /// Everything here is answerable before anything is connected — which is what lets the editor draw
@@ -349,12 +421,14 @@ pub trait DataSource: Send + Sync + fmt::Debug + 'static {
     ///
     /// If the source cannot be reached or the description is not usable. A data source settles onto
     /// one row and the error **is** that row's sentence, so word it as the thing to fix: this is
-    /// all-or-nothing, not a handle that fails at the first query.
+    /// all-or-nothing, not a handle that fails at the first query. A `String` converts into the
+    /// refusal, so a source with nothing but that sentence writes one; add a
+    /// [`ConnectFault`] where the server said, in codes, something a surface can point at.
     async fn connect(
         &self,
         def: &SourceDef,
         secrets: Arc<dyn SecretProvider>,
-    ) -> Result<Sourced, String>;
+    ) -> Result<Sourced, ConnectRefusal>;
 
     /// Judges an address by this source's own naming rule.
     ///

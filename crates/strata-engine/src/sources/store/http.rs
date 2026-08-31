@@ -21,7 +21,9 @@ use strata_model::SourceDef;
 
 use super::{built, check_http_url, client_options, client_settings};
 use crate::secrets::SecretProvider;
-use crate::sources::source::{DataSource, Field, SourceKind, SourceMode, SourceSetting, Sourced};
+use crate::sources::source::{
+    ConnectRefusal, DataSource, Field, SourceKind, SourceMode, SourceSetting, Sourced,
+};
 
 const OWN: &[SourceSetting] = &[SourceSetting {
     key: "address",
@@ -73,7 +75,7 @@ impl DataSource for Http {
         &self,
         def: &SourceDef,
         _secrets: Arc<dyn SecretProvider>,
-    ) -> Result<Sourced, String> {
+    ) -> Result<Sourced, ConnectRefusal> {
         let origin = def.setting("address");
         let mut builder = HttpBuilder::new().with_url(origin).with_config(
             ClientConfigKey::AllowHttp,

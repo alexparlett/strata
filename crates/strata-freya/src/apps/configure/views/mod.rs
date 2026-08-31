@@ -97,7 +97,9 @@ pub fn use_watch_registration(mut ctx: ConfigureCtx) {
         {
             None => {}
             Some(RegStatus::Ready) => platform.close_current_window(),
-            Some(RegStatus::Failed { reason }) => ctx.status.set(Status::Failed(reason.clone())),
+            Some(RegStatus::Failed { reason, .. }) => {
+                ctx.status.set(Status::Failed(reason.clone()));
+            }
         }
     });
 }

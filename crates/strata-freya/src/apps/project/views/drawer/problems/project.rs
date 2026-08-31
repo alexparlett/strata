@@ -279,12 +279,7 @@ mod tests {
     fn refused() -> Registrations {
         Registrations {
             workspace: Answers::recorded(
-                [(
-                    "orders".to_string(),
-                    RegStatus::Failed {
-                        reason: "No files found".into(),
-                    },
-                )],
+                [("orders".to_string(), RegStatus::failed("No files found"))],
                 CatalogGen::default(),
             ),
             ..Default::default()

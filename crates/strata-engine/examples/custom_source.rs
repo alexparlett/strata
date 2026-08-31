@@ -22,8 +22,8 @@ use datafusion::catalog::{MemTable, TableProvider};
 
 use strata_engine::secrets::SecretProvider;
 use strata_engine::sources::source::{
-    DataSource, Field as SettingField, Listing, Located, Relation, SourceCatalog, SourceKind,
-    SourceMode, SourceSetting, Sourced,
+    ConnectRefusal, DataSource, Field as SettingField, Listing, Located, Relation, SourceCatalog,
+    SourceKind, SourceMode, SourceSetting, Sourced,
 };
 use strata_engine::testing::conforms;
 use strata_engine::{Engine, RunOutcome, RunTag, WsId};
@@ -74,10 +74,10 @@ impl DataSource for Ledger {
         &self,
         def: &SourceDef,
         _secrets: Arc<dyn SecretProvider>,
-    ) -> Result<Sourced, String> {
+    ) -> Result<Sourced, ConnectRefusal> {
         match def.setting("address").trim() {
             "books" => Ok(Sourced::Catalog(Arc::new(LedgerBooks))),
-            other => Err(format!("There is no ledger at '{other}'.")),
+            other => Err(format!("There is no ledger at '{other}'.").into()),
         }
     }
 }

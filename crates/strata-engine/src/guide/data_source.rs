@@ -19,7 +19,9 @@
 //!
 //! use async_trait::async_trait;
 //! use strata_engine::secrets::SecretProvider;
-//! use strata_engine::sources::source::{DataSource, SourceKind, SourceMode, Sourced};
+//! use strata_engine::sources::source::{
+//!     ConnectRefusal, DataSource, SourceKind, SourceMode, Sourced,
+//! };
 //! use strata_model::SourceDef;
 //!
 //! #[derive(Debug)]
@@ -38,7 +40,7 @@
 //!         &self,
 //!         def: &SourceDef,
 //!         _secrets: Arc<dyn SecretProvider>,
-//!     ) -> Result<Sourced, String> {
+//!     ) -> Result<Sourced, ConnectRefusal> {
 //!         let _address = def.setting("address");
 //!         # let _ = Ledger;
 //!         # unimplemented!()
@@ -74,6 +76,13 @@
 //! or every table under it fails later with the store's own unhelpful wording. What a probe must
 //! **not** do is ask whether the caller may do everything: a prefix-scoped credential and a
 //! read-only public bucket both refuse at the root while working perfectly.
+//!
+//! A `String` is a whole [`ConnectRefusal`](crate::sources::source::ConnectRefusal), so that
+//! sentence is all most refusals are. Where your server tells you *which* of your declared
+//! settings it turned away — in a code, never in prose — say so with a
+//! [`ConnectFault`](crate::sources::source::ConnectFault): it reaches the ledger beside the
+//! sentence ([`RegStatus::rejected`](crate::RegStatus::rejected)), which is what lets an editor
+//! put the failure on the row for that setting instead of in a footer.
 //!
 //! **Secrets never ride the def.** Read what you need from the `secrets` argument through a
 //! [`SecretRequest`](crate::secrets::SecretRequest) naming your own family and your own

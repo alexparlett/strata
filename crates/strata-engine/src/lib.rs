@@ -79,8 +79,8 @@ pub use snapshots::{
     LocalIpcSnapshotStore, MemSnapshotStore, SnapshotSink, SnapshotStats, SnapshotStore,
 };
 pub use sources::source::{
-    DataSource, Field, Located, SourceCatalog, SourceInfo, SourceKind, SourceMode, SourceSetting,
-    Sourced, When,
+    ConnectFault, ConnectRefusal, DataSource, Field, Located, SourceCatalog, SourceInfo,
+    SourceKind, SourceMode, SourceSetting, Sourced, When,
 };
 pub use sources::RemoteRelation;
 pub use statements::arms::{drop_intent, duplicate_column, SessionScope};
@@ -731,17 +731,47 @@ pub enum RegStatus {
     Failed {
         /// Why, in the engine's own words.
         reason: String,
+        /// The same refusal as a fact, where the thing that refused could tell — a **connect**'s
+        /// own facet ([`ConnectFault`]), and `None` for every registration that is not one.
+        ///
+        /// A table and a view register against the session and fail in the planner's words, which
+        /// nothing here is in a position to classify; a data source is a login, and a source that
+        /// reads its server's codes can say which credential was refused. Carried beside the
+        /// sentence rather than instead of it: the sentence is what every surface shows, and this
+        /// is what one surface points with.
+        fault: Option<ConnectFault>,
     },
 }
 
 impl RegStatus {
+    /// A refusal with nothing to point at — the sentence alone.
+    pub fn failed(reason: impl Into<String>) -> RegStatus {
+        RegStatus::Failed {
+            reason: reason.into(),
+            fault: None,
+        }
+    }
+
     /// What the engine answered for `result`, discarding the payload — which is what a
     /// *status* is, and what registration **learned** is the answer's own.
     fn of<T, E: ToString>(result: &Result<T, E>) -> RegStatus {
         match result {
             Ok(_) => RegStatus::Ready,
-            Err(e) => RegStatus::Failed {
-                reason: e.to_string(),
+            Err(e) => RegStatus::failed(e.to_string()),
+        }
+    }
+
+    /// What the engine answered for a **connect**, which is the one registration whose refusal
+    /// carries a facet.
+    ///
+    /// Its own constructor rather than a `ToString` through [`of`](Self::of): reading the sentence
+    /// back off `Display` would drop exactly the half this exists to keep.
+    fn of_connect<T>(result: &Result<T, ConnectRefusal>) -> RegStatus {
+        match result {
+            Ok(_) => RegStatus::Ready,
+            Err(refusal) => RegStatus::Failed {
+                reason: refusal.reason.clone(),
+                fault: refusal.fault,
             },
         }
     }
@@ -754,8 +784,24 @@ impl RegStatus {
     /// The refusal, if this is one — a host's problem row, and the sentence a tooltip clips.
     pub fn reason(&self) -> Option<&str> {
         match self {
-            RegStatus::Failed { reason } => Some(reason),
+            RegStatus::Failed { reason, .. } => Some(reason),
             RegStatus::Ready => None,
+        }
+    }
+
+    /// The declared secret key whose value the server rejected, where the source said so.
+    ///
+    /// What the data source editor's row for that key keys on: the def expects a secret, this
+    /// machine holds one, and the last connect was turned away over it. `None` for every other
+    /// answer, including a failure this engine could not classify — an unrecognised refusal must
+    /// read as *unknown*, never as a wrong password.
+    pub fn rejected(&self) -> Option<&'static str> {
+        match self {
+            RegStatus::Failed {
+                fault: Some(ConnectFault::Rejected { key }),
+                ..
+            } => Some(key),
+            _ => None,
         }
     }
 }

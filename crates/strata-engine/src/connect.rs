@@ -49,11 +49,11 @@ pub enum Registration {
 /// been registered: a data source that has never worked simply has nothing to take back, and both
 /// arms' removals are silent about a key with nothing behind it. Making the caller distinguish
 /// would be one more thing to get right per provider, for no behaviour.
-pub fn settle(
+pub fn settle<E>(
     ctx: &SessionContext,
-    prepared: Result<Registration, String>,
+    prepared: Result<Registration, E>,
     take_back: impl FnOnce(),
-) -> Result<(), String> {
+) -> Result<(), E> {
     match prepared {
         Ok(Registration::Store {
             at,

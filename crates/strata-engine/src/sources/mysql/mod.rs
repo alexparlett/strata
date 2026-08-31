@@ -57,8 +57,8 @@ use self::executor::NamedProjection;
 use self::settings::{MyAddress, MySettings, PASSWORD, PASSWORD_ENV};
 use crate::secrets::{SecretProvider, SecretRequest};
 use crate::sources::source::{
-    DataSource, FunctionMap, Listing, Located, Relation, ServerIdent, SourceCatalog, SourceKind,
-    SourceMode, SourceSetting, Sourced,
+    ConnectRefusal, DataSource, FunctionMap, Listing, Located, Relation, ServerIdent,
+    SourceCatalog, SourceKind, SourceMode, SourceSetting, Sourced,
 };
 use crate::sources::sql::{federated, SQLExecutor, SqlSpec};
 use crate::sources::{no_secret, secret_slot};
@@ -88,7 +88,7 @@ impl DataSource for My {
         &self,
         def: &SourceDef,
         secrets: Arc<dyn SecretProvider>,
-    ) -> Result<Sourced, String> {
+    ) -> Result<Sourced, ConnectRefusal> {
         let settings = MySettings::read(&def.config)?;
         let address = settings::parse_address(def.setting("address"))?;
         let password = match secret_slot(def, PASSWORD, PASSWORD_ENV) {
@@ -302,7 +302,7 @@ async fn build_pool(
     address: &MyAddress<'_>,
     settings: &MySettings,
     password: Option<SecretString>,
-) -> Result<MySQLConnectionPool, String> {
+) -> Result<MySQLConnectionPool, ConnectRefusal> {
     let mut params = to_secret_map(HashMap::from([
         ("host".to_string(), address.host.to_string()),
         ("tcp_port".to_string(), address.port.to_string()),
@@ -322,22 +322,32 @@ async fn build_pool(
 /// The crate's own prose is good and is kept wherever it already names the fault; the two arms
 /// rewritten here are the ones it cannot word as well as we can, because it does not know there is
 /// a data source editor behind them. Nothing in any of it is a password.
+///
+/// **The rejected-credential arm carries a [`ConnectFault`] as well as its sentence**, so the
+/// editor's `PASSWORD` row can say the stored value was turned away. The recognition is the
+/// server's own error code — 1045, access denied — which is what the crate matches to produce
+/// this variant; the sentence names the user as well, because that code does not separate a wrong
+/// password from a user the server does not know.
 fn refused(
     conn: &SourceDef,
     address: &MyAddress<'_>,
     settings: &MySettings,
     e: pool::Error,
-) -> String {
+) -> ConnectRefusal {
     match e {
         pool::Error::InvalidHostOrPortError { host, port, .. } => format!(
             "Cannot reach a MySQL server at '{host}:{port}'. Check the address, and that the \
              server is running."
+        )
+        .into(),
+        pool::Error::InvalidUsernameOrPassword => ConnectRefusal::rejected(
+            format!(
+                "The server refused the user '{}' at '{}:{}'. Check the user and its password.",
+                settings.user, address.host, address.port
+            ),
+            PASSWORD,
         ),
-        pool::Error::InvalidUsernameOrPassword => format!(
-            "The server refused the user '{}' at '{}:{}'. Check the user and its password.",
-            settings.user, address.host, address.port
-        ),
-        other => format!("Cannot connect to '{}': {other}", conn.named()),
+        other => format!("Cannot connect to '{}': {other}", conn.named()).into(),
     }
 }
 

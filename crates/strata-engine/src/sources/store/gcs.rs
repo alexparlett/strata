@@ -15,7 +15,7 @@ use strata_model::SourceDef;
 use super::{built, check_gcs_bucket, client_options, client_settings, probe};
 use crate::secrets::SecretProvider;
 use crate::sources::source::{
-    DataSource, Field, SourceKind, SourceMode, SourceSetting, Sourced, When,
+    ConnectRefusal, DataSource, Field, SourceKind, SourceMode, SourceSetting, Sourced, When,
 };
 
 /// How this bucket is authorised — GCS's three, in its own words.
@@ -104,7 +104,7 @@ impl DataSource for Gcs {
         &self,
         def: &SourceDef,
         _secrets: Arc<dyn SecretProvider>,
-    ) -> Result<Sourced, String> {
+    ) -> Result<Sourced, ConnectRefusal> {
         let value = |key: &str| def.config.get(key).map(|v| v.trim()).unwrap_or_default();
         let mut builder = GoogleCloudStorageBuilder::new().with_bucket_name(def.setting("address"));
         builder = match value("auth") {

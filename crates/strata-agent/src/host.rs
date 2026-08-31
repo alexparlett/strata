@@ -69,7 +69,7 @@ impl RegState {
         match status {
             None => RegState::Pending,
             Some(RegStatus::Ready) => RegState::Ready,
-            Some(RegStatus::Failed { reason }) => RegState::Failed(reason.clone()),
+            Some(RegStatus::Failed { reason, .. }) => RegState::Failed(reason.clone()),
         }
     }
 }
@@ -240,7 +240,7 @@ impl Described {
                 rows: meta.rows,
                 columns: meta.columns.clone(),
             },
-            (Some(RegStatus::Failed { reason }), _) => Described::Failed {
+            (Some(RegStatus::Failed { reason, .. }), _) => Described::Failed {
                 name: def.name.clone(),
                 error: reason.clone(),
             },
@@ -267,7 +267,7 @@ impl Described {
                 columns: meta.columns.clone(),
                 reads: meta.tables.iter().chain(&meta.remote).cloned().collect(),
             },
-            (Some(RegStatus::Failed { reason }), _) => Described::Failed {
+            (Some(RegStatus::Failed { reason, .. }), _) => Described::Failed {
                 name: def.name.clone(),
                 error: reason.clone(),
             },

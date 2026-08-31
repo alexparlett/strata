@@ -53,7 +53,8 @@ use strata_model::{check_catalog_name, ColumnInfo, SourceDef};
 
 use self::providers::SourceCatalogProvider;
 use self::source::{
-    Listing, Registrants, Relation, ServerIdent, SourceCatalog, SourceInfo, SourceMode, Sourced,
+    ConnectRefusal, Listing, Registrants, Relation, ServerIdent, SourceCatalog, SourceInfo,
+    SourceMode, Sourced,
 };
 use super::connect::{self, Registration};
 use super::fold_ident;
@@ -603,7 +604,7 @@ pub(crate) async fn connect(
     live: &Live,
     conn: &SourceDef,
     secrets: Arc<dyn SecretProvider>,
-) -> Result<(), String> {
+) -> Result<(), ConnectRefusal> {
     let named = conn.named();
     let registration = match prepare(sources, live, conn, secrets).await {
         Ok(Prepared::Store(registration)) => Ok(registration),
@@ -659,7 +660,7 @@ async fn prepare(
     live: &Live,
     conn: &SourceDef,
     secrets: Arc<dyn SecretProvider>,
-) -> Result<Prepared, String> {
+) -> Result<Prepared, ConnectRefusal> {
     let named = conn.named();
     let def = conn;
     let source = sources.get(def.kind.trim())?;
@@ -671,7 +672,9 @@ async fn prepare(
     match source.connect(conn, secrets).await? {
         Sourced::Store { store } => {
             let at = registration_url(sources, conn).ok_or_else(|| {
-                format!("Cannot register '{named}': not a bucket Strata can key.")
+                ConnectRefusal::from(format!(
+                    "Cannot register '{named}': not a bucket Strata can key."
+                ))
             })?;
             Ok(Prepared::Store(Registration::Store {
                 at,
