@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use freya::query::{use_query, Captured, Query, QueryCapability, UseQuery};
 use strata_arrow::profile::Profiled;
-use strata_engine::sql::qualified;
+use strata_engine::sql::SessionName;
 use strata_engine::EngineError;
 use strata_model::{CatalogKind, CatalogProfile, RemoteRef};
 use uuid::Uuid;
@@ -77,11 +77,12 @@ impl ProfileTarget {
     pub fn sql_name(&self) -> String {
         match self {
             ProfileTarget::Workspace { name, .. } => name.clone(),
-            ProfileTarget::Remote { relation, .. } => qualified([
+            ProfileTarget::Remote { relation, .. } => SessionName::qualified([
                 relation.source.as_str(),
                 relation.schema.as_str(),
                 relation.relation.as_str(),
-            ]),
+            ])
+            .to_string(),
         }
     }
 

@@ -29,6 +29,11 @@ use strata_model::TabId;
 /// chords (⌘T / ⌘↵ / …) out of the buffer while letting them reach the keymap's global
 /// listeners, and keeps the buffer's rebindable undo/redo chords (`EditBindings`) synced
 /// from the settings so the text layer matches whatever the user bound.
+///
+/// It also **holds the completion snapshot**: one `sql::Catalog::build` off the store's rows and
+/// the engine's `lang().bundle()`, re-assembled by a side effect keyed on the catalog generation
+/// and nothing else. That snapshot is what makes `sql::complete` engine-free on the keystroke
+/// path — see `docs/COMPLETION_SPEC.md` §8.
 #[derive(PartialEq)]
 pub struct EditorTab {
     pub id: TabId,
@@ -101,16 +106,13 @@ impl Component for EditorTab {
                             v.info.as_ref().map(|i| i.columns.as_slice()).unwrap_or(&[]),
                         )
                     }),
-                    engine.lang().functions(),
-                    engine.lang().prepared(),
-                    engine.formats(),
+                    engine.lang().bundle(),
                     dialect,
-                )
-                .with_databases(engine.sources().database_syms());
+                );
             });
         }
         let on_completions = move |req: CompletionRequest| {
-            sql::complete(&req.text, req.caret_byte, &catalog.peek(), req.manual)
+            sql::complete(&catalog.peek(), &req.text, req.caret_byte, req.manual)
                 .into_iter()
                 .map(to_completion_item)
                 .collect::<Vec<_>>()

@@ -542,7 +542,7 @@ engine.snapshot(id)    // page(page, page_size, sort) · chart(q) · trend(x, y)
 engine.catalog()       // register · deregister · table_meta · create_view · drop_view
                        // drop_table · is_internal · profile(name) · cancel_profile
 engine.sources()       // connect · disconnect · listing · show_schemas · database_syms · …
-engine.lang()          // validate(sql) -> Vec<Diagnostic> (the §9 dry-plan) · functions · …
+engine.lang()          // analyze(sql) -> Vec<Diagnostic> (the §9 dry-plan) · bundle() · …
 engine.work()          // flag() -> Arc<AtomicBool> (T2) · background()
 // Root: builder() · id() · set_data_dir() · set_config() -> ConfigOutcome · restart_owed()
 //       · overrides() · formats() · Drop
@@ -653,7 +653,7 @@ originated, so the user sees them in place. Both happen; not either/or.
 | Registration at load, at a ↻ re-scan, or at a row Refresh | yes — one event per def per pass, on either arm (`state/hooks.rs`); no synthesized "N tables re-scanned" summary, which would re-derive facts already in the list | a per-source marker on the sidebar catalog item |
 
 SQL validation is the exception — derived per tab from the editor text and the catalog, and not
-logged. It is an **engine dry-plan** (`Lang::validate`), not a client-side memo:
+logged. It is an **engine dry-plan** (`Lang::analyze`), not a client-side memo:
 lexical lints + statement policy + parse/resolve/analyze against the live session, never
 executing. Purely advisory — Run is never gated on it.
 

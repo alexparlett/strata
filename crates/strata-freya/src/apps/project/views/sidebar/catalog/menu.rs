@@ -21,7 +21,7 @@
 use freya::components::MenuItemThemePartial;
 use freya::prelude::*;
 use freya::radio::{use_radio_station, RadioStation};
-use strata_engine::quote_ident;
+use strata_engine::sql::WorkspaceName;
 use strata_engine::SourceMode;
 use strata_model::{CatalogKind, Origin, SavedQuery};
 use uuid::Uuid;
@@ -396,7 +396,7 @@ pub fn select_sql(target: &str, limit: usize) -> String {
 /// The statement **Pin as view…** composes (DB-06) — `name` and `target` both already rendered,
 /// and by *different* renderers: the view is a workspace def, so its name is the one the store
 /// will key it under, while the target's spelling is a server's. See
-/// [`quote_ident`](strata_engine::quote_ident).
+/// [`WorkspaceName`](strata_engine::sql::WorkspaceName).
 pub fn pin_view_sql(name: &str, target: &str) -> String {
     format!("CREATE VIEW {name} AS\nSELECT *\nFROM {target};")
 }
@@ -429,7 +429,11 @@ fn open_composed(actions: &CatalogActions, name: &str, sql: String) {
 /// happening to.
 pub fn view_row(actions: &CatalogActions, name: &str) {
     let limit = actions.config.peek().settings.row_limit;
-    open_composed(actions, name, select_sql(&quote_ident(name), limit));
+    open_composed(
+        actions,
+        name,
+        select_sql(WorkspaceName::of(name).as_str(), limit),
+    );
 }
 
 /// A **remote relation** row's menu: query it · profile it · pin it as a workspace view.
@@ -501,7 +505,10 @@ pub fn pin_relation(actions: &CatalogActions, relation: &Remote) {
     open_composed(
         actions,
         &relation.name,
-        pin_view_sql(&quote_ident(&relation.name), &relation.address),
+        pin_view_sql(
+            WorkspaceName::of(&relation.name).as_str(),
+            &relation.address,
+        ),
     );
 }
 

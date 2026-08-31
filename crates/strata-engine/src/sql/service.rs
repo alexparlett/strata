@@ -1,96 +1,81 @@
-//! The SQL **validator** — everything the editor squiggles.
+//! The **SQL language service** — the two questions the editor asks about a buffer it has not
+//! run, and the one module face that answers them.
 //!
-//! One entry point, [`validate`], accumulating four tiers of diagnostics:
+//! - [`analyze`] — every diagnostic the buffer draws, **async**, against the live session. Four
+//!   tiers, accumulated:
 //!
-//! 1. **Lexical** — the tokenizer's own faults (unterminated string / quoted ident),
-//!    unbalanced parentheses, and the keyword-typo lint (`FORM` → `FROM`).
-//! 2. **Policy** — each statement goes through the statement layer's own stages
-//!    ([`statements::pipeline`](crate::statements::pipeline)): its bare reads resolve against the
-//!    connected databases ([`qualify`](crate::statements::pipeline::qualify), before the
-//!    classification, and its refusals squiggle the name), then it classifies for a caller
-//!    holding [`Capability::full`]. **These are the Run's own stages, not a second reading of the
-//!    same rules**: a statement the editor did not underline is a statement Run is prepared to
-//!    perform. Queries, introspection and the statements the engine implements itself draw no
-//!    squiggle and go on to the tiers below; what is refused gets a policy diagnostic pointing at
-//!    the right surface.
-//! 3. **Names** — the native [`resolve`](crate::sql::resolve)r walks the parsed AST and
-//!    reports **every** unknown table/column with a span (the planner below is fail-fast: one name
-//!    per statement), staying quiet where a mid-edit scope is unknowable. Name faults skip the
-//!    dry-plan.
-//!    A statement bound for a **server** (`statements::arms::dispatched`) stops there: its types, functions and
-//!    clauses are that server's vocabulary, so judging it here would squiggle a statement Run
-//!    performs.
-//! 4. **Semantic** — the allowed statements are **dry-planned** against the live `SessionContext`,
-//!    then optimized for the analyzer's type coercion, so unknown functions, bad casts and the
-//!    name semantics the resolver skips surface as the *same* errors a Run would hit. Nothing
-//!    executes and no snapshot materializes.
+//!   1. **Lexical** — the tokenizer's own faults (unterminated string / quoted ident),
+//!      unbalanced parentheses, and the keyword-typo lint (`FORM` → `FROM`) — [`lint`](super::lint).
+//!   2. **Policy** — each statement goes through the statement layer's own stages
+//!      ([`statements::pipeline`](crate::statements::pipeline)): its bare reads resolve against the
+//!      connected databases (qualify, before the classification, and its refusals squiggle the
+//!      name), then it classifies for a caller holding [`Capability::full`]. **These are the Run's
+//!      own stages, not a second reading of the same rules**: a statement the editor did not
+//!      underline is a statement Run is prepared to perform. Queries, introspection and the
+//!      statements the engine implements itself draw no squiggle and go on to the tiers below;
+//!      what is refused gets a policy diagnostic pointing at the right surface.
+//!   3. **Names** — the native [`resolve`](super::resolve)r walks the parsed AST and reports
+//!      **every** unknown table/column with a span (the planner below is fail-fast: one name per
+//!      statement), staying quiet where a mid-edit scope is unknowable. Name faults skip the
+//!      dry-plan. A statement bound for a **server** (`statements::arms::dispatched`) stops there:
+//!      its types, functions and clauses are that server's vocabulary, so judging it here would
+//!      squiggle a statement Run performs.
+//!   4. **Semantic** — the allowed statements are **dry-planned** against the live
+//!      `SessionContext`, then optimized for the analyzer's type coercion, so unknown functions,
+//!      bad casts and the name semantics the resolver skips surface as the *same* errors a Run
+//!      would hit. Nothing executes and no snapshot materializes.
 //!
-//! Statements are split on top-level `;` and validated independently, so one broken
-//! statement never hides the others' diagnostics.
-
-use std::cmp::Ordering;
-use std::ops::Range;
-
-use datafusion::common::diagnostic::DiagnosticKind;
-use datafusion::common::{DataFusionError, SchemaError, TableReference};
-use datafusion::prelude::SessionContext;
-use datafusion::sql::sqlparser::parser::ParserError;
+//!   Statements are split on top-level `;` and analyzed independently, so one broken statement
+//!   never hides the others' diagnostics.
+//!
+//! - [`complete`] — the ranked offer for a caret position: **pure and sync**, over a
+//!   [`Catalog`](super::Catalog) snapshot the consumer holds. That is the keystroke contract, and
+//!   it is what makes the offer free: no engine, no lock, no I/O on the path a character typed
+//!   has to finish.
+//!
+//! **The no-divergence invariant.** [`analyze`] consumes the pipeline's own
+//! parse/qualify/classify verbatim; the mid-edit ladder ([`resolve`](super::resolve),
+//! [`context`](super::context), [`lint::check_from_targets`](super::lint::check_from_targets))
+//! adds *tolerance below* those stages and never a second opinion above them, and every rung
+//! asks the one [`NameOracle`](super::oracle::NameOracle) about names. A red squiggle on a
+//! statement Run executes is the two-answerers drift this module exists to end — it shipped once
+//! (DB-11), from a rung that asked the workspace catalog what the statement pass asked the
+//! connected databases.
+//!
+//! **An async completion tier is deferred, not closed.** [`complete`] being pure over a snapshot
+//! is exactly what lets one layer *above* it later — debounced, feeding a richer snapshot or
+//! appending late results, with a remote relation's columns (an introspection round trip the
+//! keystroke path may never take) as the natural first case. Nothing here has to change for that;
+//! the sync core stays the answer a keystroke gets.
 
 use crate::policy::{Capability, PolicyProvider, Principal};
-use crate::sql::lex::{
-    byte_span, is_reserved_in_name_position, lex, rel_offset, split_statements, Tok, TokKind,
-};
-use crate::sql::qualify::Names;
+use crate::sql::lex::{byte_span, lex};
+use crate::sql::lint::{check_from_targets, check_parens, keyword_typo_hints};
+use crate::sql::oracle::NameOracle;
 use crate::sql::resolve::resolve;
-use crate::sql::FunctionCatalog;
+use crate::sql::spans::{
+    df_error_diag, diag, is_incomplete, is_unresolved_column, leading_keywords_span, overlaps,
+    statement_ranges,
+};
+use crate::sql::symbols::Catalog;
+use crate::sql::{complete as offer, Completion, FunctionCatalog};
 use crate::statements::pipeline::{classify, parse_range, qualify, Admitted, Pipeline};
 use strata_model::{Diagnostic, Severity};
 
-/// Clause keywords we typo-check bare identifiers against (edit distance ≤ 1).
-const CLAUSE_KEYWORDS: &[&str] = &[
-    "SELECT",
-    "FROM",
-    "WHERE",
-    "GROUP",
-    "ORDER",
-    "HAVING",
-    "QUALIFY",
-    "LIMIT",
-    "OFFSET",
-    "JOIN",
-    "INNER",
-    "LEFT",
-    "RIGHT",
-    "FULL",
-    "OUTER",
-    "CROSS",
-    "NATURAL",
-    "ON",
-    "USING",
-    "AS",
-    "BY",
-    "DISTINCT",
-    "UNION",
-    "INTERSECT",
-    "EXCEPT",
-    "WITH",
-    "AND",
-    "OR",
-    "NOT",
-    "NULL",
-    "CASE",
-    "WHEN",
-    "THEN",
-    "ELSE",
-    "END",
-    "ASC",
-    "DESC",
-];
+/// Completions for the caret at byte `caret` in `sql`, ranked — the keystroke entry.
+///
+/// Pure and synchronous over `catalog`, which is the consumer's held snapshot
+/// ([`Catalog::build`](Catalog::build), re-assembled when
+/// [`LangBundle::generation`](super::LangBundle::generation) moves). `manual` marks an explicit
+/// trigger (⌃/⌘Space) — it widens the offer by lifting the obscure-keyword tail gate.
+pub fn complete(catalog: &Catalog, sql: &str, caret: usize, manual: bool) -> Vec<Completion> {
+    offer::offer(catalog, sql, caret, manual)
+}
 
-/// Validate `sql` against the live session and return **all** diagnostics, byte-spanned
-/// where the fault is localizable. Read-only over the context: statements are parsed and
-/// planned, never executed (DDL only takes effect when its plan is driven).
-pub async fn validate(
+/// Analyze `sql` against the live session and return **all** diagnostics, byte-spanned where the
+/// fault is localizable. Read-only over the context: statements are parsed and planned, never
+/// executed (DDL only takes effect when its plan is driven).
+pub(crate) async fn analyze(
     p: &Pipeline<'_>,
     policy: &dyn PolicyProvider,
     functions: &FunctionCatalog,
@@ -110,8 +95,9 @@ pub async fn validate(
         return out;
     }
 
+    let names = NameOracle::of(ctx);
     check_parens(&toks, sql, &mut out);
-    let hints = keyword_typo_hints(&toks, ctx, functions);
+    let hints = keyword_typo_hints(&toks, &names, functions);
 
     let who = Principal::new(Capability::full());
     let state = ctx.state();
@@ -123,7 +109,7 @@ pub async fn validate(
             Ok(parsed) => parsed,
             Err(err) => {
                 if idx == last && is_incomplete(&err, slice, &stmt_range, &toks) {
-                    check_from_targets(ctx, &toks, &stmt_range, sql, &mut out);
+                    check_from_targets(&names, &toks, &stmt_range, sql, &mut out);
                     continue;
                 }
                 let mut d = df_error_diag(&err, sql, slice, &stmt_range, &toks);
@@ -134,7 +120,7 @@ pub async fn validate(
                     d.message = hint.clone();
                 }
                 out.push(d);
-                check_from_targets(ctx, &toks, &stmt_range, sql, &mut out);
+                check_from_targets(&names, &toks, &stmt_range, sql, &mut out);
                 continue;
             }
         };
@@ -169,7 +155,7 @@ pub async fn validate(
             }
         }
         let stmt = admitted.into_statement();
-        let resolution = resolve(ctx, &stmt, slice, stmt_range.start, sql).await;
+        let resolution = resolve(&names, ctx, &stmt, slice, stmt_range.start, sql).await;
         if !resolution.diags.is_empty() {
             out.extend(resolution.diags);
             continue;
@@ -197,434 +183,6 @@ pub async fn validate(
     out
 }
 
-/// Whether two byte ranges intersect.
-fn overlaps(a: &Range<usize>, b: &Range<usize>) -> bool {
-    a.start < b.end && b.start < a.end
-}
-
-/// The planner failed to resolve a column reference (`Schema error: No field
-/// named …`) — matched by variant, not message text.
-fn is_unresolved_column(err: &DataFusionError) -> bool {
-    matches!(
-        err.find_root(),
-        DataFusionError::SchemaError(e, _)
-            if matches!(e.as_ref(), SchemaError::FieldNotFound { .. })
-    )
-}
-
-/// A parse failure at end-of-input — the statement is a valid *prefix* of something,
-/// i.e. incomplete rather than wrong. Structural test first: the parser's reported
-/// position (the `Line: N, Column: M` suffix sqlparser appends to every parse error —
-/// the same contract [`df_error_diag`] spans rely on) sits at or past the statement's
-/// last token, meaning the parser consumed everything written and wanted more. A
-/// message with no position falls back to sqlparser's `found: EOF` wording.
-fn is_incomplete(err: &DataFusionError, slice: &str, stmt: &Range<usize>, toks: &[Tok]) -> bool {
-    let msg = match err.find_root() {
-        DataFusionError::SQL(pe, _) => match pe.as_ref() {
-            ParserError::ParserError(s) | ParserError::TokenizerError(s) => s,
-            ParserError::RecursionLimitExceeded => return false,
-        },
-        _ => return false,
-    };
-    if let Some((line, col)) = extract_line_col(msg) {
-        let at = rel_offset(slice, line as u64, col as u64);
-        let last_tok_end = toks
-            .iter()
-            .filter(|t| t.span.start >= stmt.start && t.span.end <= stmt.end)
-            .map(|t| t.span.end - stmt.start)
-            .max();
-        return last_tok_end.is_none_or(|end| at >= end);
-    }
-    msg.contains("found: EOF")
-}
-
-/// Byte ranges of the token-bearing statements in `sql`, split on top-level `;`.
-/// Token-level, so `;` inside strings/comments never splits, and whitespace- or
-/// comment-only segments (no tokens) are dropped rather than "validated".
-fn statement_ranges(sql: &str, toks: &[Tok]) -> Vec<Range<usize>> {
-    split_statements(toks, sql.len())
-        .into_iter()
-        .filter(|r| {
-            toks.iter()
-                .any(|t| t.span.start >= r.start && t.span.end <= r.end)
-        })
-        .filter_map(|r| trim_range(sql, r))
-        .collect()
-}
-
-/// Shrink `range` to its non-whitespace core; `None` if nothing is left.
-fn trim_range(sql: &str, range: Range<usize>) -> Option<Range<usize>> {
-    let slice = &sql[range.clone()];
-    let trimmed = slice.trim_start();
-    let start = range.start + (slice.len() - trimmed.len());
-    let end = start + trimmed.trim_end().len();
-    (start < end).then_some(start..end)
-}
-
-/// The span of a statement's leading keyword run (`CREATE EXTERNAL TABLE`,
-/// `INSERT INTO`, …) — what a policy diagnostic underlines instead of the whole
-/// statement.
-fn leading_keywords_span(toks: &[Tok], stmt: &Range<usize>) -> Range<usize> {
-    let mut in_stmt = toks
-        .iter()
-        .filter(|t| t.span.start >= stmt.start && t.span.end <= stmt.end);
-    let Some(first) = in_stmt.next() else {
-        return stmt.clone();
-    };
-    let mut end = first.span.end;
-    for t in in_stmt.take(2) {
-        if t.kind == TokKind::Keyword {
-            end = t.span.end;
-        } else {
-            break;
-        }
-    }
-    first.span.start..end
-}
-
-/// Token-level unknown-table check for a statement the **parser rejected**: the name
-/// chains in table position (right after `FROM`/`JOIN`) are resolved against the live
-/// catalog. Conservative by design — names the statement introduces itself (any ident
-/// directly followed by `AS`: CTEs, aliases) and table functions (chain followed by
-/// `(`) are skipped, and mixed/quoted multi-part names are left to the planner.
-fn check_from_targets(
-    ctx: &SessionContext,
-    toks: &[Tok],
-    stmt: &Range<usize>,
-    sql: &str,
-    out: &mut Vec<Diagnostic>,
-) {
-    fn is_name(t: &Tok) -> bool {
-        match t.kind {
-            TokKind::Ident | TokKind::QuotedIdent => true,
-            TokKind::Keyword => !is_reserved_in_name_position(&t.text),
-            _ => false,
-        }
-    }
-    let stmt_toks: Vec<&Tok> = toks
-        .iter()
-        .filter(|t| t.span.start >= stmt.start && t.span.end <= stmt.end)
-        .collect();
-    let local: Vec<&str> = stmt_toks
-        .windows(2)
-        .filter(|w| is_name(w[0]) && w[1].kind == TokKind::Keyword && w[1].eq_ci("AS"))
-        .map(|w| w[0].text.as_str())
-        .collect();
-
-    let mut i = 0;
-    while i < stmt_toks.len() {
-        let t = stmt_toks[i];
-        i += 1;
-        if t.kind != TokKind::Keyword || !(t.eq_ci("FROM") || t.eq_ci("JOIN")) {
-            continue;
-        }
-        let mut parts: Vec<&Tok> = Vec::new();
-        let mut j = i;
-        while j < stmt_toks.len() && is_name(stmt_toks[j]) {
-            parts.push(stmt_toks[j]);
-            j += 1;
-            if j < stmt_toks.len()
-                && stmt_toks[j].kind == TokKind::Punct
-                && stmt_toks[j].text == "."
-            {
-                j += 1;
-            } else {
-                break;
-            }
-        }
-        if parts.is_empty() {
-            continue;
-        }
-        if stmt_toks
-            .get(j)
-            .is_some_and(|t| t.kind == TokKind::Punct && t.text == "(")
-        {
-            continue;
-        }
-        if local.iter().any(|l| l.eq_ignore_ascii_case(&parts[0].text)) {
-            continue;
-        }
-        let exists = match parts.as_slice() {
-            [one] if one.kind == TokKind::QuotedIdent => {
-                ctx.table_exist(TableReference::bare(one.text.clone()))
-            }
-            [one] => ctx.table_exist(one.text.as_str()),
-            many if many.iter().all(|p| p.kind != TokKind::QuotedIdent) => {
-                let name = many
-                    .iter()
-                    .map(|p| p.text.as_str())
-                    .collect::<Vec<_>>()
-                    .join(".");
-                ctx.table_exist(name.as_str())
-            }
-            _ => continue,
-        };
-        if !exists.unwrap_or(true) {
-            let span = parts.first().unwrap().span.start..parts.last().unwrap().span.end;
-            out.push(diag(
-                Severity::Error,
-                format!("Table or view '{}' not found", &sql[span.clone()]),
-                span,
-                sql,
-            ));
-        }
-    }
-}
-
-/// Fold a parse/plan error for the statement at `stmt` (whose text is `slice`) into a
-/// byte-spanned [`Diagnostic`]. Best span first: the planner's own spanned
-/// `Diagnostic` (DF 54, `collect_spans` on) → the `Line: N, Column: M` embedded in a
-/// parser message → the statement's leading keywords.
-fn df_error_diag(
-    err: &DataFusionError,
-    sql: &str,
-    slice: &str,
-    stmt: &Range<usize>,
-    toks: &[Tok],
-) -> Diagnostic {
-    if let Some(d) = err.diagnostic() {
-        let severity = match d.kind {
-            DiagnosticKind::Error => Severity::Error,
-            DiagnosticKind::Warning => Severity::Warning,
-        };
-        let span = d
-            .span
-            .map(|s| {
-                let start = stmt.start + rel_offset(slice, s.start.line, s.start.column);
-                let end = stmt.start + rel_offset(slice, s.end.line, s.end.column);
-                widen_to_token(start..end, toks)
-            })
-            .unwrap_or_else(|| leading_keywords_span(toks, stmt));
-        return diag(severity, d.message.clone(), span, sql);
-    }
-
-    let (mut message, parse_loc) = match err.find_root() {
-        DataFusionError::SQL(pe, _) => match pe.as_ref() {
-            ParserError::ParserError(s) | ParserError::TokenizerError(s) => {
-                (s.clone(), extract_line_col(s))
-            }
-            ParserError::RecursionLimitExceeded => {
-                ("Statement is too deeply nested to parse".to_string(), None)
-            }
-        },
-        root => (root.message().into_owned(), None),
-    };
-    let span = match parse_loc {
-        Some((line, col)) => {
-            if let Some(at) = message.rfind(" at Line: ") {
-                message.truncate(at);
-            }
-            widen_to_token(
-                {
-                    let at = stmt.start + rel_offset(slice, line as u64, col as u64);
-                    at..at
-                },
-                toks,
-            )
-        }
-        None => leading_keywords_span(toks, stmt),
-    };
-    diag(Severity::Error, message, span, sql)
-}
-
-/// Grow a (possibly empty) span to the full token under its start, so squiggles cover
-/// the offending word rather than a single character. Leaves real ranges alone.
-fn widen_to_token(span: Range<usize>, toks: &[Tok]) -> Range<usize> {
-    if span.end > span.start {
-        return span;
-    }
-    toks.iter()
-        .find(|t| t.span.start <= span.start && span.start < t.span.end)
-        .map(|t| t.span.clone())
-        .unwrap_or(span.start..span.start + 1)
-}
-
-/// `Line: N, Column: M` from a sqlparser message, if present.
-fn extract_line_col(message: &str) -> Option<(usize, usize)> {
-    let at = message.rfind("Line: ")?;
-    let rest = &message[at + "Line: ".len()..];
-    let line: usize = rest
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .collect::<String>()
-        .parse()
-        .ok()?;
-    let at = rest.find("Column: ")?;
-    let rest = &rest[at + "Column: ".len()..];
-    let column: usize = rest
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .collect::<String>()
-        .parse()
-        .ok()?;
-    Some((line, column))
-}
-
-/// Unbalanced parentheses → point at the offending `(` or `)`.
-fn check_parens(toks: &[Tok], sql: &str, out: &mut Vec<Diagnostic>) {
-    let mut stack: Vec<Range<usize>> = Vec::new();
-    for t in toks {
-        if t.kind == TokKind::Punct && t.text == "(" {
-            stack.push(t.span.clone());
-        } else if t.kind == TokKind::Punct && t.text == ")" && stack.pop().is_none() {
-            out.push(diag(
-                Severity::Error,
-                "Unmatched closing parenthesis".into(),
-                t.span.clone(),
-                sql,
-            ));
-        }
-    }
-    for open in stack {
-        out.push(diag(
-            Severity::Error,
-            "Unclosed parenthesis".into(),
-            open,
-            sql,
-        ));
-    }
-}
-
-/// Spot bare identifiers one edit away from a clause keyword — e.g. `FORM` → `FROM` —
-/// and return them as `(span, message)` hints. High-confidence only: an identifier
-/// that resolves as a table or registered function is never second-guessed. The
-/// caller decides how each hint surfaces: merged into an overlapping parse error's
-/// message, dropped under a better engine error, or a standalone warning.
-///
-/// **"Resolves" is `qualify::resolves`, not the workspace's own catalog**: asking the
-/// narrower question squiggled `SELECT * FROM orders` — a query that runs — as an unknown word one
-/// edit from `ORDER`, which only the *table not found* error over the same span had been hiding.
-fn keyword_typo_hints(
-    toks: &[Tok],
-    ctx: &SessionContext,
-    functions: &FunctionCatalog,
-) -> Vec<(Range<usize>, String)> {
-    /// A token usable as a name — what an alias or a typo'd keyword's *operand*
-    /// looks like.
-    fn name_like(t: Option<&Tok>) -> bool {
-        t.is_some_and(|t| match t.kind {
-            TokKind::Ident | TokKind::QuotedIdent => true,
-            TokKind::Keyword => !is_reserved_in_name_position(&t.text),
-            _ => false,
-        })
-    }
-    let names = Names::of(ctx);
-    let mut hints = Vec::new();
-    for (i, t) in toks.iter().enumerate() {
-        if t.kind != TokKind::Ident || t.text.len() < 2 {
-            continue;
-        }
-        if names.resolves(&t.text) || functions.contains(&t.text) {
-            continue;
-        }
-        if name_like(i.checked_sub(1).and_then(|p| toks.get(p))) && !name_like(toks.get(i + 1)) {
-            continue;
-        }
-        let dot = |t: Option<&Tok>| t.is_some_and(|t| t.kind == TokKind::Punct && t.text == ".");
-        if dot(toks.get(i + 1)) || dot(i.checked_sub(1).and_then(|p| toks.get(p))) {
-            continue;
-        }
-        let up = t.text.to_ascii_uppercase();
-        if CLAUSE_KEYWORDS.iter().any(|k| k.eq_ignore_ascii_case(&up)) {
-            continue;
-        }
-        if let Some(kw) = CLAUSE_KEYWORDS.iter().find(|k| near_keyword(&up, k)) {
-            hints.push((
-                t.span.clone(),
-                format!("Unknown keyword '{}'. Did you mean '{}'?", t.text, kw),
-            ));
-        }
-    }
-    hints
-}
-
-pub(crate) fn diag(
-    severity: Severity,
-    message: String,
-    span: Range<usize>,
-    sql: &str,
-) -> Diagnostic {
-    Diagnostic {
-        severity,
-        message,
-        loc: Some(line_col(sql, span.start)),
-        span: Some(span),
-    }
-}
-
-/// 1-based `line L:C` label for a byte offset (Problems row display).
-fn line_col(sql: &str, offset: usize) -> String {
-    let off = offset.min(sql.len());
-    let mut line = 1usize;
-    let mut col = 1usize;
-    for (i, ch) in sql.char_indices() {
-        if i >= off {
-            break;
-        }
-        if ch == '\n' {
-            line += 1;
-            col = 1;
-        } else {
-            col += 1;
-        }
-    }
-    format!("line {line}:{col}")
-}
-
-/// A likely typo of a keyword: differs by ≤1 insert/delete/substitute **or** a single
-/// adjacent transposition (Damerau) — so `FORM`→`FROM` (a swap = 2 substitutions) is
-/// caught. Case-insensitive; inputs already upper-cased.
-fn near_keyword(a: &str, b: &str) -> bool {
-    let (av, bv): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
-    if av == bv {
-        return false;
-    }
-    edit_distance_at_most_1(&av, &bv) || adjacent_transposition(&av, &bv)
-}
-
-/// ≤1 insertion/deletion/substitution via a two-pointer walk.
-fn edit_distance_at_most_1(a: &[char], b: &[char]) -> bool {
-    let (la, lb) = (a.len(), b.len());
-    if la.abs_diff(lb) > 1 {
-        return false;
-    }
-    let (mut i, mut j, mut edits) = (0usize, 0usize, 0u8);
-    while i < la && j < lb {
-        if a[i].eq_ignore_ascii_case(&b[j]) {
-            i += 1;
-            j += 1;
-        } else {
-            if edits == 1 {
-                return false;
-            }
-            edits += 1;
-            match la.cmp(&lb) {
-                Ordering::Greater => i += 1,
-                Ordering::Less => j += 1,
-                Ordering::Equal => {
-                    i += 1;
-                    j += 1;
-                }
-            }
-        }
-    }
-    true
-}
-
-/// Exactly one adjacent swap (same length, two neighbouring positions swapped).
-fn adjacent_transposition(a: &[char], b: &[char]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let diff: Vec<usize> = (0..a.len())
-        .filter(|&i| !a[i].eq_ignore_ascii_case(&b[i]))
-        .collect();
-    diff.len() == 2
-        && diff[1] == diff[0] + 1
-        && a[diff[0]].eq_ignore_ascii_case(&b[diff[1]])
-        && a[diff[1]].eq_ignore_ascii_case(&b[diff[0]])
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -635,6 +193,7 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::arrow::record_batch::RecordBatch;
     use datafusion::prelude::SessionConfig;
+    use datafusion::prelude::SessionContext;
     use futures::executor::block_on;
     use std::sync::Arc;
 
@@ -666,7 +225,7 @@ mod tests {
     /// Every diagnostic `sql` draws against `ctx`.
     fn check(ctx: &SessionContext, sql: &str) -> Vec<Diagnostic> {
         let policy = policy();
-        block_on(validate(
+        block_on(analyze(
             &Pipeline::new(ctx),
             &policy,
             &FunctionCatalog::default(),

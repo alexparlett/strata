@@ -1,37 +1,45 @@
-//! The **SQL language service** — one analysis layer over the SQL buffer that
-//! backs both autocomplete and validation. See `docs/SQL_LANGUAGE_SPEC.md`.
+//! The **SQL language service** — one analysis layer over the SQL buffer that backs both
+//! autocomplete and validation. Its face is `service`: [`analyze`] and [`complete`], and
+//! nothing else here is a door.
 //!
+//! - `service` — the two entries, and the invariants they hold (read it first).
+//! - `oracle` — **what a name resolves to**, the one authority every rung asks.
 //! - [`lex`] — tokenise via DataFusion's own `sqlparser` (byte spans + kinds), under the engine's
 //!   configured `datafusion.sql_parser.dialect`.
 //! - [`context`] — split statements + classify the caret's clause context.
-//! - [`ident`] — writing a name back **into** a statement, case-preserving.
-//! - [`symbols`] — the [`Catalog`] and in-statement alias resolution.
-//! - [`validate`] — the full diagnostics pass: lexical lints, the statement router, the native
-//!   name [`resolve`]r, and the engine **dry-plan**. Byte-spanned for squiggles.
-//! - [`resolve`] — the AST name resolver behind validation: every unknown table/column in a parsed
-//!   statement, multi-error and mid-edit tolerant, leaving types and arity to the dry-plan.
+//! - [`name`] — writing a name back **into** SQL: four rules, four types.
+//! - [`symbols`] — the [`Catalog`] snapshot and in-statement alias resolution.
+//! - [`lint`] — the token-level tier: parens, the keyword-typo lint, the tokens-only relation rung.
+//! - [`spans`] — folding a fault onto a byte range of the buffer.
+//! - [`resolve`] — the AST name resolver behind [`analyze`]: every unknown table/column in a
+//!   parsed statement, multi-error and mid-edit tolerant, leaving types and arity to the dry-plan.
 //! - [`qualify`] — bare-name resolution across the connected databases, in front of both
 //!   the router and the planner, so a statement is judged and run with the names it reaches.
-//! - [`complete`] — ranked completions for a caret position.
+//! - [`complete`](mod@complete) — ranked completions for a caret position.
 //!
-//! Completion resolves against a [`Catalog`] snapshot, cheap to build on the UI thread; validation
-//! runs engine-side so its faults are the *same* errors a Run would hit.
+//! Completion resolves against a [`Catalog`] snapshot the consumer holds and rebuilds when the
+//! catalog generation moves; [`analyze`] runs engine-side so its faults are the *same* errors a
+//! Run would hit.
 
-pub mod complete;
-pub mod context;
+pub(crate) mod complete;
+pub(crate) mod context;
 mod fuzzy;
-pub mod ident;
-pub mod lex;
+pub(crate) mod lex;
+pub(crate) mod lint;
+pub mod name;
+pub(crate) mod oracle;
 pub(crate) mod qualify;
-mod resolve;
+pub(crate) mod resolve;
+mod service;
+pub(crate) mod spans;
 pub mod symbols;
-pub mod validate;
 
-pub use complete::{complete, Completion, CompletionKind};
-pub use ident::{needs_quoting, qualified, quote_verbatim};
+pub use complete::{Completion, CompletionKind};
+pub use name::{ResultColumn, SessionName, WorkspaceName};
 pub(crate) use resolve::unwrap_statement;
-pub use symbols::{Catalog, DatabaseSym, PreparedSym, RelationSym, SchemaSym};
-pub use validate::validate;
+pub(crate) use service::analyze;
+pub use service::complete;
+pub use symbols::{Catalog, DatabaseSym, LangBundle, PreparedSym, RelationSym, SchemaSym};
 
 /// Which registry a function came from — the docs-panel header word, and (for the
 /// caller) a coarse category. `Default` is `Scalar` so a name-only [`FunctionSym`]

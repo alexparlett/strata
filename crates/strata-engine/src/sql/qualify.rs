@@ -51,8 +51,7 @@ use datafusion::sql::sqlparser::ast::{
 use datafusion::sql::sqlparser::tokenizer::Span;
 
 use crate::fold_ident;
-use crate::providers::shown_schemas;
-use crate::sql::qualified;
+use crate::sql::oracle::{Address, NameOracle};
 
 /// A bare name this pass refused rather than resolved, spanned into the statement it was read
 /// from so the editor can squiggle the name itself.
@@ -64,8 +63,8 @@ pub(crate) struct Refusal {
 impl Refusal {
     /// One name, several relations. The fix is the user's to make and the message says so: every
     /// candidate is printed in the spelling that reaches it.
-    fn ambiguous(name: &Ident, candidates: &[Qualified]) -> Self {
-        let list: Vec<String> = candidates.iter().map(Qualified::rendered).collect();
+    fn ambiguous(name: &Ident, candidates: &[Address]) -> Self {
+        let list: Vec<String> = candidates.iter().map(Address::rendered).collect();
         Refusal {
             message: format!(
                 "'{}' is ambiguous: {}. Qualify it",
@@ -84,8 +83,8 @@ impl Refusal {
 /// than through `SessionContext::state` (which deep-clones every function registry), and collects
 /// the table-function names only once a database is registered to resolve into.
 pub(crate) fn qualify(ctx: &SessionContext, stmt: &mut DFStatement) -> Vec<Refusal> {
-    let names = Names::of(ctx);
-    if names.databases.is_empty() {
+    let names = NameOracle::of(ctx);
+    if !names.has_databases() {
         return Vec::new();
     }
     let mut pass = Pass {
@@ -95,15 +94,6 @@ pub(crate) fn qualify(ctx: &SessionContext, stmt: &mut DFStatement) -> Vec<Refus
     };
     pass.statement(stmt);
     pass.refusals
-}
-
-/// Every registered catalog that is not [`Home`]'s, in its registered spelling.
-fn databases(ctx: &SessionContext, home: &Home) -> Vec<String> {
-    let folded = fold_ident(&home.catalog);
-    ctx.catalog_names()
-        .into_iter()
-        .filter(|name| fold_ident(name) != folded)
-        .collect()
 }
 
 /// The session's registered table function names, folded. `FROM range(1, 10)` parses as a
@@ -118,160 +108,9 @@ fn table_functions(ctx: &SessionContext) -> HashSet<String> {
         .collect()
 }
 
-/// One relation, addressed the way the thing that holds it spells it: the catalog as the
-/// data source registered it, the schema and the relation as the server does.
-struct Qualified {
-    catalog: String,
-    schema: String,
-    table: String,
-}
-
-impl Qualified {
-    /// The name written back into the statement, **every part quoted** — the only rendering that
-    /// means the same thing under either `enable_ident_normalization`, which would otherwise
-    /// lower-case a server's `Orders`. [`rendered`](Self::rendered) is what a message uses.
-    ///
-    /// Every part carries the **bare name's** span, because the name does have a place in the
-    /// buffer and a statement dispatched to a server is spliced out of it; the synthesized node's
-    /// own [`Span::empty`] would say there is none.
-    fn object_name(&self, span: Span) -> ObjectName {
-        ObjectName(
-            [&self.catalog, &self.schema, &self.table]
-                .into_iter()
-                .map(|part| ObjectNamePart::Identifier(Ident::with_quote_and_span('"', span, part)))
-                .collect(),
-        )
-    }
-
-    /// The address as a message prints it — `qualified`, because these three parts are a server's
-    /// spelling and quoting them whole would name one relation with dots in it.
-    fn rendered(&self) -> String {
-        format!(
-            "'{}'",
-            qualified([
-                self.catalog.as_str(),
-                self.schema.as_str(),
-                self.table.as_str()
-            ])
-        )
-    }
-}
-
-/// Where a bare name already resolves — this session's `datafusion.catalog.default_catalog` and
-/// `default_schema`.
-///
-/// Read from the config rather than the crate's `CATALOG`/`SCHEMA`, because the question is
-/// "would the planner have found it" and the planner asks the config — so a context built any
-/// other way cannot have its own default read as a source.
-struct Home {
-    catalog: String,
-    schema: String,
-}
-
-impl Home {
-    fn of(ctx: &SessionContext) -> Self {
-        let state = ctx.state_ref();
-        let state = state.read();
-        let catalog = &state.config_options().catalog;
-        Home {
-            catalog: catalog.default_catalog.clone(),
-            schema: catalog.default_schema.clone(),
-        }
-    }
-}
-
-/// **What a bare name resolves to**, built once and asked many times — the read half of the pass,
-/// which the keyword-typo lint borrows so it can agree with the resolver about what is a known
-/// name without rewriting anything.
-///
-/// Built once per caller on purpose: the lint asks per identifier token on every keystroke, and
-/// building this is a lock, a config read and a `Vec` per catalog.
-pub(crate) struct Names<'a> {
-    ctx: &'a SessionContext,
-    home: Home,
-    /// Every registered catalog that is not [`Home`]'s, in its registered spelling.
-    databases: Vec<String>,
-}
-
-impl<'a> Names<'a> {
-    pub(crate) fn of(ctx: &'a SessionContext) -> Self {
-        let home = Home::of(ctx);
-        Names {
-            databases: databases(ctx, &home),
-            home,
-            ctx,
-        }
-    }
-
-    /// Whether a **bare** `name` names a relation at all — here, or in a connected database. An
-    /// ambiguous name answers `true`: it names relations, and the statement pass has the better
-    /// sentence for what is wrong with it.
-    pub(crate) fn resolves(&self, name: &str) -> bool {
-        self.home_has(name) || self.candidates(name).is_some()
-    }
-
-    /// Where a bare name resolves outside the workspace — `None` when the workspace has it (it
-    /// wins) or when nothing does.
-    ///
-    /// **Scoped to the schemas each data source shows** ([`shown_schemas`]): a schema switched
-    /// off neither captures a bare name nor collides with one in a schema left on, where a name
-    /// written in full still resolves into any of them. `table_exist` throughout, so only a hit
-    /// pays for `table_names` — and only to recover the server's spelling.
-    fn candidates(&self, name: &str) -> Option<Vec<Qualified>> {
-        if self.home_has(name) {
-            return None;
-        }
-        let folded = fold_ident(name);
-        let mut found = Vec::new();
-        for catalog in &self.databases {
-            let Some(provider) = self.ctx.catalog(catalog) else {
-                continue;
-            };
-            let shown = shown_schemas(provider.as_ref());
-            for schema in provider.schema_names() {
-                if shown
-                    .as_ref()
-                    .is_some_and(|shown| !shown.contains(&fold_ident(&schema)))
-                {
-                    continue;
-                }
-                let Some(relations) = provider.schema(&schema) else {
-                    continue;
-                };
-                if !relations.table_exist(name) {
-                    continue;
-                }
-                let Some(table) = relations
-                    .table_names()
-                    .into_iter()
-                    .find(|listed| fold_ident(listed) == folded)
-                else {
-                    continue;
-                };
-                found.push(Qualified {
-                    catalog: catalog.clone(),
-                    schema,
-                    table,
-                });
-            }
-        }
-        (!found.is_empty()).then_some(found)
-    }
-
-    /// Whether the bare name already resolves where it resolves today — the workspace's one
-    /// schema, holding its tables, its views and the snapshot spool, which is what keeps
-    /// `__snap_` names inside the fence that reserves them.
-    fn home_has(&self, name: &str) -> bool {
-        self.ctx
-            .catalog(&self.home.catalog)
-            .and_then(|catalog| catalog.schema(&self.home.schema))
-            .is_some_and(|schema| schema.table_exist(name))
-    }
-}
-
 /// One run of the pass over one statement.
 struct Pass<'a> {
-    names: Names<'a>,
+    names: NameOracle<'a>,
     /// See [`table_functions`].
     functions: HashSet<String>,
     refusals: Vec<Refusal>,

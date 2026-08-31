@@ -20,7 +20,7 @@ use std::path::Path;
 
 use strata_core::project::{relativize, resolve_source};
 use strata_core::util::one_char;
-use strata_engine::export::quote_col;
+use strata_engine::sql::ResultColumn;
 use strata_engine::{duplicate_column, fold_ident};
 use strata_model::{
     CsvRead, FileCompression, JsonRead, JsonShape, SourceDef, SourceFormat, TableDef, TableOrigin,
@@ -550,7 +550,7 @@ impl ConfigureDraft {
     /// The `CREATE TABLE` a internal table's Save runs, or `None` when there is nothing to compose
     /// yet.
     ///
-    /// Names are quoted **verbatim** ([`quote_col`], not the engine's `quote_ident`): what the
+    /// Names are quoted **verbatim** ([`ResultColumn`], not [`WorkspaceName`]): what the
     /// user typed into a box is the name they meant, so `Region` is a column called `Region`
     /// rather than one silently folded to `region`. The engine still folds for *identity*, which
     /// is why [`column_faults`](Self::column_faults) refuses `Region` beside `REGION`.
@@ -565,14 +565,20 @@ impl ConfigureDraft {
         let columns: Vec<String> = self
             .declared_columns()
             .filter(|column| !column.name().is_empty() && !column.sql_type().is_empty())
-            .map(|column| format!("  {} {}", quote_col(column.name()), column.sql_type()))
+            .map(|column| {
+                format!(
+                    "  {} {}",
+                    ResultColumn::of(column.name()),
+                    column.sql_type()
+                )
+            })
             .collect();
         if columns.is_empty() {
             return None;
         }
         Some(format!(
             "CREATE TABLE {} (\n{}\n);",
-            quote_col(name),
+            ResultColumn::of(name),
             columns.join(",\n")
         ))
     }

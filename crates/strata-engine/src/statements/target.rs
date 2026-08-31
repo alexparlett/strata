@@ -16,7 +16,7 @@ use datafusion::sql::TableReference;
 
 use crate::policy::Locality;
 use crate::providers::{in_workspace, is_store_catalog};
-use crate::sql::qualified;
+use crate::sql::SessionName;
 use crate::{fold_ident, CATALOG, SCHEMA};
 
 /// What a name a statement manages resolves to.
@@ -113,9 +113,9 @@ pub struct Stored {
 }
 
 impl Stored {
-    /// The address a message prints — [`qualified`], for the reason [`Remote::address`] is.
+    /// The address a message prints — [`SessionName::qualified`], for the reason [`Remote::address`] is.
     pub fn address(&self) -> String {
-        qualified([self.source.as_str(), SCHEMA, self.name.as_str()])
+        SessionName::qualified([self.source.as_str(), SCHEMA, self.name.as_str()]).into()
     }
 }
 
@@ -151,12 +151,12 @@ impl Remote {
         self.reference.table()
     }
 
-    /// The address a message prints — [`qualified`], because these three parts are a source's
+    /// The address a message prints — [`SessionName::qualified`], because these three parts are a source's
     /// spelling and quoting them whole would name one relation with dots in it.
     ///
     /// **Output only.** Never a lookup key: see [`recorded`](Self::recorded).
     pub fn address(&self) -> String {
-        qualified([self.source.as_str(), self.schema(), self.table()])
+        SessionName::qualified([self.source.as_str(), self.schema(), self.table()]).into()
     }
 
     /// The reference as everything that *resolves* one holds it — what a match against a
@@ -169,7 +169,7 @@ impl Remote {
     /// statement the server ran names, the catalog being Strata's word for the data source and
     /// already in that report's other half ("on 'pg'").
     pub fn server_address(&self) -> String {
-        qualified([self.schema(), self.table()])
+        SessionName::qualified([self.schema(), self.table()]).into()
     }
 
     /// How the **source** is addressed: `schema.table`, never the catalog, which is Strata's own

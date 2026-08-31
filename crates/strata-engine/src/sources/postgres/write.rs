@@ -137,7 +137,7 @@ fn refused(at: &Remote, e: &impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
 
-    /// **The server's rule, not sqlparser's.** `sql::quote_verbatim` asks `needs_quoting`, whose
+    /// **The server's rule, not sqlparser's.** `sql::SessionName` asks `needs_quoting`, whose
     /// reserved set is the words *DataFusion's* parser cannot read as a name; a `PostgreSQL` server
     /// reserves far more (`user`, `table`, `default`, `check`, `primary`, `column`, `constraint`,
     /// `references`, `unique`, `grant`, none of them in either sqlparser list), so a relation
@@ -156,6 +156,6 @@ mod tests {
     /// The trait's own rule, which this source does not override — asked of it directly, because
     /// building a handle needs a server.
     fn quoted(name: &str) -> String {
-        format!("\"{}\"", name.replace('"', "\"\""))
+        crate::sources::source::ServerIdent::standard(name).to_string()
     }
 }

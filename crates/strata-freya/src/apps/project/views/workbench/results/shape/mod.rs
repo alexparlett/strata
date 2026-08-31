@@ -59,7 +59,7 @@ pub struct ShapeSeed {
 ///
 /// `sql` is the SQL that **produced the settled result** — the press's own `QuerySpec`,
 /// never the live buffer (Chart 04 settled this for the cut press) — and a settled rows
-/// result is one statement by construction (`sql::validate` refuses a multi-statement Run).
+/// result is one statement by construction (`Workspace::run` refuses a multi-statement Run).
 #[derive(Clone, PartialEq, Debug)]
 pub struct ShapeTarget {
     pub tab: TabId,

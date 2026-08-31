@@ -163,13 +163,16 @@ impl Sources<'_> {
             .sources
             .into_iter()
             .filter_map(|source| match source.detail {
-                SourceDetail::Catalog { catalog, schemas } if !catalog.is_empty() => {
-                    Some((catalog, schemas))
-                }
+                SourceDetail::Catalog {
+                    catalog,
+                    writable,
+                    schemas,
+                } if !catalog.is_empty() => Some((catalog, writable, schemas)),
                 _ => None,
             })
-            .map(|(name, schemas)| DatabaseSym {
+            .map(|(name, writable, schemas)| DatabaseSym {
                 name,
+                writable,
                 schemas: schemas
                     .into_iter()
                     .filter(|s| s.visibility == SchemaVisibility::Live)

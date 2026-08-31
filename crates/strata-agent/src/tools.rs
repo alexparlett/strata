@@ -853,7 +853,7 @@ impl<H: Host> StrataTools<H> {
 
     pub async fn validate(&self, params: ValidateParams) -> Result<ValidateResult, AgentError> {
         let (_, engine) = self.engine(params.project.as_deref()).await?;
-        let diagnostics = engine.lang().validate(params.sql).await;
+        let diagnostics = engine.lang().analyze(params.sql).await;
         Ok(ValidateResult {
             diagnostics: diagnostics.iter().map(DiagnosticWire::from).collect(),
         })

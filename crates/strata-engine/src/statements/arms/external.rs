@@ -356,7 +356,7 @@ mod tests {
     use strata_model::{CsvRead, FileCompression, JsonRead, JsonShape, SourceDef};
 
     use crate::formats::fake::TestFormat;
-    use crate::sql::complete::complete;
+    use crate::sql::complete;
     use crate::sql::symbols::Catalog;
     use crate::{Engine, EngineBuilder, RunOutcome, RunRows, RunTag, StatementReport, WsId};
     use strata_core::project::{save_defs, ProjectDefs};
@@ -553,16 +553,9 @@ mod tests {
     #[test]
     fn a_registered_format_appears_in_the_stored_as_offer() {
         let eng = Engine::builder().with_format(TestFormat).build();
-        let catalog = Catalog::build(
-            [],
-            [],
-            Arc::default(),
-            Vec::new(),
-            eng.formats(),
-            String::new(),
-        );
+        let catalog = Catalog::build([], [], eng.lang().bundle(), String::new());
         let offered: Vec<String> =
-            complete("CREATE EXTERNAL TABLE t STORED AS ", 34, &catalog, true)
+            complete(&catalog, "CREATE EXTERNAL TABLE t STORED AS ", 34, true)
                 .into_iter()
                 .map(|c| c.label)
                 .collect();

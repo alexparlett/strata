@@ -463,8 +463,8 @@ relation has none; the data source's own row is where its lifecycle lives.
 
 The two names in that `CREATE VIEW` are rendered by **two different renderers**, because they
 belong to two different owners: the relation's address goes through
-`sql::qualified`/`quote_verbatim`, which preserves the server's spelling segment by segment, and
-the view's name through `engine::quote_ident`, which folds — that being the identity the workspace
+`sql::SessionName::qualified`, which preserves the server's spelling segment by segment, and
+the view's name through `sql::WorkspaceName`, which folds — that being the identity the workspace
 store will key the def under. `docs/COMPLETION_SPEC.md` §6 states the pair.
 
 ## Profiling a remote relation
@@ -495,7 +495,8 @@ aggregate the unparser has no expression to emit, so it would be an assumption r
 
 `engine::profile`'s `Profiled` is the one value that decides this, and it decides the **`FROM`
 renderer** with it, because both turn on the same fact: a workspace name renders through the
-fold-preserving `engine::quote_ident`, a remote one segment-by-segment through `sql::qualified`, so
+fold-preserving `sql::WorkspaceName`, a remote one segment-by-segment through
+`sql::SessionName::qualified`, so
 "view as query" hands over a statement that runs. Both halves are pinned — `engine::profile`'s unit
 tests render every expression through DataFusion's own PostgreSQL dialect (no container needed), and
 `tests/postgres_federation.rs` pins that the aggregate federates into one node, that the server runs

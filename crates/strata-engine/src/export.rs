@@ -480,17 +480,6 @@ fn snapshot_rows(
         .map_err(|e| e.to_string())
 }
 
-/// A **result column name** rendered into SQL: double-quoted verbatim, embedded quotes
-/// doubled. Deliberately not the crate's `quote_ident`, which folds a bare word to
-/// lowercase — right for catalog names (that fold is their registered identity), wrong for
-/// a result column, whose name is exactly what the user's query produced.
-///
-/// `pub` for the Shape panel, which composes SQL over result columns on exactly these terms. An
-/// export renders no name at all: the columns it reads are [`Expr`]s over the snapshot's schema.
-pub fn quote_col(name: impl AsRef<str>) -> String {
-    format!("\"{}\"", name.as_ref().replace('"', "\"\""))
-}
-
 /// Whether a partitioned write also puts the partition columns **inside** the files.
 ///
 /// Sent as a **COPY option**, not as a session `SET`. DataFusion's physical planner reads this

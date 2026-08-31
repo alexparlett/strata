@@ -70,7 +70,7 @@ pub(crate) use views::{create as create_view, drop as drop_view};
 ///
 /// Wildcard-free on [`StmtKind`], so a kind the engine gains is a compile error here rather than
 /// a statement the router admits and nothing performs.
-pub async fn execute(
+pub(crate) async fn execute(
     kind: StmtKind,
     stmt: Qualified,
     who: &Principal,

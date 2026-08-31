@@ -533,7 +533,7 @@ pub struct Engine {
     /// Who may perform what.
     ///
     /// Asked by the three entries that classify a statement: [`run`](Workspace::run),
-    /// [`validate`](Lang::validate) and [`policy_verdicts`](Lang::policy_verdicts). The read
+    /// [`analyze`](Lang::analyze) and [`policy_verdicts`](Lang::policy_verdicts). The read
     /// entries take a statement rather than a caller and are limited to reading by the read path's
     /// own `SQLOptions` instead.
     policy: Arc<dyn PolicyProvider>,
@@ -1822,11 +1822,11 @@ impl Drop for Engine {
 }
 
 /// The **engine identity** of a catalog name: the string DataFusion ends up keying the
-/// object under, once [`quote_ident`] has rendered `name` into a statement.
+/// object under, once [`WorkspaceName`](sql::WorkspaceName) has rendered `name` into a statement.
 ///
 /// It is not a re-derivation of DataFusion's rules — it *asks* `TableReference::parse_str`,
 /// the very function `ctx.register_table(&str)` and `ctx.table(&str)` resolve a plain
-/// `&str` through. So a view created via [`quote_ident`] and a table registered from the
+/// `&str` through. So a view created via [`WorkspaceName`](sql::WorkspaceName) and a table registered from the
 /// same def name land on the same identity by construction: a single bare word folds to
 /// ASCII-lowercase (`MyView` → `myview`, `Order` → `order`), and anything the parser can't
 /// read as one identifier — a space, a hyphen, a leading digit, a stray quote — is the
@@ -1852,36 +1852,6 @@ pub fn fold_ident(name: &str) -> String {
 /// doubled) otherwise.
 ///
 /// **Fold-preserving is the contract**, and it is what makes this safe to add to a shipped app.
-/// DataFusion lower-cases an unquoted identifier and takes a quoted one verbatim, so a view named
-/// `DailySales` has been registering as `dailysales` all along; emitting `"DailySales"` would
-/// re-key it and break every sibling def that says `FROM dailysales`. So a name that already worked
-/// keeps its exact old identity — nothing sayable bare is quoted, and the fold runs here rather
-/// than in the parser, which also makes the identity independent of
-/// `datafusion.sql_parser.enable_ident_normalization`.
-///
-/// Quoting is therefore never a re-keying, only a capability gain, and it fires in two cases:
-/// names that were genuinely broken (`Sales 2024`, `2024`, `sales-eu`) where nothing was ever
-/// registered to preserve, and reserved words defensively — `Order` folds to `"order"` first, the
-/// same identity the unquoted spelling had.
-///
-/// The reserved-word authority is [`sql::lex::is_reserved_in_name_position`], the same one
-/// completion's quoting uses — but the two renderers are **not** interchangeable, and
-/// [`sql::quote_verbatim`] states the difference: that one preserves the spelling, for a name
-/// whose identity belongs to a server. `pub` because a surface composing a statement about a
-/// *workspace* def has to say the name that def will be keyed under (Pin as view).
-pub fn quote_ident(name: &str) -> String {
-    let id = fold_ident(name);
-    let mut rest = id.chars();
-    let bare = matches!(rest.next(), Some(c) if c.is_ascii_lowercase() || c == '_')
-        && rest.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-        && !sql::lex::is_reserved_in_name_position(&id);
-    if bare {
-        id
-    } else {
-        format!("\"{}\"", id.replace('"', "\"\""))
-    }
-}
-
 /// Build a `SessionContext` honouring the engine config `overrides`: the
 /// `ConfigOptions` keys go on the `SessionConfig`; the `datafusion.runtime.*` keys
 /// build a `RuntimeEnv` (parsed via `parse_capacity_limit`). Bad values are logged
@@ -2558,30 +2528,6 @@ mod tests {
     }
 
     #[test]
-    fn a_nameable_ident_is_emitted_bare_and_case_folded() {
-        for name in ["daily_sales", "_scratch", "t9", "orders2024"] {
-            assert_eq!(quote_ident(name), name, "already folded — untouched");
-        }
-        assert_eq!(quote_ident("DailySales"), "dailysales");
-        assert_eq!(quote_ident("Revenue"), "revenue");
-        assert_eq!(quote_ident("ORDERS"), "orders");
-    }
-
-    #[test]
-    fn only_an_unsayable_name_is_quoted_and_it_is_escaped() {
-        assert_eq!(quote_ident("Sales 2024"), "\"Sales 2024\"");
-        assert_eq!(quote_ident("2024"), "\"2024\"", "can't lead with a digit");
-        assert_eq!(quote_ident("sales-eu"), "\"sales-eu\"");
-        assert_eq!(
-            quote_ident("say \"hi\""),
-            "\"say \"\"hi\"\"\"",
-            "an embedded quote is doubled, not dropped"
-        );
-        assert_eq!(quote_ident("order"), "\"order\"");
-        assert_eq!(quote_ident("Order"), "\"order\"");
-    }
-
-    #[test]
     fn the_folded_name_is_the_one_datafusion_resolves() {
         for name in ["daily_sales", "MyView", "Order", "Sales 2024", "2024"] {
             assert_eq!(
@@ -2612,7 +2558,7 @@ mod tests {
             );
 
             let ws = WsId(1);
-            let select = format!("SELECT * FROM {}", quote_ident(name));
+            let select = format!("SELECT * FROM {}", sql::WorkspaceName::of(name));
             let RunRows { output: out, .. } = eng
                 .ws(ws)
                 .query(RunTag(i as u128 * 2), select.clone(), 10)
@@ -2695,7 +2641,7 @@ mod tests {
             .table_names()
     }
 
-    /// **The fold-preservation oracle.** The tests above pin `quote_ident` to hardcoded
+    /// **The fold-preservation oracle.** `sql::name`'s tests pin `WorkspaceName` to hardcoded
     /// expectations; this one pins it to *the code it replaced*, which is the property that
     /// actually matters — an existing `.strata/project.json`, written and registered by the
     /// shipped app, must keep working across this change.
@@ -2761,7 +2707,7 @@ mod tests {
     /// Reserved words are pointedly **not** in this list. `CREATE VIEW Order …` parses fine
     /// under DataFusion's `GenericDialect` (as does a bare `FROM order`), so `order` has a
     /// real prior identity and is covered by the oracle above instead — quoting it is
-    /// defensive, not a repair, and the doc on [`quote_ident`] says so.
+    /// defensive, not a repair, and the doc on [`WorkspaceName`](sql::WorkspaceName) says so.
     #[tokio::test]
     async fn the_names_quoting_added_were_malformed_sql_before() {
         let eng = Engine::builder().build();

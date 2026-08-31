@@ -21,10 +21,10 @@ use crate::sql::context::{
     analyze_caret, function_arguments, refine_statement_clause, statement_tokens, CaretAnalysis,
     Clause, ColumnList, Context, ListSource, Role,
 };
-use crate::sql::ident::{qualified, quote_verbatim};
 use crate::sql::lex::{
     caret_extends_numeric_literal, caret_in_string_or_comment, lex, literal_at, TokKind,
 };
+use crate::sql::name::SessionName;
 use crate::sql::symbols::{Catalog, DatabaseSym, PreparedSym, RelationSym, SchemaSym, TableSym};
 use crate::sql::FunctionSym;
 use crate::statements::arms::refuse_reserved_key;
@@ -59,10 +59,12 @@ pub struct Completion {
     pub replace: Range<usize>,
 }
 
-/// Completions for the caret at byte `caret` in `sql`. `manual` marks an explicit
-/// trigger (⌃/⌘Space) — it widens the offer by lifting the obscure-keyword tail
-/// gate (an explicit ask deserves the full vocabulary).
-pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec<Completion> {
+/// The ranked offer for the caret at byte `caret` in `sql` — the body behind
+/// [`service::complete`](crate::sql::complete), which is the door.
+///
+/// `manual` marks an explicit trigger (⌃/⌘Space) — it widens the offer by lifting the
+/// obscure-keyword tail gate (an explicit ask deserves the full vocabulary).
+pub(crate) fn offer(catalog: &Catalog, sql: &str, caret: usize, manual: bool) -> Vec<Completion> {
     if caret_in_string_or_comment(sql, caret) {
         return options_literal_completions(sql, caret, catalog, manual).unwrap_or_default();
     }
@@ -118,12 +120,11 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
         }
         Context::At(Clause::Insert, Role::Operand) => match &ca.column_list {
             Some(list) => push_list_columns(&mut pool, catalog, list, &replace, true),
-            None => {
-                for t in catalog.tables.iter().filter(|t| t.internal && !t.is_view) {
-                    pool.push(&t.name, T_PRIMARY, || table_item(t, &replace));
-                }
-            }
+            None => push_write_targets(&mut pool, catalog, &replace, true),
         },
+        Context::At(Clause::Update | Clause::Delete, Role::Operand) => {
+            push_write_targets(&mut pool, catalog, &replace, false);
+        }
         Context::At(Clause::CreateExternal, Role::Operand) => {
             for (i, format) in catalog.formats.iter().enumerate() {
                 let word = format.name.to_uppercase();
@@ -134,7 +135,7 @@ pub fn complete(sql: &str, caret: usize, catalog: &Catalog, manual: bool) -> Vec
             for f in catalog.functions.all().filter(|f| f.created) {
                 pool.push(&f.name, T_PRIMARY, || Completion {
                     label: f.name.clone(),
-                    insert: quote_verbatim(&f.name),
+                    insert: SessionName::of(&f.name).into(),
                     kind: CompletionKind::Function,
                     detail: Some("session function".into()),
                     replace: replace.clone(),
@@ -275,15 +276,35 @@ fn push_relation_targets(
         let ord = coverage(have) * 2 + written_rel(&t.name);
         pool.ordered(&t.name, T_PRIMARY, ord, || table_item(t, replace));
     }
-    let shared = shared_names(catalog);
+    push_remote_relations(pool, catalog, replace, |_| true);
     for db in &catalog.databases {
+        pool.push(&db.name, T_SECONDARY, || database_item(db, replace));
+    }
+}
+
+/// Every relation of the connected databases `offered` admits, each spelled the way that
+/// **resolves to it**: bare where qualify would reach this relation and nothing else, three-part
+/// where [`shared_names`] says a bare name reaches more than one thing. One rule for every
+/// position that offers a remote relation — a read target and a write target differ in *which*
+/// databases they admit, never in how a name is written.
+///
+/// `T_SECONDARY`, below the project's own: that a bare name means theirs is the same precedence,
+/// written into the ranking.
+fn push_remote_relations(
+    pool: &mut Pool,
+    catalog: &Catalog,
+    replace: &Range<usize>,
+    offered: impl Fn(&DatabaseSym) -> bool,
+) {
+    let shared = shared_names(catalog);
+    for db in catalog.databases.iter().filter(|db| offered(db)) {
         for schema in &db.schemas {
             for relation in &schema.relations {
                 match shared.contains(&fold_ident(&relation.name)) {
                     false => pool.push(&relation.name, T_SECONDARY, || {
                         remote_relation_item(
                             relation.name.clone(),
-                            quote_verbatim(&relation.name),
+                            SessionName::of(&relation.name).into(),
                             db,
                             schema,
                             relation,
@@ -291,11 +312,11 @@ fn push_relation_targets(
                         )
                     }),
                     true => {
-                        let name = qualified([
+                        let name = String::from(SessionName::qualified([
                             db.name.as_str(),
                             schema.name.as_str(),
                             relation.name.as_str(),
-                        ]);
+                        ]));
                         pool.push(&name.clone(), T_SECONDARY, || {
                             remote_relation_item(name.clone(), name, db, schema, relation, replace)
                         });
@@ -304,9 +325,22 @@ fn push_relation_targets(
             }
         }
     }
-    for db in &catalog.databases {
-        pool.push(&db.name, T_SECONDARY, || database_item(db, replace));
+}
+
+/// **The write-target pool** — what resolves at a caret the engine will take as a DML target.
+///
+/// The offer is the *execution* rule read forwards, which is the no-divergence invariant applied
+/// to the offer: an `INSERT` may target a table Strata owns or a relation in a **writable**
+/// connected database, and an `UPDATE`/`DELETE` only the latter (a workspace relation is refused
+/// by the arm, and offering one would bait the user into a statement already decided against).
+/// A read-only connection is offered at neither, for the same reason.
+fn push_write_targets(pool: &mut Pool, catalog: &Catalog, replace: &Range<usize>, internal: bool) {
+    if internal {
+        for t in catalog.tables.iter().filter(|t| t.internal && !t.is_view) {
+            pool.push(&t.name, T_PRIMARY, || table_item(t, replace));
+        }
     }
+    push_remote_relations(pool, catalog, replace, |db| db.writable);
 }
 
 /// **The names more than one source answers to**, folded — every name whose bare spelling
@@ -674,7 +708,7 @@ fn options_literal_completions(
     if !(head.kind == TokKind::Keyword && head.eq_ci("CREATE")) {
         return None;
     }
-    if refine_statement_clause(stmt, Clause::Create) != Clause::CreateExternal {
+    if refine_statement_clause(stmt, Some(0), Clause::Create) != Clause::CreateExternal {
         return None;
     }
     let mut stack: Vec<usize> = Vec::new();
@@ -753,7 +787,7 @@ fn options_literal_completions(
 fn table_item(t: &TableSym, replace: &Range<usize>) -> Completion {
     Completion {
         label: t.name.clone(),
-        insert: quote_verbatim(&t.name),
+        insert: SessionName::of(&t.name).into(),
         kind: if t.is_view {
             CompletionKind::View
         } else {
@@ -773,7 +807,7 @@ fn table_item(t: &TableSym, replace: &Range<usize>) -> Completion {
 fn database_item(db: &DatabaseSym, replace: &Range<usize>) -> Completion {
     Completion {
         label: db.name.clone(),
-        insert: quote_verbatim(&db.name),
+        insert: SessionName::of(&db.name).into(),
         kind: CompletionKind::Table,
         detail: Some("database".into()),
         replace: replace.clone(),
@@ -785,7 +819,7 @@ fn database_item(db: &DatabaseSym, replace: &Range<usize>) -> Completion {
 fn schema_item(database: &str, name: &str, replace: &Range<usize>) -> Completion {
     Completion {
         label: name.to_string(),
-        insert: quote_verbatim(name),
+        insert: SessionName::of(name).into(),
         kind: CompletionKind::Table,
         detail: Some(format!("{database} · schema")),
         replace: replace.clone(),
@@ -796,7 +830,7 @@ fn schema_item(database: &str, name: &str, replace: &Range<usize>) -> Completion
 fn relation_item(relation: &RelationSym, replace: &Range<usize>) -> Completion {
     Completion {
         label: relation.name.clone(),
-        insert: quote_verbatim(&relation.name),
+        insert: SessionName::of(&relation.name).into(),
         kind: match relation.view {
             true => CompletionKind::View,
             false => CompletionKind::Table,
@@ -809,7 +843,7 @@ fn relation_item(relation: &RelationSym, replace: &Range<usize>) -> Completion {
 fn cte_item(name: &str, replace: &Range<usize>) -> Completion {
     Completion {
         label: name.to_string(),
-        insert: quote_verbatim(name),
+        insert: SessionName::of(name).into(),
         kind: CompletionKind::Table,
         detail: Some("cte".into()),
         replace: replace.clone(),
@@ -827,7 +861,7 @@ fn cte_item(name: &str, replace: &Range<usize>) -> Completion {
 fn prepared_item(p: &PreparedSym, replace: &Range<usize>) -> Completion {
     Completion {
         label: p.name.clone(),
-        insert: quote_verbatim(&p.name),
+        insert: SessionName::of(&p.name).into(),
         kind: CompletionKind::Function,
         detail: Some(p.detail()),
         replace: replace.clone(),
@@ -837,7 +871,7 @@ fn prepared_item(p: &PreparedSym, replace: &Range<usize>) -> Completion {
 fn column_item(name: &str, detail: Option<&str>, replace: &Range<usize>) -> Completion {
     Completion {
         label: name.to_string(),
-        insert: quote_verbatim(name),
+        insert: SessionName::of(name).into(),
         kind: CompletionKind::Column,
         detail: detail.map(ToString::to_string),
         replace: replace.clone(),

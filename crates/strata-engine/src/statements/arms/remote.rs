@@ -798,10 +798,10 @@ mod tests {
             "UPDATE pg.public.orders SET total = 1 WHERE id = 2",
             "DELETE FROM pg.public.orders WHERE id = 2",
         ] {
-            let diags = crate::sql::validate(&pipeline, &policy, &functions, sql).await;
+            let diags = crate::sql::analyze(&pipeline, &policy, &functions, sql).await;
             assert!(diags.is_empty(), "'{sql}': {diags:?}");
         }
-        let local = crate::sql::validate(
+        let local = crate::sql::analyze(
             &pipeline,
             &policy,
             &functions,

@@ -103,8 +103,9 @@ pub fn aggregates(columns: &[ColumnInfo], at: Profiled) -> (Vec<Expr>, Vec<Slot>
 /// active_users` is the same query and the one they can actually work with.
 ///
 /// `from` arrives **already rendered**, by whichever of the engine's two renderers the scanned
-/// name's identity calls for — [`quote_ident`](super::quote_ident) for a workspace def's
-/// registered identity, [`sql::qualified`](super::sql::qualified) for a server's own spelling.
+/// name's identity calls for — [`WorkspaceName`](crate::sql::WorkspaceName) for a workspace def's
+/// registered identity, [`SessionName::qualified`](crate::sql::SessionName) for a server's own
+/// spelling.
 /// The choice is [`run_profile`](super::catalog::run_profile)'s, made once beside the decision
 /// about which expressions may run at all, because both turn on the same fact and the wrong
 /// renderer is silently wrong in opposite directions.
@@ -205,7 +206,7 @@ mod tests {
     use strata_arrow::profile::stats_footnote;
 
     use super::*;
-    use crate::sql::qualified;
+    use crate::sql::SessionName;
 
     fn col(name: &str, dtype: DataType) -> ColumnInfo {
         column_info(&Field::new(name, dtype, true))
@@ -359,7 +360,10 @@ mod tests {
     #[test]
     fn a_remote_profile_renders_a_from_the_server_resolves() {
         let (exprs, _) = aggregates(&[col("id", DataType::Int64)], Profiled::Database);
-        let sql = profile_sql(&qualified(["pg", "public", "Orders"]), &exprs);
+        let sql = profile_sql(
+            SessionName::qualified(["pg", "public", "Orders"]).as_str(),
+            &exprs,
+        );
 
         assert!(
             sql.contains("FROM pg.public.\"Orders\";"),

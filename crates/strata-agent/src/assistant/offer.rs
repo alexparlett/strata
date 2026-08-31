@@ -10,7 +10,7 @@
 //! user's editor under their capability.
 //!
 //! That check is `validate`'s, so a card carries what the editor would not underline — deliberately
-//! **not** a promise that the statement parses. `Lang::validate` keeps three silences on purpose
+//! **not** a promise that the statement parses. `Lang::analyze` keeps three silences on purpose
 //! (an incomplete trailing statement, an unresolved column where the resolver's scope is
 //! incomplete, a `;`-separated batch judged one statement at a time), each right for a live buffer
 //! and each letting something through here; the Run press answers for the rest in the editor's own

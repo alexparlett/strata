@@ -65,11 +65,11 @@ unresolved statement would refuse a read the run then performs. Create and drop 
 rewritten; the full rule, and why it is a statement pass rather than a current-database setting, is
 `docs/CONNECTIONS_SPEC.md` § *Unqualified names*.
 
-**The diagnostics pass enters the same stages** (`engine/sql/validate.rs`, tier 2), one statement
+**The diagnostics pass enters the same stages** (`engine/sql/service.rs`, tier 2), one statement
 at a time so it can span each — never a second reading of the same rules. That is the property the
 whole module family exists for: a statement the editor did not underline is a statement Run is
 prepared to perform. A structural test asserts the classifier has one definition site and that
-`validate.rs` reaches it rather than growing its own.
+`service.rs` reaches it rather than growing its own.
 
 That is also why the read path takes the **statement** rather than the buffer: `query::materialize`
 and `explain::run_explain` are handed what the pipeline judged and plan it
@@ -220,7 +220,7 @@ refusal and never grant one. A provider that cannot answer at all is a **fault**
 the statement is refused, and the agent gate reports it as input it could not judge rather than as
 a policy answer.
 
-**Which entries ask.** `Workspace::run`, `Lang::validate` and `Lang::policy_verdicts` — the three
+**Which entries ask.** `Workspace::run`, `Lang::analyze` and `Lang::policy_verdicts` — the three
 that classify a statement. `Workspace::query` and `Workspace::explain` are handed a statement to
 read and
 are limited to reading by the read path's own `SQLOptions`; they do not consult the provider, and
@@ -1059,7 +1059,7 @@ whose settle moves the catalog generation, which is what every tab's `Catalog` s
 | Surface | Reads | Shows |
 |---|---|---|
 | the autocomplete row | the memoized `Catalog` snapshot, rebuilt on the catalog generation | the name, and `FunctionSym::detail()` — the argument list, by name (`add_one(x)`) — as the row's dim right-hand annotation, which is where this codebase puts signature help |
-| diagnostics | `Lang::validate`, which dry-plans against the **live** `SessionContext` and takes the catalog by handle for its lexical lints | a call that squiggled a moment ago stops squiggling, and starts again after the drop |
+| diagnostics | `Lang::analyze`, which dry-plans against the **live** `SessionContext` and takes the catalog by handle for its lexical lints | a call that squiggled a moment ago stops squiggling, and starts again after the drop |
 | `SHOW FUNCTIONS` / `information_schema.routines` | DataFusion's own enumeration | the name, the return type, and the `Documentation` the factory built — description and call form |
 
 There is **no docs panel**: `FunctionSym::doc()` has no caller outside its own unit tests, and

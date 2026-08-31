@@ -24,17 +24,17 @@ use crate::query::ReadPolicy;
 use crate::sql::qualify::{qualify as resolve_names, Refusal as NameRefusal};
 
 /// What the stages read a statement against.
-pub struct Pipeline<'e> {
+pub(crate) struct Pipeline<'e> {
     ctx: &'e SessionContext,
 }
 
 impl<'e> Pipeline<'e> {
-    pub fn new(ctx: &'e SessionContext) -> Self {
+    pub(crate) fn new(ctx: &'e SessionContext) -> Self {
         Pipeline { ctx }
     }
 
     /// Returns the session the stages read from.
-    pub fn context(&self) -> &'e SessionContext {
+    pub(crate) fn context(&self) -> &'e SessionContext {
         self.ctx
     }
 }
@@ -42,25 +42,25 @@ impl<'e> Pipeline<'e> {
 /// One parsed statement.
 ///
 /// Only [`parse`] and [`parse_one`] mint one.
-pub struct Parsed {
+pub(crate) struct Parsed {
     stmt: DFStatement,
 }
 
 /// One statement whose bare names have been resolved against the connected databases.
 ///
 /// Only [`qualify`] mints one.
-pub struct Qualified {
+pub(crate) struct Qualified {
     stmt: DFStatement,
 }
 
 impl Qualified {
     /// Returns the statement.
-    pub fn statement(&self) -> &DFStatement {
+    pub(crate) fn statement(&self) -> &DFStatement {
         &self.stmt
     }
 
     /// Consumes this and returns the statement, for the read path to plan or an arm to perform.
-    pub fn into_statement(self) -> DFStatement {
+    pub(crate) fn into_statement(self) -> DFStatement {
         self.stmt
     }
 }
@@ -82,27 +82,22 @@ impl Deref for Qualified {
 ///
 /// Matching sites keep their ergonomics with `..`.
 #[derive(Clone, Copy, Debug)]
-pub struct Proof(());
+pub(crate) struct Proof(());
 
 /// An accepted statement, and how the engine will run it.
 ///
-/// # Example
+/// Only [`classify`] mints one — [`Proof`]'s field is private to this module, so no arm and no
+/// test can assemble an `Admitted` without having been classified. The module itself is
+/// `pub(crate)`, so the same holds outside the crate for free.
 ///
-/// Only [`classify`] mints one, so admission cannot be asserted from outside the pipeline:
-///
-/// ```compile_fail,E0603
-/// use strata_engine::statements::pipeline::{Admitted, Proof, Qualified};
-/// use strata_engine::ReadPolicy;
-///
-/// fn forge(stmt: Qualified) -> Admitted {
-///     Admitted::Query {
-///         stmt,
-///         policy: ReadPolicy::default(),
-///         proof: Proof(()),
-///     }
-/// }
-/// ```
-pub enum Admitted {
+/// `proof` is deliberately never read: what it does is happen at construction, in the one module
+/// that can construct it. Nothing downstream asks about it, and a variant that let it be omitted
+/// would be a variant anyone could mint.
+#[allow(
+    dead_code,
+    reason = "the field's whole job is to be unconstructable elsewhere"
+)]
+pub(crate) enum Admitted {
     /// The snapshot pipeline, carrying the [`ReadPolicy`] the statement is planned under.
     Query {
         stmt: Qualified,
@@ -119,7 +114,7 @@ pub enum Admitted {
 
 impl Admitted {
     /// Consumes this and returns the statement, whichever arm it is.
-    pub fn into_statement(self) -> DFStatement {
+    pub(crate) fn into_statement(self) -> DFStatement {
         match self {
             Admitted::Query { stmt, .. } | Admitted::Statement { stmt, .. } => {
                 stmt.into_statement()
@@ -230,7 +225,7 @@ impl PolicyRefusal {
 /// # Errors
 ///
 /// The input does not parse, or the session's configured dialect is unknown.
-pub fn parse(p: &Pipeline<'_>, sql: &str) -> Result<VecDeque<Parsed>, Refusal> {
+pub(crate) fn parse(p: &Pipeline<'_>, sql: &str) -> Result<VecDeque<Parsed>, Refusal> {
     let state = p.ctx.state();
     let options = state.config_options();
     let unknown_dialect = || {
@@ -259,7 +254,7 @@ pub fn parse(p: &Pipeline<'_>, sql: &str) -> Result<VecDeque<Parsed>, Refusal> {
 /// # Errors
 ///
 /// As [`parse`], plus an empty buffer and a buffer holding more than one statement.
-pub fn parse_one(p: &Pipeline<'_>, sql: &str) -> Result<Parsed, Refusal> {
+pub(crate) fn parse_one(p: &Pipeline<'_>, sql: &str) -> Result<Parsed, Refusal> {
     let mut statements = parse(p, sql)?;
     if statements.len() > 1 {
         return Err(Reason::Batch.into());
@@ -290,7 +285,7 @@ pub(crate) fn parse_range(
 ///
 /// A bare name more than one connected database holds, one entry per name. All of them, because
 /// the diagnostics pass squiggles each; a caller judging one statement takes the first.
-pub fn qualify(p: &Pipeline<'_>, parsed: Parsed) -> Result<Qualified, Vec<Refusal>> {
+pub(crate) fn qualify(p: &Pipeline<'_>, parsed: Parsed) -> Result<Qualified, Vec<Refusal>> {
     let Parsed { mut stmt } = parsed;
     let refusals = resolve_names(p.ctx, &mut stmt);
     match refusals.is_empty() {
@@ -310,7 +305,7 @@ pub fn qualify(p: &Pipeline<'_>, parsed: Parsed) -> Result<Qualified, Vec<Refusa
 ///
 /// A form the engine has no arm for, a form `who` may not perform, a fault the statement carries,
 /// or a policy provider that could not decide.
-pub async fn classify(
+pub(crate) async fn classify(
     policy: &dyn PolicyProvider,
     who: &Principal,
     stmt: Qualified,
@@ -340,21 +335,14 @@ pub async fn classify(
 
 /// Returns `sql` as one statement `who` may perform.
 ///
+/// A [`Parsed`] is not a [`Qualified`] and neither can be built outside this module, so a
+/// statement cannot be classified before its names resolve — which matters, because resolving
+/// them can change the answer.
+///
 /// # Errors
 ///
 /// Anything [`parse_one`], [`qualify`] or [`classify`] refuses.
-///
-/// # Example
-///
-/// A [`Parsed`] is not a [`Qualified`], so a statement cannot be classified before its names
-/// resolve:
-///
-/// ```compile_fail,E0308
-/// fn hand_over(parsed: strata_engine::statements::Parsed) -> strata_engine::statements::Qualified {
-///     parsed
-/// }
-/// ```
-pub async fn accept(
+pub(crate) async fn accept(
     p: &Pipeline<'_>,
     sql: &str,
     policy: &dyn PolicyProvider,
@@ -379,7 +367,7 @@ pub async fn accept(
 /// unjudgeable input is never a policy pass, and one broken statement never silently approves its
 /// neighbours. A provider outage is an `Err` rather than a refusal, so a caller can tell "you may
 /// not" from "nobody could say".
-pub async fn policy_verdicts(
+pub(crate) async fn policy_verdicts(
     p: &Pipeline<'_>,
     policy: &dyn PolicyProvider,
     who: &Principal,
@@ -849,9 +837,9 @@ mod tests {
             "the classifier is defined once: {defined:?}"
         );
 
-        let validate = fs::read_to_string(src.join("sql/validate.rs")).expect("readable");
+        let service = fs::read_to_string(src.join("sql/service.rs")).expect("readable");
         assert!(
-            validate.contains("statements::"),
+            service.contains("statements::"),
             "the diagnostics pass reaches the pipeline"
         );
         for grown_back in [
@@ -861,7 +849,7 @@ mod tests {
             "enum Verdict",
         ] {
             assert!(
-                !validate.contains(grown_back),
+                !service.contains(grown_back),
                 "`{grown_back}` is back in the diagnostics pass — it classifies through the \
                  pipeline and nowhere else"
             );

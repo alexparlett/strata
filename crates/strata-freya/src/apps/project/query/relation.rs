@@ -35,7 +35,7 @@ use freya::prelude::{use_side_effect, use_state};
 use freya::query::{use_query, Captured, Query, QueryCapability, QueryStateData, UseQuery};
 use std::collections::BTreeMap;
 use std::time::Duration;
-use strata_engine::sql::qualified;
+use strata_engine::sql::SessionName;
 use strata_engine::{CatalogGen, EngineError, RemoteRelation};
 use strata_model::RemoteRef;
 
@@ -86,11 +86,12 @@ impl QueryCapability for RemoteColumns {
     async fn run(&self, spec: &ColumnsSpec) -> Result<RemoteSchemas, EngineError> {
         let mut out = RemoteSchemas::new();
         for relation in &spec.relations {
-            let name = qualified([
+            let name = SessionName::qualified([
                 relation.source.as_str(),
                 relation.schema.as_str(),
                 relation.relation.as_str(),
-            ]);
+            ])
+            .to_string();
             let answer = match self.0.sources().describe_remote(name).await {
                 Ok(Some(found)) => Ok(found),
                 Ok(None) => Err(gone(relation)),

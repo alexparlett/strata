@@ -268,6 +268,7 @@ mod tests {
                     status: Some(RegStatus::Ready),
                     detail: SourceDetail::Catalog {
                         catalog: "analytics".into(),
+                        writable: false,
                         schemas: vec![
                             SchemaListingView {
                                 name: "public".into(),

@@ -704,20 +704,11 @@ mod tests {
         statement(&eng, "PREPARE spend(INT) AS SELECT $1 AS n")
             .await
             .expect("prepared");
-        let catalog = |eng: &Engine| {
-            Catalog::build(
-                [],
-                [],
-                Arc::default(),
-                eng.lang().prepared(),
-                eng.formats(),
-                "generic".into(),
-            )
-        };
+        let catalog = |eng: &Engine| Catalog::build([], [], eng.lang().bundle(), "generic".into());
 
         let cat = catalog(&eng);
         for sql in ["EXECUTE ", "DEALLOCATE ", "DEALLOCATE PREPARE "] {
-            let items = complete(sql, sql.len(), &cat, false);
+            let items = complete(&cat, sql, sql.len(), false);
             assert_eq!(
                 items.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(),
                 vec!["spend"],
@@ -729,6 +720,6 @@ mod tests {
         }
 
         statement(&eng, "DEALLOCATE spend").await.expect("gone");
-        assert!(complete("EXECUTE ", 8, &catalog(&eng), false).is_empty());
+        assert!(complete(&catalog(&eng), "EXECUTE ", 8, false).is_empty());
     }
 }
