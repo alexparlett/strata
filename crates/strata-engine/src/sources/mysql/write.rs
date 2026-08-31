@@ -15,14 +15,19 @@
 //! of three. The statement is therefore built here rather than by the provider crate's
 //! `CreateTableBuilder`, which hardcodes both the `IF NOT EXISTS` and a bare table name.
 //!
-//! **Neither of those is a defect, and neither is in `UPSTREAM_REPORTS.md`.** That builder makes
-//! accelerator tables, which want to be created-or-reused idempotently, and its caller's pool
-//! carries a default database — both right for it and both wrong for a CTAS over a server-scoped
-//! source. The `PostgreSQL` arm meets the same bare name and answers it with `SET LOCAL
-//! search_path`; this one cannot (`USE` is not transactional and would outlive the write on a
-//! pooled connection), so it composes the statement instead — which is what also lets it drop the
-//! `IF NOT EXISTS`. One fix for both limitations. Errno 1050 itself is nothing but the server's
-//! documented answer, used as intended.
+//! **Both of those are upstream constraints, and neither is in `UPSTREAM_REPORTS.md`** — which is
+//! a statement about that file rather than about the crate. It holds *correctness* bugs worked
+//! around here and fixed there, each with a reproducer; these are a public API that fixes its
+//! collision policy and its name shape for every caller. The asymmetry is the crate's own —
+//! `InsertBuilder::new` takes a `TableReference` a screen away from `CreateTableBuilder::new`
+//! taking a `&str` — and it is what makes the `PostgreSQL` arm reach for `SET LOCAL search_path`.
+//! This arm cannot (`USE` is not transactional and would outlive the write on a pooled
+//! connection), so it composes the statement instead, which answers the bare name and lets it drop
+//! the `IF NOT EXISTS` in one move. Nothing here needs upstream to change: twenty lines is less to
+//! carry than two new upstream APIs and the pin that would bring them.
+//!
+//! Errno 1050 itself is not a workaround for anything. It is the server's documented answer to a
+//! create it cannot perform, used as intended.
 //!
 //! **Every statement here names the relation in full**, which is the other thing the provider
 //! crate cannot do for us: its `MySQL` write helper holds a bare table name and leans on the
