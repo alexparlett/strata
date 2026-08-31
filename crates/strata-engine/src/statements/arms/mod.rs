@@ -2,12 +2,14 @@
 //! (`docs/STATEMENTS_SPEC.md` §4 + §7).
 //!
 //! [`Workspace::run`](crate::Workspace::run) classifies once, in front of dispatch; a
-//! statement the editor implements itself lands here as its [`StmtKind`], and comes back as a
-//! [`StatementReport`] — what to say, how many rows it moved, and the
-//! [`StoreEffect`](crate::StoreEffect) the app
-//! folds into `ProjectState`. Nothing here returns rows and nothing here touches the snapshot
-//! lifecycle: DDL never retires a snapshot (`docs/SNAPSHOT_SPEC.md` §4), so a tab that creates a
-//! table can still page the result it had.
+//! statement the editor implements itself lands here as its [`StmtKind`], and comes back as an
+//! [`Unsettled`] — what to say, how many rows it moved, and the
+//! [`StoreEffect`](crate::StoreEffect) the app folds into `ProjectState`. It stops one field
+//! short of a [`StatementReport`](crate::StatementReport): the generation the statement left the
+//! catalog at is not knowable until the effect has settled, so
+//! [`settle_effect`](crate::Engine::settle_effect) is what mints the report. Nothing here returns
+//! rows and nothing here touches the snapshot lifecycle: DDL never retires a snapshot
+//! (`docs/SNAPSHOT_SPEC.md` §4), so a tab that creates a table can still page the result it had.
 //!
 //! **One contract, for every arm.** `async fn(&StmtCtx, &Principal, &Qualified)
 //! -> Result<StatementOutcome, String>` — the engine minus everything an arm may not touch, who
