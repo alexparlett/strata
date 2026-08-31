@@ -40,12 +40,12 @@ use self::dialect::PgDialect;
 use self::settings::{PgSettings, PASSWORD, PASSWORD_ENV};
 use crate::catalog::readable;
 use crate::secrets::{SecretProvider, SecretRequest};
-use crate::sources::secret_slot;
 use crate::sources::source::{
     DataSource, FunctionMap, Listing, Located, Relation, SourceCatalog, SourceKind, SourceMode,
     SourceSetting, Sourced,
 };
 use crate::sources::sql::{federated, SQLExecutor, SqlSpec};
+use crate::sources::{no_secret, secret_slot};
 use crate::statements::Remote;
 
 /// The `PostgreSQL` source.
@@ -344,12 +344,7 @@ impl PasswordProvider for SecretPassword {
             })?;
         match read? {
             Some(secret) => Ok(SecretString::from(secret.expose().to_string())),
-            None => Err(format!(
-                "No password is stored on this machine for '{}'. {}",
-                self.request.source,
-                self.request.fixes()
-            )
-            .into()),
+            None => Err(no_secret(PASSWORD, &self.request).into()),
         }
     }
 }

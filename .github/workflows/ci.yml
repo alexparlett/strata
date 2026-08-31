@@ -27,11 +27,12 @@ env:
 # fork's UI crates the way a workspace build does.
 #
 # The split is drawn at the **test target**, not by taste. `crates/strata-engine/tests/
-# object_store_minio.rs` (W7) and `crates/strata-engine/tests/postgres_federation.rs`
-# (DB-02) are the only files in the workspace that mention testcontainers, and
-# `containers` runs those binaries entire (`--test <name>`), so a test added to either is
-# covered without touching this file. `test` names the same tests in a `--skip` so it can
-# still say `--workspace` and stay honest about everything else. The two do not have to be
+# object_store_minio.rs` (W7), `crates/strata-engine/tests/postgres_federation.rs`
+# (DB-02) and `crates/strata-engine/tests/mysql_federation.rs` (EA-20) are the only files
+# in the workspace that mention testcontainers, and `containers` runs those binaries
+# entire (`--test <name>`), so a test added to any of them is covered without touching this
+# file. `test` names the same tests in a `--skip` so it can still say `--workspace` and stay
+# honest about everything else. The two do not have to be
 # kept in agreement by hand: a container test that is renamed or added without updating
 # the skip list is *run* by `test`, which has no container runtime, and a test that cannot
 # tell a busy provider from a missing one fails loud there.
@@ -151,8 +152,9 @@ jobs:
       # with `UPDATE_SCHEMA=1 cargo test -p strata-freya schema_in_sync`).
       #
       # The `--skip` is the container-runtime split and nothing else: it names the tests
-      # in `crates/strata-engine/tests/object_store_minio.rs` (W7) and
-      # `crates/strata-engine/tests/postgres_federation.rs` (DB-02), which the `containers`
+      # in `crates/strata-engine/tests/object_store_minio.rs` (W7),
+      # `crates/strata-engine/tests/postgres_federation.rs` (DB-02) and
+      # `crates/strata-engine/tests/mysql_federation.rs` (EA-20), which the `containers`
       # job below runs instead. `--skip` filters test *names*, never targets, which is why
       # this list is per-function where that job names whole binaries. This job has no
       # Testcontainers Cloud agent, so it is also the guard on the list - a container test
@@ -163,7 +165,8 @@ jobs:
           cargo test --workspace --locked -- \
             --skip a_table_over_a_source_reads_through_the_object_store \
             --skip a_bucket_table_lives_in_its_data_sources_catalog \
-            --skip a_database_source_registers_a_federated_catalog
+            --skip a_database_source_registers_a_federated_catalog \
+            --skip a_mysql_source_registers_a_federated_catalog
 
       # The engine with **no data sources compiled in** — the proof that a shipped source
       # reaches the engine only through the public registration an embedder calls, and that
@@ -177,10 +180,10 @@ jobs:
       - name: cargo check (no sources)
         run: cargo check -p strata-engine --no-default-features --all-targets --locked
 
-  # The two container tests - the connections one (W7, MinIO) and the database one
-  # (DB-02, PostgreSQL) - drive real servers, so this job, and only this job, carries the
-  # cloud agent and the repo-wide queue. Behind the same gate as `test`: a skipped job
-  # never enters the concurrency queue, so a docs-only PR no longer takes a turn on the
+  # The three container tests - the connections one (W7, MinIO) and the two database ones
+  # (DB-02, PostgreSQL; EA-20, MySQL) - drive real servers, so this job, and only this job,
+  # carries the cloud agent and the repo-wide queue. Behind the same gate as `test`: a
+  # skipped job never enters the concurrency queue, so a docs-only PR no longer takes a turn on the
   # account's one container worker.
   containers:
     needs: changes
@@ -243,7 +246,8 @@ jobs:
         run: |
           cargo test -p strata-engine --locked \
             --test object_store_minio \
-            --test postgres_federation
+            --test postgres_federation \
+            --test mysql_federation
 
       # **Release the cloud session at the end of the job, always.** The agent above is
       # started in the background and nothing ever tells it to stop: the runner VM is

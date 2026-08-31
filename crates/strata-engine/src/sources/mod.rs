@@ -31,6 +31,8 @@ pub mod source;
 pub mod sql;
 pub(crate) mod store;
 
+#[cfg(feature = "mysql")]
+pub mod mysql;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 
@@ -82,6 +84,23 @@ pub fn secret_slot(
         slot: conn.secret_slot(key)?,
         env,
     })
+}
+
+/// Why a secret a def expects is not on this machine, in the words the failed row shows.
+///
+/// **Minted once, for every source that reads a secret**: a colleague who has just pulled the
+/// project has entered nothing, so this is the ordinary answer rather than a fault, and it has to
+/// name both places a value can come from — this machine's keystore, through the data source
+/// editor, and the source's own environment convention ([`SecretRequest::fixes`]).
+///
+/// `noun` is what the source calls the secret in the sentence: the declared key's own word, so a
+/// source with two credentials says which one is missing.
+pub(crate) fn no_secret(noun: &str, request: &SecretRequest) -> String {
+    format!(
+        "No {noun} is stored on this machine for '{}'. {}",
+        request.source,
+        request.fixes()
+    )
 }
 
 /// The keystore entry one of `conn`'s secrets is written to and deleted from.

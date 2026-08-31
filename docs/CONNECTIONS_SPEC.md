@@ -31,9 +31,9 @@ Two rules shape everything below:
 
 ## Kinds
 
-Every kind is a **registrant** of the one `DataSource` trait — the four shipped are `s3`, `gcs`,
-`http` and `postgres`, each reaching the engine through `EngineBuilder::with_source` behind its
-own cargo feature. There is no second trait, no second registry and no typed enum: `Provider`,
+Every kind is a **registrant** of the one `DataSource` trait — the five shipped are `s3`, `gcs`,
+`http`, `postgres` and `mysql`, each reaching the engine through `EngineBuilder::with_source`
+behind its own cargo feature. There is no second trait, no second registry and no typed enum: `Provider`,
 `ProviderId` and `ConnectionDef` are gone. Which kinds exist is the engine's answer, not the
 model's — `Sources::registrants()` lists what is registered, and the editor's picker, a catalog
 row's badge and every form read that one list, so a kind an embedder registers is offered on the
@@ -56,6 +56,12 @@ nothing else.
   built `https_only` and would otherwise fail every request with a bare "builder error".
 - **HTTP** is a public origin: always anonymous, no auth control, no region — the address itself
   is a whole URL, scheme included.
+- **MySQL** is the seam's second conformance run, and it is the reason the trait can be believed:
+  it differs from PostgreSQL in the ways backends really differ — a two-level namespace, backticked
+  identifiers, a JSON path string rather than a chain of operators, errnos rather than SQLSTATEs —
+  and every one of those differences is an answer to a `DataSource` or `SourceCatalog` question.
+  Nothing outside `crates/strata-engine/src/sources/mysql/` knows it exists, the model gained no
+  field for it, and the editor draws its form from the same declaration it draws every other from.
 
 ## Name, identity and persistence
 
@@ -215,6 +221,18 @@ name refused at the field is refused by the engine in the same words:
   `=` in the user fails as a data source string the parser cannot read rather than as "that user is
   wrong". `CREATE ROLE "read only"` is legal Postgres and simply cannot be dialled through this
   stack, so it is refused by name.
+
+- **MY** — `host:port`, and **no database on it**. That is the difference the whole MySQL schema
+  model follows from: a MySQL database is a namespace inside the server rather than a separate
+  connection, so one source is one *server* and every database the account can read is a schema of
+  it (`my.shop.orders` — the DataGrip model). Naming one in the address would make the others
+  unreachable and would put the same server in the project twice to reach two of them, so it is
+  refused by name, and the message says where the database went rather than that the address is
+  malformed. The port is required for PG's reason, a scheme and userinfo are refused for PG's
+  reasons, and the IPv6 forms read the same way. The **account** is checked for emptiness and
+  nothing else, which is the honest rule here: this driver takes it as a typed parameter rather
+  than interpolating it into a connection string, so there is no spelling that changes which server
+  or account is reached — PG refuses four characters precisely because its driver does interpolate.
 
 The checks are deliberately not exhaustive — each provider reserves further names no local check
 can settle — they catch what is *statically* wrong so the user is told at the field instead of by
@@ -903,6 +921,47 @@ Verified end to end against a real PostgreSQL in
 bare read into a schema the data source does not display, the ambiguity refusal, the refused write,
 and the dependency assertion that is the whole risk.
 
+### MySQL, and what a second backend settled differently (EA-20)
+
+Everything above is the **generic** path, and MySQL is the run that proves it: it connects,
+enumerates, resolves, federates, profiles, qualifies and writes through the same calls, and nothing
+outside its own module knows it is there. Three things it answers differently, each of them an
+answer to a question the trait already asked:
+
+- **Databases are schemas.** One source is a whole server; `information_schema.tables` is the
+  enumeration (the server pre-filters it to what the account is granted, so the listing needs no
+  predicate of ours), and `TABLE_TYPE` is the Tables / Views split. See the MY address rule above.
+- **Identifiers go out in backticks**, with an embedded backtick doubled — `SourceCatalog::server_ident`,
+  the one identifier rule that is neither SQL's nor DataFusion's. A statement Strata composes with
+  double quotes is a syntax error on a server in its default mode.
+- **A CTAS learns whether it made the relation by trying to take the name.** This is the one place
+  the two backends genuinely could not do the same thing. PostgreSQL asks whether the relation
+  exists *inside the create's own transaction*, because the statement it builds hardcodes
+  `IF NOT EXISTS` and a check that could go stale would let a failed fill drop a table the
+  statement never created. MySQL has no transactional DDL and cannot copy that — and does not need
+  to: a `CREATE TABLE` **without** `IF NOT EXISTS` either creates the relation or fails with errno
+  1050, which is a test-and-set the server performs atomically on its own namespace. So the `true`
+  the seam asks for is the same promise on both, reached in one round trip instead of three; the
+  statement is built in `sources/mysql/write.rs` rather than by the provider crate's builder,
+  which hardcodes both the `IF NOT EXISTS` and a bare table name.
+
+The write sink is ours for a related reason: the provider crate's MySQL writer holds a **bare**
+table name and leans on the connection's default database, and a server-scoped source has no
+default database to lean on. `InsertBuilder` takes a `TableReference`, so the sink is the crate's
+own shape with the qualified name it could not carry.
+
+**The JSON family is mapped against what the server means, not against what it spells.** MySQL's
+`JSON_EXTRACT` answers JSON null rather than SQL `NULL`, so a bare `->>` hands back the *string*
+`'null'` where `json_as_text` hands back nothing; the shipped spelling guards the extract with
+`NULLIF(…, CAST('null' AS JSON))`, and `json_contains` becomes `JSON_CONTAINS_PATH` coalesced to
+`FALSE` for a `NULL` document. Both were measured against a running 8.1, and
+`mysql_federation.rs::json_pushdown` asks the same questions of the same documents on both sides
+and compares the answers. Path members are written **unquoted** and an exotic key is refused by
+name, because the driver strips every `"` from a statement before sending it. Two driver gaps are
+named and pinned in `.agent/reference/UPSTREAM_REPORTS.md`; the one that shows is that a
+*projected* JSON lookup cannot be read back at all, which is why every question above is asked as
+a filter.
+
 ## Tables over a data source
 
 `TableDef::source` holds the chosen data source's **name** — a *reference*, never a copy of the
@@ -992,12 +1051,12 @@ The whole arm is proven against a real MinIO in
 the only thing that would catch a regression in the S3 credential bridge (a container runtime —
 Docker, colima or Testcontainers Cloud — is required, and without one it fails rather than skips).
 
-### How the two container tests are built
+### How the three container tests are built
 
-Both integration tests — `object_store_minio.rs` (W7) and `postgres_federation.rs` (DB-02) — drive
-a **real server** rather than a mock, because the thing under test is a whole round trip against
-one, and a mock is written by the same understanding of the protocol it is meant to check: it can
-be shaped to pass without anyone noticing.
+All three integration tests — `object_store_minio.rs` (W7), `postgres_federation.rs` (DB-02) and
+`mysql_federation.rs` (EA-20) — drive a **real server** rather than a mock, because the thing under
+test is a whole round trip against one, and a mock is written by the same understanding of the
+protocol it is meant to check: it can be shaped to pass without anyone noticing.
 
 For the same reason, **each fixture is seeded by a deliberately different client than the code
 under test**. `postgres_federation.rs` seeds with `tokio-postgres`, a layer *below* the pool and
@@ -1005,8 +1064,13 @@ factory it exercises, so the fixture is written with the raw driver and the test
 cannot agree on a shared misunderstanding. `object_store_minio.rs` seeds with `aws-sdk-s3`, an
 independent implementation — `object_store` cannot create a bucket at all, and having the write
 side be someone else's code is what stops fixture and subject agreeing on a wrong reading of the
-protocol. Both seeding crates are already in the graph (the Postgres provider's `bb8-postgres`
-pins one; the AWS chain carries the other), so neither costs a build.
+protocol. `mysql_federation.rs` goes one further and seeds through the **image's own entrypoint**
+(`with_init_sql`, run by the `mysql` client inside the container), which is a different client and
+costs no dependency at all — and because the image logs "ready for connections" from the temporary
+server it runs *during* those scripts, readiness is asked of the fixture rather than of a log line.
+
+Both seeding crates are already in the graph (the Postgres provider's `bb8-postgres` pins one; the
+AWS chain carries the other), so neither costs a build.
 
 `testcontainers` is pinned to the major `testcontainers-modules` itself depends on: the two share
 a `bollard`, and a newer `testcontainers` resolves a second one that conflicts outright. Its

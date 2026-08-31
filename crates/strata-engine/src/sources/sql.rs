@@ -29,15 +29,20 @@ use datafusion::physical_plan::metrics::MetricsSet;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{PhysicalExpr, SendableRecordBatchStream};
 use datafusion::sql::unparser::dialect::Dialect;
-use datafusion_federation::sql::{
-    AstAnalyzer, LogicalOptimizer, RemoteTableRef, SQLFederationProvider, SQLTableSource,
-};
+use datafusion_federation::sql::{RemoteTableRef, SQLFederationProvider, SQLTableSource};
 use datafusion_federation::{default_optimizer_rules, FederatedTableProviderAdaptor};
 use futures::TryStreamExt;
 
 use crate::sources::source::{Located, SourceCatalog};
 
-pub use datafusion_federation::sql::SQLExecutor;
+/// The executor seam, and the two hooks its methods answer with.
+///
+/// Re-exported rather than named through the federation crate, because `boundaries.rs` holds that
+/// crate to this module: a source composing [`SqlSpec`] never touches the assembly, and one
+/// wrapping the executor it puts in that spec — to recode a statement, or to supply a rewrite the
+/// crate's own executor does not — needs the two associated types to write the delegations. They
+/// are part of what this module publishes, not a reach past it.
+pub use datafusion_federation::sql::{AstAnalyzer, LogicalOptimizer, SQLExecutor};
 
 /// The name `datafusion-federation` gives its rule, which is how it is found in the list.
 const FEDERATION_RULE: &str = "federation_optimizer_rule";

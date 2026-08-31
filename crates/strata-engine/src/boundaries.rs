@@ -274,7 +274,10 @@ fn the_arrow_vocabulary_is_matched_by_whole_segment_and_only_through_the_engine(
 const DRIVER_CRATES: &[&str] = &[
     "bb8",
     "datafusion_table_providers_common",
+    "datafusion_table_providers_mysql",
     "datafusion_table_providers_postgres",
+    "mysql_async",
+    "sea_query",
     "tokio_postgres",
 ];
 
@@ -317,7 +320,7 @@ fn offenders(allowed: &[&str], rule: impl Fn(&str) -> bool) -> Vec<String> {
 /// A source's driver is named inside that source's module and nowhere else.
 #[test]
 fn a_sources_driver_stays_inside_that_source() {
-    let offences = offenders(&["sources/postgres"], |declaration| {
+    let offences = offenders(&["sources/mysql", "sources/postgres"], |declaration| {
         names_crate(declaration, DRIVER_CRATES)
     });
     assert!(

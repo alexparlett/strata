@@ -136,7 +136,7 @@ is opened read-only; exports refuse to land inside storage Strata manages.
 
 Every feature has a test, and a bug fix carries the test that would have caught it.
 
-Two integration tests drive real servers (MinIO and PostgreSQL) through
+Three integration tests drive real servers (MinIO, PostgreSQL and MySQL) through
 [testcontainers](https://rust.testcontainers.org/), so `cargo test` needs a container runtime —
 Docker, colima or Testcontainers Cloud all serve. Without one those tests **fail rather than
 skip**, deliberately: "no runtime" must not look like "the code is fine".
