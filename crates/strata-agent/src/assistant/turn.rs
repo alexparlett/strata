@@ -85,6 +85,7 @@ pub struct Conversation {
 }
 
 impl Conversation {
+    /// An empty conversation.
     pub fn new() -> Conversation {
         Conversation::default()
     }
@@ -129,17 +130,21 @@ impl Conversation {
 pub struct ContextBlock {
     /// What it is, in one line: "Table 'orders'".
     pub label: String,
+    /// The block itself.
     pub body: String,
 }
 
 /// One send: what the user typed, and what they pinned to it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ask {
+    /// What the user typed.
     pub question: String,
+    /// What they pinned to it.
     pub context: Vec<ContextBlock>,
 }
 
 impl Ask {
+    /// A send of `question` with nothing pinned to it.
     pub fn new(question: impl Into<String>) -> Ask {
         Ask {
             question: question.into(),
@@ -147,6 +152,7 @@ impl Ask {
         }
     }
 
+    /// The send with `body` pinned to it under `label`.
     pub fn with(mut self, label: impl Into<String>, body: impl Into<String>) -> Ask {
         self.context.push(ContextBlock {
             label: label.into(),
@@ -210,16 +216,23 @@ pub enum TurnEvent {
     Runnable(String),
     /// A tool the model asked for, about to run.
     ToolCall {
+        /// The call's own id, which the settle carries back.
         call: String,
+        /// The tool's name.
         tool: String,
+        /// What the model passed it.
         arguments: Value,
     },
     /// That tool answered. `failed` is a fault the model will read and recover from, not a
     /// failed turn.
     ToolSettled {
+        /// The call's own id.
         call: String,
+        /// The tool's name.
         tool: String,
+        /// Whether the answer was a fault.
         failed: bool,
+        /// What the card shows.
         facts: Facts,
     },
     /// The last event of every turn, carrying the same value [`Running::settle`] returns.
@@ -243,7 +256,10 @@ pub enum Settle {
     /// reason `EngineError::Stopped` is a variant one layer down.
     Cancelled,
     /// The model was still calling tools after [`MAX_TOOL_ROUNDS`] rounds.
-    StoppedAtCap { rounds: usize },
+    StoppedAtCap {
+        /// How many rounds it ran.
+        rounds: usize,
+    },
     /// The turn's tool results reached [`MAX_TURN_RESULTS`]. The other way a loop runs away:
     /// not too many rounds, but too much brought back from them.
     Oversized,

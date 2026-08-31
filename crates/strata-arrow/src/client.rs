@@ -14,7 +14,9 @@ use std::collections::BTreeMap;
 /// value.
 #[derive(PartialEq, Eq, Debug)]
 pub struct ClientKey {
+    /// The key, in `object_store`'s own spelling.
     pub name: &'static str,
+    /// What it does, as the picker prints it.
     pub what: &'static str,
 }
 

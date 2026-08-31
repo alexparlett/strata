@@ -27,7 +27,10 @@ pub enum Kind {
     /// `true` or `false` (lower-case, as DataFusion parses it).
     Bool,
     /// A whole number `>= min`.
-    Int { min: i64 },
+    Int {
+        /// The smallest value the setting accepts.
+        min: i64,
+    },
     /// A byte size: a number with an optional K/M/G/T (i)(B) suffix, or blank.
     Bytes,
     /// A duration: a number with an optional s/m/h suffix, or blank.
@@ -42,9 +45,13 @@ pub enum Kind {
 /// [`Kind`], and a one-line description.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct EngineKey {
+    /// DataFusion's own name for the setting.
     pub key: &'static str,
+    /// What DataFusion uses when nothing is set, in its string form.
     pub default: &'static str,
+    /// The shape a value has to be in.
     pub kind: Kind,
+    /// What the setting does, as the editor prints it.
     pub desc: &'static str,
 }
 

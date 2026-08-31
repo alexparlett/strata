@@ -57,6 +57,7 @@ const MAX_RUN_ROWS: usize = 250;
 /// a name is allowed to collide).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Scope {
+    /// The project root, or `None` for the host's only one.
     pub project: Option<String>,
 }
 
@@ -70,6 +71,7 @@ pub struct Scope {
 pub struct Facts {
     /// The statement, for the tools that take one.
     pub sql: Option<String>,
+    /// The session the call ran in.
     pub query_session: Option<String>,
     /// The exact total the run reported.
     pub rows: Option<usize>,
@@ -89,6 +91,7 @@ pub struct Called {
     pub answer: String,
     /// Whether that answer was a fault, so the card can dress it as one.
     pub failed: bool,
+    /// What the card shows.
     pub facts: Facts,
     /// The statement [`offer_sql`](super::offer) accepted, when this call was one — the
     /// transcript renders it as an **executable** card rather than a step card. `None` for

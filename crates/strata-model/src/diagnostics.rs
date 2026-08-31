@@ -13,8 +13,11 @@ use std::ops::Range;
 /// badge and the drawer's header tally; warnings and infos still list.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Severity {
+    /// Something that will not run.
     Error,
+    /// Something that will run and probably should not.
     Warning,
+    /// Something worth saying about text that is fine.
     Info,
 }
 
@@ -25,7 +28,9 @@ pub enum Severity {
 /// the Problems view gets the owner from the group it renders the row in.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Diagnostic {
+    /// How bad it is.
     pub severity: Severity,
+    /// What is wrong, in the words the surface shows.
     pub message: String,
     /// `line L:C` — the Problems-row display label.
     pub loc: Option<String>,
@@ -35,6 +40,7 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
+    /// Whether this counts toward the Problems badge.
     pub fn is_error(&self) -> bool {
         matches!(self.severity, Severity::Error)
     }

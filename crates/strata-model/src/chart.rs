@@ -235,11 +235,23 @@ pub enum ChartQuery {
         cap: usize,
     },
     /// Raw points (scatter).
-    Raw { x: String, y: String, cap: usize },
+    Raw {
+        /// The X column.
+        x: String,
+        /// The Y column.
+        y: String,
+        /// How many points the chart will draw before it refuses.
+        cap: usize,
+    },
     /// Uniform-width bins over one numeric column, counted engine-side — the one mark that
     /// computes, because DataFusion has no `width_bucket` and a raw column cannot be binned
     /// without a min/max pass. `bins` of `None` lets the engine pick from the row count.
-    Histogram { col: String, bins: Option<usize> },
+    Histogram {
+        /// The numeric column to bin.
+        col: String,
+        /// How many bins to cut it into.
+        bins: Option<usize>,
+    },
 }
 
 /// The category axis of a [`ChartData::Table`]: what each position is labelled, and — when
@@ -273,7 +285,9 @@ pub struct ChartSeries {
 /// One raw point.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ChartPoint {
+    /// The X value.
     pub x: f64,
+    /// The Y value.
     pub y: f64,
 }
 
@@ -299,8 +313,11 @@ pub struct Trend {
 /// last bin of a set is closed at `hi`, so the maximum value has somewhere to land.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ChartBin {
+    /// The bin's inclusive lower bound.
     pub lo: f64,
+    /// Its exclusive upper bound, inclusive on the last bin of a set.
     pub hi: f64,
+    /// How many rows fell in it.
     pub count: u64,
 }
 
@@ -319,7 +336,9 @@ pub enum ChartData {
     /// The rows, reshaped for marks: the axis in result order, and every
     /// [`ChartSeries::values`] exactly as long as it.
     Table {
+        /// The category axis.
         axis: Axis,
+        /// One series per drawn line, bar or area.
         series: Vec<ChartSeries>,
     },
     /// Raw points. **In no particular order** — a scatter draws marks, not a sequence;
@@ -329,11 +348,21 @@ pub enum ChartData {
     Bins(Vec<ChartBin>),
     /// Refused: the read would have exceeded `cap` of `unit`. Carries no data at all — the chart
     /// is not drawn, and the surface says to aggregate in SQL.
-    OverCap { unit: CapUnit, cap: usize },
+    OverCap {
+        /// What the read counted.
+        unit: CapUnit,
+        /// The cap it would have exceeded.
+        cap: usize,
+    },
     /// Refused: the long→wide pivot found two rows in one (X, series) cell. Aggregating them is
     /// the user's own `GROUP BY`, which the surface names and offers no control behind. Carries
     /// the encoding's column names so the message can say which.
-    Duplicates { x: String, series: String },
+    Duplicates {
+        /// The X column the pivot keyed on.
+        x: String,
+        /// The column it split series by.
+        series: String,
+    },
 }
 
 #[cfg(test)]

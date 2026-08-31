@@ -53,28 +53,43 @@ pub enum RegOutcome {
         /// first and leave the other unanswered forever. It is also what every consumer addresses
         /// a row by, so anything else here settles nothing and the row waits for good.
         name: String,
+        /// Whether the data source connected.
         result: Result<(), String>,
     },
+    /// A table the pass registered.
     Table {
+        /// The table's name.
         name: String,
+        /// What registration learned about it, or why it was refused.
         result: Result<TableMeta, String>,
     },
+    /// A view the pass created.
     View {
+        /// The view's name.
         name: String,
+        /// What creating it learned, or why it was refused.
         result: Result<ViewMeta, String>,
     },
     /// [`sync`] took an entry out because the desired catalog no longer names it.
     ///
     /// No `Result`: a removal is a map write against a registry this engine owns. The kind is
     /// carried because the def a host would have looked the name up by is the thing that is gone.
-    Removed { name: String, kind: RegKind },
+    Removed {
+        /// The name that was taken out.
+        name: String,
+        /// Which registry it left.
+        kind: RegKind,
+    },
 }
 
 /// Which of the three registries an entry belongs to — see [`RegOutcome::Removed`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RegKind {
+    /// A data source.
     Source,
+    /// A table.
     Table,
+    /// A view.
     View,
 }
 
@@ -99,8 +114,11 @@ impl fmt::Display for RegKind {
 /// [`view_order`] sorts so a view is re-created after everything it reads.
 #[derive(Clone, Debug, Default)]
 pub struct CatalogSpec {
+    /// The data sources to connect, run first.
     pub sources: Vec<SourceDef>,
+    /// The tables to register, run second.
     pub tables: Vec<TableSpec>,
+    /// The views to create, run last and in order.
     pub views: Vec<ViewDef>,
 }
 
@@ -136,6 +154,7 @@ impl CatalogSpec {
 /// host's row flips when its own answer is known rather than when the pass ends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PassReport {
+    /// The generation the pass left the catalog at.
     pub generation: CatalogGen,
 }
 

@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 //! **Agent access** — the tool vocabulary an AI agent drives a Strata project with, everything
 //! about it that is frontend-agnostic.
 //!

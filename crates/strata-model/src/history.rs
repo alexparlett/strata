@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 /// Explain never reach here), so there's no status field.
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct HistoryEntry {
+    /// The statement that ran.
     pub sql: String,
     /// When it completed — epoch millis, so the view can render relative time.
     pub ts_ms: u64,

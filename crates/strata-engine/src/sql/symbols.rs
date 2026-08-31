@@ -14,20 +14,26 @@ use crate::generation::CatalogGen;
 use crate::sql::FunctionCatalog;
 use strata_model::ColumnInfo;
 
+/// One column of a workspace relation, as completion offers it.
 #[derive(Clone, Default, PartialEq)]
 pub struct ColumnSym {
+    /// The column's name.
     pub name: String,
+    /// Its type, in the `short_type` spelling.
     pub dtype: String,
 }
 
+/// One workspace table or view, and its columns.
 #[derive(Clone, Default, PartialEq)]
 pub struct TableSym {
+    /// The relation's name.
     pub name: String,
     /// `true` for a saved view (vs a registered table) — completion detail only.
     pub is_view: bool,
     /// `true` for a table whose data Strata owns (`TableOrigin::Internal`) — the
     /// only tables an `INSERT` may target, so the only ones its operand offers.
     pub internal: bool,
+    /// Its columns.
     pub columns: Vec<ColumnSym>,
 }
 
@@ -47,6 +53,7 @@ impl TableSym {
         }
     }
 
+    /// The column this relation spells `name`, case-insensitively as SQL resolves it.
     pub fn column(&self, name: &str) -> Option<&ColumnSym> {
         self.columns
             .iter()
@@ -62,6 +69,7 @@ impl TableSym {
 /// DataFusion's types, exactly as [`FunctionSym`](super::FunctionSym) does not.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PreparedSym {
+    /// The statement's name.
     pub name: String,
     /// One label per parameter, in `$1`-first order. Empty for a statement with no placeholders,
     /// or one whose placeholder types DataFusion could not resolve.
@@ -115,6 +123,7 @@ pub struct LangBundle {
 /// data source that has not answered offers its name and nothing under it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DatabaseSym {
+    /// The data source's name.
     pub name: String,
     /// Whether a write may target a relation in it — the def's own
     /// [`read_only`](strata_model::SourceDef::read_only), inverted.
@@ -123,6 +132,7 @@ pub struct DatabaseSym {
     /// on a read-only connection is refused by the arm, and offering one would bait the user into
     /// a statement the engine has already decided against.
     pub writable: bool,
+    /// The schemas it shows.
     pub schemas: Vec<SchemaSym>,
 }
 
@@ -138,7 +148,9 @@ impl DatabaseSym {
 /// One remote schema and the relations in it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SchemaSym {
+    /// The schema's name.
     pub name: String,
+    /// The relations in it.
     pub relations: Vec<RelationSym>,
 }
 
@@ -146,6 +158,7 @@ pub struct SchemaSym {
 /// completion path does no I/O (§7) — so a three-part qualifier completes no further.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RelationSym {
+    /// The relation's name.
     pub name: String,
     /// Whether the server calls it a view — the completion row's glyph and detail.
     pub view: bool,
@@ -242,12 +255,14 @@ impl Catalog {
             .find(|d| d.name.eq_ignore_ascii_case(name))
     }
 
+    /// The workspace relation spelled `name`, case-insensitively as SQL resolves it.
     pub fn table(&self, name: &str) -> Option<&TableSym> {
         self.tables
             .iter()
             .find(|t| t.name.eq_ignore_ascii_case(name))
     }
 
+    /// Whether the workspace holds a relation spelled `name`.
     pub fn has_table(&self, name: &str) -> bool {
         self.table(name).is_some()
     }

@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 //! The app's core **data vocabulary** — the shapes the whole app reasons in, below every layer
 //! that produces or consumes them.
 //!

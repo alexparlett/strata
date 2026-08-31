@@ -60,6 +60,7 @@ pub trait FileFormatKind {
 pub struct OptionOffer {
     /// The key as it is written, `format.`-prefixed like every read option.
     pub key: &'static str,
+    /// The shape its value takes.
     pub kind: OptionKind,
     /// The short detail a completion row shows beside the key.
     pub what: &'static str,
@@ -70,9 +71,13 @@ pub struct OptionOffer {
 /// [`Char`](Self::Char) and [`Int`](Self::Int) offer nothing, the values being the user's own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OptionKind {
+    /// `true` or `false`.
     Bool,
+    /// A single character.
     Char,
+    /// A whole number.
     Int,
+    /// One of a fixed set of words.
     Enum(&'static [&'static str]),
 }
 

@@ -38,8 +38,11 @@ use strata_core::util::{clip, fmt_int, plural, plural_noun, DISPLAY_CHARS};
 pub enum TextFormat {
     /// Tab-separated (default Copy / ⌘C — Excel-paste-friendly).
     Tsv,
+    /// Comma-separated, with a header row.
     Csv,
+    /// A JSON array of row objects.
     Json,
+    /// A Markdown table.
     Markdown,
 }
 

@@ -362,6 +362,7 @@ struct Connected {
 /// [`SourceDef::schemas`]: the tree, the schema picker and completion all read one answer.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SchemaListingView {
+    /// The schema's name, in the server's own spelling.
     pub name: String,
     /// Filled only for [`SchemaVisibility::Live`]. There is nothing to list for an
     /// [`EnabledButMissing`](SchemaVisibility::EnabledButMissing) schema, and nothing that reads
@@ -370,6 +371,7 @@ pub struct SchemaListingView {
     /// the data source shows. A schema's relation list is the **source's** to size, so cloning one
     /// that every consumer discards is the one avoidable cost in this read.
     pub relations: Vec<Relation>,
+    /// Whether the data source shows it, and whether the server still has it.
     pub visibility: SchemaVisibility,
 }
 
@@ -389,6 +391,7 @@ pub struct RemoteRelation {
     /// Whether the source calls it a view ([`Relation::view`]), which the listing already knows
     /// and answers for free.
     pub view: bool,
+    /// Its columns, as the source reports them.
     pub columns: Vec<ColumnInfo>,
 }
 
@@ -431,6 +434,7 @@ pub struct SourceListing {
     /// typed into the editor, ↻) happens afterwards, and the sentence naming it is the whole
     /// reason a host has something to show.
     pub status: Option<RegStatus>,
+    /// What the connection is holding — a store, or a catalog and its schemas.
     pub detail: SourceDetail,
 }
 

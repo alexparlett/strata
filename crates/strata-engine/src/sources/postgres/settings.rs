@@ -181,7 +181,9 @@ pub fn check_user(user: &str) -> Result<(), String> {
 pub struct PgAddress<'a> {
     /// Unbracketed: `[::1]` arrives here as `::1`, which is what a driver's `host=` takes.
     pub host: &'a str,
+    /// The port, which the address states rather than defaulting.
     pub port: u16,
+    /// The database this data source reads.
     pub database: &'a str,
 }
 

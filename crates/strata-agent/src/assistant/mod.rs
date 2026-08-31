@@ -73,6 +73,11 @@ pub struct Assistant {
 }
 
 impl Assistant {
+    /// An assistant over a runtime of its own.
+    ///
+    /// # Errors
+    ///
+    /// If the runtime cannot be built.
     pub fn new() -> Result<Assistant, String> {
         let rt = RuntimeBuilder::new_multi_thread()
             .worker_threads(2)

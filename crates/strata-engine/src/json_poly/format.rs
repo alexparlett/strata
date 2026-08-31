@@ -56,6 +56,7 @@ pub struct PolyJsonFormat {
 }
 
 impl PolyJsonFormat {
+    /// A reader taking `opts`.
     pub fn new(opts: JsonRead) -> Self {
         Self { opts }
     }
@@ -257,6 +258,7 @@ pub struct PolyJsonSource {
 }
 
 impl PolyJsonSource {
+    /// A source reading `table_schema` out of files in `shape`.
     pub fn new(table_schema: TableSchema, shape: JsonShape) -> Self {
         Self {
             projection: SplitProjection::unprojected(&table_schema),

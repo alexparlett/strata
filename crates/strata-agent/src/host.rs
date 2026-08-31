@@ -42,7 +42,9 @@ use crate::error::AgentError;
 /// picking one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Project {
+    /// The folder's name, which two projects may share.
     pub name: String,
+    /// The project folder, which is the identity.
     pub root: PathBuf,
 }
 
@@ -54,6 +56,7 @@ pub struct Project {
 pub enum RegState {
     /// The engine has not answered for this def yet (a fresh open, or a re-scan in flight).
     Pending,
+    /// It registered.
     Ready,
     /// The engine refused it. The def still exists; there is just nothing behind it.
     Failed(String),
@@ -75,23 +78,37 @@ impl RegState {
 /// would hide exactly the failed defs this exists to show (the P3-02 correction).
 #[derive(Clone, Debug, PartialEq)]
 pub enum CatalogEntry {
+    /// A registered table.
     Table {
+        /// Its name.
         name: String,
         /// The reader the def names (`parquet`, `csv`, …).
         format: String,
         /// Source paths **as stored** — relative entries are not resolved here; that is the
         /// registration pass's business and the def is what the user wrote.
         sources: Vec<String>,
+        /// How far it got with the engine.
         reg: RegState,
     },
+    /// A saved view.
     View {
+        /// Its name.
         name: String,
+        /// Its definition query.
         sql: String,
+        /// How far it got with the engine.
         reg: RegState,
     },
     /// A saved query: text the user parked, not an object the engine holds — so it has no
     /// registration state to report, and `describe_table` does not answer for it.
-    Query { id: Uuid, name: String, sql: String },
+    Query {
+        /// Its identity, which a rename does not move.
+        id: Uuid,
+        /// Its label.
+        name: String,
+        /// The snippet itself.
+        sql: String,
+    },
 }
 
 impl CatalogEntry {
@@ -147,20 +164,29 @@ impl CatalogEntry {
 /// derived from rows on screen.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Described {
+    /// A registered table.
     Table {
+        /// Its name.
         name: String,
+        /// The reader the def names.
         format: String,
+        /// Source paths as stored.
         sources: Vec<String>,
         /// Hive partition columns as `(name, type)`.
         partitions: Vec<(String, String)>,
         /// The free row count, when the source reports one (parquet's footer does; CSV and
         /// JSON do not).
         rows: Option<u64>,
+        /// Its columns, as registration read them.
         columns: Vec<ColumnInfo>,
     },
+    /// A saved view.
     View {
+        /// Its name.
         name: String,
+        /// Its definition query.
         sql: String,
+        /// Its columns, as creating it read them.
         columns: Vec<ColumnInfo>,
         /// The base tables the view scans — workspace and remote alike, because that is what
         /// the view reads and the caller asked what it reads.
@@ -177,12 +203,21 @@ pub enum Described {
         source: String,
         /// Whether the server calls it a view.
         view: bool,
+        /// Its columns, as the data source reports them.
         columns: Vec<ColumnInfo>,
     },
     /// The def is there; the engine refused it.
-    Failed { name: String, error: String },
+    Failed {
+        /// The def's name.
+        name: String,
+        /// What the engine refused it with.
+        error: String,
+    },
     /// The def is there; registration has not answered yet.
-    Pending { name: String },
+    Pending {
+        /// The def's name.
+        name: String,
+    },
 }
 
 impl Described {
@@ -273,6 +308,7 @@ impl Described {
 pub struct AgentId(pub Uuid);
 
 impl AgentId {
+    /// Mints a new identity.
     #[allow(clippy::new_without_default)]
     pub fn new() -> AgentId {
         AgentId(Uuid::new_v4())
@@ -287,7 +323,9 @@ impl AgentId {
 /// did not.
 #[derive(Clone, Default, PartialEq, Eq, Hash, Debug)]
 pub struct AgentIdentity {
+    /// What the client calls itself.
     pub name: String,
+    /// What version it says it is.
     pub version: String,
 }
 
@@ -323,7 +361,9 @@ impl AgentIdentity {
 /// property the in-process chat pane (AA-06) will need.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Agent {
+    /// Its identity, minted per connection.
     pub id: AgentId,
+    /// What the client said it is.
     pub identity: AgentIdentity,
     /// **This agent is part of the app rather than a client that dialled in** — the in-process
     /// assistant, and nothing else.
@@ -353,6 +393,7 @@ pub struct Agent {
 pub struct QuerySessionId(pub Uuid);
 
 impl QuerySessionId {
+    /// Mints a new identity.
     #[allow(clippy::new_without_default)]
     pub fn new() -> QuerySessionId {
         QuerySessionId(Uuid::new_v4())
@@ -373,6 +414,7 @@ impl From<QuerySessionId> for WsId {
 pub enum QuerySessionState {
     /// Nothing has been run in it.
     Empty,
+    /// A run is in flight.
     Running,
     /// A run finished — with rows, a plan, an error, or a stop. All of those are settled;
     /// only "in flight" is not, and a session whose run failed has certainly not gone back
@@ -386,7 +428,9 @@ pub enum QuerySessionState {
 /// nothing to be called — what it is, is what has run in it, which the agent already knows.
 #[derive(Clone, Debug, PartialEq)]
 pub struct QuerySessionInfo {
+    /// The session's identity.
     pub session: QuerySessionId,
+    /// Where its last run got to.
     pub state: QuerySessionState,
 }
 
@@ -394,7 +438,9 @@ pub struct QuerySessionInfo {
 /// snapshot alone, so a plan does not cost the agent its readable page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunMode {
+    /// Execute the statement and settle a snapshot.
     Run,
+    /// Plan it and materialize nothing.
     Explain,
 }
 
@@ -443,6 +489,11 @@ pub trait Host: Send + Sync + 'static {
         project: &Path,
     ) -> impl Future<Output = Result<Arc<Engine>, AgentError>> + Send;
 
+    /// Every row of the project's catalog, as the store shows it.
+    ///
+    /// # Errors
+    ///
+    /// If `project` is not one this host holds.
     fn catalog(
         &self,
         project: &Path,

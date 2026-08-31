@@ -7,13 +7,21 @@ use super::metrics::Metric;
 /// Broad operator category, used only for the node's accent colour.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PlanKind {
+    /// A scan.
     Source,
+    /// A join.
     Join,
+    /// A repartition or a coalesce.
     Exchange,
+    /// An aggregate.
     Agg,
+    /// A sort.
     Sort,
+    /// A projection.
     Proj,
+    /// A limit.
     Limit,
+    /// Anything else.
     Util,
 }
 
@@ -73,9 +81,13 @@ impl PlanKind {
 /// One operator in a plan, flattened with its tree `depth`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlanNode {
+    /// The operator's own name.
     pub name: String,
+    /// Its one-line detail, as the plan printed it.
     pub detail: String,
+    /// The category its accent colour comes from.
     pub kind: PlanKind,
+    /// How deep it sits in the tree.
     pub depth: usize,
     /// Output rows (`MetricsSet::output_rows`) — ANALYZE only; `None` on operators
     /// that don't emit a row count (e.g. `RepartitionExec`) or plain EXPLAIN.
@@ -97,8 +109,10 @@ pub struct PlanNode {
 /// forces Physical (the "Plan with Metrics").
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum PlanTab {
+    /// The physical plan.
     #[default]
     Physical,
+    /// The logical plan.
     Logical,
 }
 
@@ -106,10 +120,15 @@ pub enum PlanTab {
 /// for ANALYZE) plus each tree's raw indent text for the Raw toggle.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct QueryPlan {
+    /// The logical tree, flattened in pre-order.
     pub logical: Vec<PlanNode>,
+    /// The physical tree, flattened in pre-order.
     pub physical: Vec<PlanNode>,
+    /// The logical tree as EXPLAIN printed it.
     pub logical_text: String,
+    /// The physical tree as EXPLAIN printed it.
     pub physical_text: String,
+    /// Whether the statement was an `EXPLAIN ANALYZE`, so the physical tree carries metrics.
     pub analyze: bool,
 }
 

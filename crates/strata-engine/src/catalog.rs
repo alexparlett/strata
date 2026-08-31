@@ -33,7 +33,9 @@ use crate::{fold_ident, CATALOG, SCHEMA};
 /// (`None` when the source doesn't report one).
 #[derive(Clone, Debug, PartialEq)]
 pub struct TableMeta {
+    /// Its columns.
     pub columns: Vec<ColumnInfo>,
+    /// How many rows it holds, where the source reports one for free.
     pub rows: Option<u64>,
 }
 
@@ -41,11 +43,14 @@ pub struct TableMeta {
 /// its options, Hive partition columns, and whose files those are.
 #[derive(Clone, Debug)]
 pub struct TableSpec {
+    /// The name to register it under.
     pub name: String,
+    /// Its files, as paths or globs.
     pub paths: Vec<String>,
     /// The reader *and* the options it takes — see [`SourceFormat`]. One field, so a CSV
     /// delimiter cannot be named on a parquet table.
     pub format: SourceFormat,
+    /// Hive partition columns, as `(name, arrow_type)`.
     pub partitions: Vec<(String, String)>,
     /// The data source this table reads through, by name. `None` over local files.
     ///
@@ -73,6 +78,7 @@ pub struct TableSpec {
 /// deriving it from the [`PlanDeps`] walk these come from.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ViewMeta {
+    /// Its columns.
     pub columns: Vec<ColumnInfo>,
     /// Workspace base tables the view scans, by bare name (see [`PlanDeps::tables`]).
     pub tables: Vec<String>,

@@ -13,6 +13,7 @@ use crate::chart::ChartConfig;
 pub struct TabId(pub Uuid);
 
 impl TabId {
+    /// Mints a new identity.
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self(Uuid::new_v4())
@@ -27,8 +28,11 @@ impl TabId {
 /// can't dangle a tab).
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Origin {
+    /// Nothing — the tab saves to a target the user has yet to pick.
     Scratch,
+    /// A view, by name.
     View(String),
+    /// A saved query, by id.
     SavedQuery(Uuid),
 }
 
@@ -37,8 +41,10 @@ pub enum Origin {
 /// and it survives re-runs; the chart *config* will be per result set (Chart workstream).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub enum ResultsView {
+    /// The results grid.
     #[default]
     Grid,
+    /// The chart.
     Chart,
 }
 
@@ -46,8 +52,10 @@ pub enum ResultsView {
 /// window's geometry, and the panel layout. This *is* the shape of `.strata/session.json`.
 #[derive(Serialize, Deserialize, Default, Clone, PartialEq)]
 pub struct SessionSnapshot {
+    /// The open tabs, in strip order.
     #[serde(default)]
     pub tabs: Vec<TabSnapshot>,
+    /// Which of them is active.
     #[serde(default)]
     pub active: Option<TabId>,
     /// Where and how big the window was, so it reopens in place. `None` until the first
@@ -71,6 +79,7 @@ pub struct SessionSnapshot {
 /// Connections was open from being moved aside and costing the user every tab.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum SidebarPane {
+    /// The catalog tree.
     Catalog,
 }
 
@@ -188,8 +197,11 @@ pub enum RightPane {
 /// [`Layout::drawer`] means the drawer is collapsed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum DrawerTab {
+    /// The tabs' SQL diagnostics.
     Problems,
+    /// The event log.
     Events,
+    /// Query history.
     History,
 }
 
@@ -208,14 +220,17 @@ pub struct Layout {
     /// The open drawer tab, or `None` when collapsed.
     #[serde(default, deserialize_with = "drawer_tab")]
     pub drawer: Option<DrawerTab>,
+    /// The sidebar's width.
     #[serde(default = "default_sidebar_w")]
     pub sidebar_w: f32,
+    /// The inspector's width.
     #[serde(default = "default_inspector_w")]
     pub inspector_w: f32,
     /// The chat pane's width. Its own field rather than one shared with the inspector: the two
     /// share a slot on screen and nothing else, and a user who sizes one has not sized the other.
     #[serde(default = "default_chat_w")]
     pub chat_w: f32,
+    /// The drawer's height.
     #[serde(default = "default_drawer_h")]
     pub drawer_h: f32,
     /// The height the drawer's expand toggle will restore it to — and, by being `Some`, the
@@ -281,12 +296,16 @@ impl Default for Layout {
 /// undo are deliberately left out (state-arch §5 — "lean minimal").
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct TabSnapshot {
+    /// Which tab this is.
     pub id: TabId,
+    /// Its title.
     pub name: String,
+    /// What it saves to.
     #[serde(deserialize_with = "tab_origin")]
     pub origin: Origin,
     /// The rope contents (`rope.to_string()`), rebuilt into a fresh buffer on load.
     pub text: String,
+    /// Which body the results pane shows.
     #[serde(default)]
     pub view: ResultsView,
     /// How the tab's chart is encoded (`docs/CHART_SPEC.md` §6). Column *references*, so a
@@ -302,9 +321,11 @@ pub struct TabSnapshot {
 pub struct WindowGeom {
     /// Outer-position top-left.
     pub x: f32,
+    /// Outer-position left.
     pub y: f32,
     /// Inner (client) size.
     pub width: f32,
+    /// Inner (client) width.
     pub height: f32,
 }
 

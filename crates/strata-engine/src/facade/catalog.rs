@@ -159,6 +159,7 @@ impl Catalog<'_> {
         CatalogSpec::of_project(root, defs, self.engine.registry())
     }
 
+    /// The Hive partition columns `paths` are laid out by, as a directory walk finds them.
     pub async fn detect_partitions(
         self,
         source: Option<String>,

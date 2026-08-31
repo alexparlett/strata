@@ -52,11 +52,14 @@ use strata_model::SnapshotId;
 pub struct ExportSpec {
     /// The destination — a file for a flat export, a directory when `partition` has columns.
     pub path: String,
+    /// How much of the snapshot to write.
     pub scope: Scope,
     /// `(column name, ascending)` — the grid's active sort, applied over the **whole**
     /// snapshot before any row window. `None` = snapshot order.
     pub sort: Option<(String, bool)>,
+    /// The output format and its write options.
     pub format: Format,
+    /// The columns the output fans out over, if any.
     pub partition: Partition,
 }
 
@@ -71,8 +74,11 @@ pub struct ExportSpec {
 /// failed export.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExportReport {
+    /// Where the write landed.
     pub path: String,
+    /// How many rows it wrote.
     pub rows: usize,
+    /// How large the file is, where one file was written and could be read back.
     pub bytes: Option<u64>,
 }
 
@@ -93,17 +99,24 @@ pub enum Scope {
     /// Every row.
     All,
     /// One page window, in the grid's own 1-based paging terms.
-    Page { page: usize, page_size: usize },
+    Page {
+        /// Which page, 1-based.
+        page: usize,
+        /// How many rows a page holds.
+        page_size: usize,
+    },
 }
 
 /// The output format, each carrying exactly the write options DataFusion honours for it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Format {
+    /// Delimited text.
     Csv(Csv),
     /// Newline-delimited JSON, which is the only shape DataFusion writes: its `JsonSerializer`
     /// is an `arrow::json::LineDelimitedWriter` with no array mode, so there is no shape option
     /// to spell. `newline_delimited` is a *read* option.
     Json(Json),
+    /// Apache Parquet.
     Parquet(Parquet),
     /// Arrow IPC — **no write options exist**, which is why this variant carries nothing.
     Arrow,
@@ -114,7 +127,9 @@ pub enum Format {
     /// panel to draw for a format this build does not know the settings of, so they travel in the
     /// `format.*` spelling a typed `COPY` writes them in.
     Extension {
+        /// The word the writer is registered under.
         format: String,
+        /// That writer's `format.*` options, verbatim.
         options: BTreeMap<String, String>,
     },
 }
@@ -251,6 +266,7 @@ impl Default for Parquet {
     }
 }
 
+/// CSV write options.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Csv {
     /// Write the column-name row.
@@ -269,18 +285,25 @@ pub struct Csv {
     pub compression: Compression,
 }
 
+/// JSON write options.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Json {
+    /// Whole-file compression.
     pub compression: Compression,
 }
 
+/// Parquet write options.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Parquet {
+    /// The column codec.
     pub compression: Codec,
+    /// How much column statistics to write.
     pub statistics: Statistics,
     /// Rows per row group — a **row count**, not a byte size.
     pub max_row_group_size: usize,
+    /// Which Parquet format version to write.
     pub writer_version: WriterVersion,
+    /// Dictionary-encode where it pays.
     pub dictionary: bool,
 }
 
@@ -288,10 +311,15 @@ pub struct Parquet {
 /// encoding columns (CSV / JSON). Levelless: the canvas offers the codec only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Compression {
+    /// Uncompressed.
     None,
+    /// gzip, `.gz`.
     Gzip,
+    /// Zstandard, `.zst`.
     Zstd,
+    /// bzip2, `.bz2`.
     Bzip2,
+    /// xz, `.xz`.
     Xz,
 }
 
@@ -323,11 +351,17 @@ impl Compression {
 /// be set on a codec that would ignore it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Codec {
+    /// Uncompressed.
     Uncompressed,
+    /// Snappy.
     Snappy,
+    /// LZ4.
     Lz4,
+    /// gzip, at the level given.
     Gzip(u32),
+    /// Brotli, at the level given.
     Brotli(u32),
+    /// Zstandard, at the level given.
     Zstd(u32),
 }
 
@@ -348,8 +382,11 @@ impl Codec {
 /// How much column statistics Parquet writes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Statistics {
+    /// None at all.
     None,
+    /// Per column chunk.
     Chunk,
+    /// Per page.
     Page,
 }
 
@@ -366,7 +403,9 @@ impl Statistics {
 /// Parquet format version. 2.0 enables newer encodings; 1.0 is the compatible floor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WriterVersion {
+    /// 1.0, the compatible floor.
     V1,
+    /// 2.0, which enables the newer encodings.
     V2,
 }
 

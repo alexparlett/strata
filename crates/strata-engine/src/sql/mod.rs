@@ -46,9 +46,12 @@ pub use symbols::{Catalog, DatabaseSym, LangBundle, PreparedSym, RelationSym, Sc
 /// (e.g. the `From<&str>` test constructor) is a plain scalar.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum FnKind {
+    /// A scalar function.
     #[default]
     Scalar,
+    /// An aggregate function.
     Aggregate,
+    /// A window function.
     Window,
 }
 
@@ -70,7 +73,9 @@ impl FnKind {
 /// depends on DataFusion's types.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FunctionSym {
+    /// The function's name.
     pub name: String,
+    /// Which registry it came from.
     pub kind: FnKind,
     /// The function's overloads, each an ordered list of parameter labels — a type
     /// display (`"Float64"`) or, when the registry names them, the parameter name.
@@ -179,8 +184,11 @@ impl From<&str> for FunctionSym {
 /// signature help.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FunctionCatalog {
+    /// The scalar functions.
     pub scalar: Vec<FunctionSym>,
+    /// The aggregate functions.
     pub aggregate: Vec<FunctionSym>,
+    /// The window functions.
     pub window: Vec<FunctionSym>,
 }
 
