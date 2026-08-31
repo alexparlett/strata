@@ -235,7 +235,8 @@ pub enum TurnEvent {
         /// What the card shows.
         facts: Facts,
     },
-    /// The last event of every turn, carrying the same value [`Running::settle`] returns.
+    /// The last event of every turn, carrying the same value
+    /// [`Running::settle`](crate::assistant::Running::settle) returns.
     Settled(Settle),
 }
 

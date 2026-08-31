@@ -158,7 +158,7 @@ where
 /// Arrow carry their compression *inside* the file, so neither offers this.
 ///
 /// The extension matters as much as the codec: a gzipped CSV is `events.csv.gz`, and a listing
-/// filtered on `.csv` matches none of them — see [`SourceFormat::extension`].
+/// filtered on `.csv` matches none of them — see [`extension`](Self::extension).
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum FileCompression {
@@ -460,7 +460,7 @@ pub struct TableDef {
     /// The reader and its options — see [`SourceFormat`].
     #[serde(deserialize_with = "de_format", serialize_with = "se_format")]
     pub format: SourceFormat,
-    /// **Which data source [`sources`](Self::sources) are read through**, by its
+    /// **Which data source [`paths`](Self::paths) are read through**, by its
     /// [`name`](crate::SourceDef::name) — `acme_lake`. `None` is the local disk.
     ///
     /// A *reference*, not a copy: the bucket, its provider and its credentials belong to the
@@ -478,7 +478,7 @@ pub struct TableDef {
     /// deterministic reload (types aren't re-detected).
     #[serde(default, deserialize_with = "de_partition_cols")]
     pub partition_cols: Vec<(String, String)>,
-    /// Whose files [`sources`](Self::sources) names — see [`TableOrigin`].
+    /// Whose files [`paths`](Self::paths) names — see [`TableOrigin`].
     #[serde(default)]
     pub origin: TableOrigin,
 }

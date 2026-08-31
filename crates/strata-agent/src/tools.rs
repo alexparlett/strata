@@ -842,7 +842,8 @@ impl<H: Host> StrataTools<H> {
         describe::describe_result(described, &params)
     }
 
-    /// The engine's function registry, narrowed by `matching` and bounded by [`FUNCTION_DETAIL`].
+    /// The engine's function registry, narrowed by `matching` and bounded by
+    /// [`FUNCTION_DETAIL`](crate::wire::FUNCTION_DETAIL).
     ///
     /// A match set at or under the bound comes back in full; anything larger lists names only and
     /// says how to narrow it.

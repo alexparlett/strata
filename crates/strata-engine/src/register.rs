@@ -349,7 +349,8 @@ pub(crate) async fn create_views(
 /// files is [`Catalog::drop_table`](crate::Catalog::drop_table)'s.
 ///
 /// The diff is against the engine's own registries rather than a list the caller kept: the
-/// workspace catalog for tables and views, and [`Sources`] for data sources — **membership,
+/// workspace catalog for tables and views, and [`Sources`](crate::Sources) for data sources —
+/// **membership,
 /// not liveness**, so a def the engine refused is still removed and still reported, which is
 /// what a host holding a row for it needs. A live result snapshot is out of reach, being absent
 /// from what the catalog enumerates and nameable by no def.

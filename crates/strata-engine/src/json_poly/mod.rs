@@ -11,17 +11,19 @@
 //! Here the conflicted path becomes `Utf8` carrying that value's own JSON text, and everything
 //! else infers exactly as it does today. Three parts:
 //!
-//! - [`infer`] — the fork of arrow's merge rule, with `Text` as the absorbing conflict state.
+//! - [`infer`](mod@infer) — the fork of arrow's merge rule, with `Text` as the absorbing conflict
+//!   state.
 //! - [`normalize`] — rewriting a parsed record so the values match, since arrow's string decoder
 //!   accepts a JSON string and nothing else.
-//! - [`format`] — the DataFusion reader that runs both over a file.
+//! - [`format`](mod@format) — the DataFusion reader that runs both over a file.
 //!
 //! Neither half is a JSON→Arrow decoder — arrow still builds every array. Feed it **bytes**
 //! (`Decoder::decode`), not `Decoder::serialize`: this crate builds `serde_json` with
 //! `arbitrary_precision`, which encodes every `Number` as `{"$serde_json::private::Number": …}`,
 //! and arrow walks that as a struct and rejects it.
 //!
-//! [`format`] is the `FileFormat` / `FileSource` / `FileOpener` that puts these on DataFusion's
+//! [`format`](mod@format) is the `FileFormat` / `FileSource` / `FileOpener` that puts these on
+//! DataFusion's
 //! read path, selected by `register_external`'s `SourceFormat::Json` arm. The swap point sits
 //! *inside* DataFusion's `JsonOpener::open`, so none of that plumbing could be inherited from
 //! `JsonSource`.

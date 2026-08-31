@@ -1,7 +1,8 @@
-//! The `FileFormat` that puts [`infer`](super::infer) and [`normalize`](super::normalize) on
+//! The `FileFormat` that puts [`infer`](mod@super::infer) and [`normalize`](super::normalize) on
 //! DataFusion's read path.
 //!
-//! `register_external` picks a reader per [`SourceFormat`]; this is what the JSON arm selects.
+//! `register_external` picks a reader per [`SourceFormat`](strata_model::SourceFormat); this is
+//! what the JSON arm selects.
 //! DataFusion imposes nothing here — `FileFormat` is a public trait and `ListingOptions` /
 //! `ListingTable` are generic over `Arc<dyn FileFormat>`.
 //!

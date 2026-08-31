@@ -1,4 +1,4 @@
-//! Making a parsed record fit the schema [`infer`](super::infer) produced.
+//! Making a parsed record fit the schema [`infer`](mod@super::infer) produced.
 //!
 //! Inference decided that a conflicted path is `Utf8`; the decoder still has to be handed
 //! something it can put there. Arrow's `StringArrayDecoder` accepts a JSON string and nothing

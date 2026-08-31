@@ -46,6 +46,7 @@ mod facade;
 pub mod formats;
 mod functions;
 mod generation;
+pub mod guide;
 mod ipc;
 pub mod json_poly;
 pub mod policy;
@@ -60,6 +61,8 @@ pub mod sources;
 pub mod sql;
 pub mod statements;
 pub mod tables;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 pub mod udf_package;
 pub mod udfs;
 

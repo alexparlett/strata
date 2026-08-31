@@ -363,7 +363,7 @@ impl Sources<'_> {
     /// profile's *contents* are read.
     ///
     /// On the engine rather than beside the surface that asks for it, for the two reasons every
-    /// other method here is: `aws-config` is [`store`]'s dependency and stays there, and this
+    /// other method here is: `aws-config` is the store backend's dependency and stays there, and this
     /// reads files — so it belongs on the runtime that keeps a read off the thread drawing every
     /// window, not in a component that would have to invent one.
     pub async fn aws_profiles(self) -> Vec<String> {

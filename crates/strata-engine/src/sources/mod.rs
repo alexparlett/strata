@@ -36,8 +36,10 @@ pub mod mysql;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 
-#[cfg(test)]
-pub(crate) mod fake;
+#[cfg(any(test, feature = "testing"))]
+pub mod conformance;
+#[cfg(any(test, feature = "testing"))]
+pub mod fake;
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, RwLock};

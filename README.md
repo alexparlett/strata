@@ -177,6 +177,12 @@ Tests, linting and the rest of the development workflow are in
 [docs/RELEASING.md](docs/RELEASING.md). The architecture, end to end, is
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+The engine underneath is a library in its own right — DataFusion plus a JSON reader that does not
+give up on real-world documents, a statement router, immutable result snapshots and a SQL
+language service, over seams for your own backends, formats and storage. To use it in something
+that is not Strata, `cargo doc -p strata-engine --open` and start at `strata_engine::guide`; there
+are runnable examples in `crates/strata-engine/examples/`.
+
 ## Use of AI
 
 Strata is developed substantially with AI agents, and the commit log makes no secret of it.

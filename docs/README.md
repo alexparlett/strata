@@ -23,6 +23,23 @@ everything below.
 | [MCP_CLIENTS.md](MCP_CLIENTS.md) | Connecting MCP clients to the agent access server: per-client configuration (Claude Code, Claude Desktop, VS Code, Cursor, Gemini CLI, Codex CLI) and the headless stdio server. |
 | [FREYA_THEME_SPEC.md](FREYA_THEME_SPEC.md) | The theme format: the role vocabulary, syntax scopes, fonts and typography — for anyone writing a theme. |
 
+## Embedding the engine
+
+The engine trio (`strata-model` · `strata-arrow` · `strata-engine`) is documented for a
+crates.io reader in its own rustdoc rather than here, so the prose sits beside the API it
+describes and its examples are compiled by CI. `cargo doc -p strata-engine --open` and start at
+**`strata_engine::guide`**:
+
+| Guide | What it covers |
+|---|---|
+| `guide::embedding` | Getting started (builder → sync → run → read), the capability and policy model, the embedder contract, and the session ledger. |
+| `guide::json` | The polymorphic JSON reader, the union's journey through snapshot and presentation, the `struct_*` family — and using the reader in a plain DataFusion session. |
+| `guide::data_source` | Writing a `DataSource`, and running the two conformance rings against your own backend. |
+| `guide::storage` | Writing a `SnapshotStore` or an `InternalTableStore`. |
+
+Runnable versions live in `crates/strata-engine/examples/` (`minimal_embedder`, `no_disk`,
+`custom_source`) and `crates/strata-agent/examples/headless_mcp.rs`.
+
 ## Architecture and operations
 
 | Document | What it covers |
