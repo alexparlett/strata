@@ -102,6 +102,9 @@ pub(crate) async fn insert_stream(
 /// One rule rather than the default optimizer — the rest of that pass is about *execution*, and
 /// this is about what can be written down. `create_physical_plan` still runs the full analyzer and
 /// optimizer over the result.
+///
+/// **Retirable when <https://github.com/apache/datafusion/issues/13027> lands** — the unparser bug
+/// this exists for, open upstream from the user-written side of the same shape.
 fn collapse_projections(input: &LogicalPlan) -> Result<LogicalPlan, String> {
     Optimizer::with_rules(vec![Arc::new(OptimizeProjections::new())])
         .optimize(input.clone(), &OptimizerContext::new(), |_, _| {})
