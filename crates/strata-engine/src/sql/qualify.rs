@@ -38,6 +38,15 @@
 //! *to*, and resolving would read a plainly local intent as "make it on the server" — which then
 //! fails as already existing. `CREATE TABLE pg.public.orders AS SELECT …` is how the server is
 //! addressed, by typing the qualifier.
+//!
+//! **Why a pass over the AST and not a `RelationPlanner`**, which is otherwise the seam for this:
+//! that extension runs *before* DataFusion's own CTE lookup and its context exposes no way to ask
+//! whether a name is bound in scope, so an extension resolving bare names would resolve
+//! `WITH orders AS (…) SELECT * FROM orders` to a remote table. Open upstream as
+//! <https://github.com/apache/datafusion/issues/24460>, which is half the condition under which
+//! this pass could move; the other half is a source lookup that can answer with a *different*
+//! `TableReference` — `ContextProvider` hands the same as-typed one to the lookup and to the scan
+//! it builds, so it cannot rename.
 
 use std::collections::HashSet;
 use std::ops::ControlFlow;
