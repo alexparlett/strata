@@ -10,6 +10,9 @@
 //! - [`storage`] — writing a [`SnapshotStore`](crate::snapshots::SnapshotStore) or an
 //!   [`InternalTableStore`](crate::tables::InternalTableStore).
 //!
+//! Beside them is [`testing`](crate::testing), which is not prose: it is the six conformance
+//! rings, one per seam, that hold your implementation to the law the shipped ones keep.
+//!
 //! Nothing here is compiled into a binary: these modules hold documentation and no items.
 
 pub mod data_source;

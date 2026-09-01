@@ -50,7 +50,8 @@ use datafusion::sql::TableReference;
 
 use super::snapshots::is_snapshot_name;
 use super::sources::providers::SourceCatalogProvider;
-use super::{fold_ident, CATALOG, SCHEMA};
+use super::{CATALOG, SCHEMA};
+use crate::ident::fold_ident;
 
 /// Whether `name` addresses **the workspace catalog's one schema** — the three spellings of
 /// one place (`orders`, `public.orders`, `strata.public.orders`), and nothing else.

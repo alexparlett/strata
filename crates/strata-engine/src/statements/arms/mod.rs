@@ -45,9 +45,9 @@ use datafusion::catalog::TableProvider;
 use datafusion::logical_expr::TableType;
 use datafusion::prelude::SessionContext;
 
-use crate::fold_ident;
+use crate::catalog_providers::def_ref;
+use crate::ident::fold_ident;
 use crate::policy::Principal;
-use crate::providers::def_ref;
 use crate::statements::ctx::StmtCtx;
 use crate::statements::pipeline::Qualified;
 use crate::statements::report::{StatementOutcome, Unsettled};
@@ -179,7 +179,7 @@ mod tests {
     use std::path::PathBuf;
     use std::{env, process};
 
-    use crate::providers::fake_source;
+    use crate::catalog_providers::fake_source;
     use crate::statements::target::{elsewhere, in_database, read_only};
     use crate::statements::Remote;
     use crate::{Engine, EngineError, RunOutcome, RunTag, WsId};

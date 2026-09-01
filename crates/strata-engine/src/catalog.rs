@@ -17,17 +17,18 @@ use strata_arrow::column_info;
 use strata_arrow::profile::Profiled;
 use strata_model::{ColumnInfo, JsonShape, SourceFormat, Stat, StatKey};
 
-use crate::formats::Formats;
-use crate::profile::{aggregates, decode, profile_sql, CatalogProfile};
-use crate::providers::{
+use crate::catalog_providers::{
     def_backed, def_catalogs, def_home, def_ref, in_workspace, remove_table, replace_table,
     take_table,
 };
+use crate::formats::Formats;
+use crate::ident::fold_ident;
+use crate::profile::{aggregates, decode, profile_sql, CatalogProfile};
 use crate::snapshots::is_snapshot_name;
 use crate::sql::{SessionName, WorkspaceName};
 use crate::statements::Fault;
 use crate::tables::InternalTableStore;
-use crate::{fold_ident, CATALOG, SCHEMA};
+use crate::{CATALOG, SCHEMA};
 
 /// What a (re)registration learned about a table: its columns, plus the free row count
 /// (`None` when the source doesn't report one).
@@ -1685,8 +1686,8 @@ mod cross_source_tests {
 
     use super::*;
     use crate::builder::test_context;
-    use crate::fold_ident;
-    use crate::providers::fake_source;
+    use crate::catalog_providers::fake_source;
+    use crate::ident::fold_ident;
 
     /// A session with a workspace table `orders`, a data source `pg` whose catalog holds its own
     /// `orders`, and nothing else. The shared bare name is the fixture's whole point.

@@ -357,7 +357,7 @@ mod tests {
 
     use crate::formats::fake::TestFormat;
     use crate::sql::complete;
-    use crate::sql::symbols::Catalog;
+    use crate::sql::symbols::Symbols;
     use crate::{Engine, EngineBuilder, RunOutcome, RunRows, RunTag, StatementReport, WsId};
     use strata_core::project::{save_defs, ProjectDefs};
 
@@ -553,7 +553,7 @@ mod tests {
     #[test]
     fn a_registered_format_appears_in_the_stored_as_offer() {
         let eng = Engine::builder().with_format(TestFormat).build();
-        let catalog = Catalog::build([], [], eng.lang().bundle(), String::new());
+        let catalog = Symbols::build([], [], eng.lang().bundle(), String::new());
         let offered: Vec<String> =
             complete(&catalog, "CREATE EXTERNAL TABLE t STORED AS ", 34, true)
                 .into_iter()

@@ -10,12 +10,13 @@ use strata_model::TableDef;
 use strata_model::ViewDef;
 
 use crate::catalog::{self, deregister_anywhere, TableMeta, TableSpec, ViewMeta};
-use crate::register::{self, Stamped, CatalogSpec, PassReport};
+use crate::ident::fold_ident;
+use crate::register::{self, CatalogSpec, PassReport, Stamped};
 use crate::statements::arms::{self, unsettled};
 use crate::statements::report::StatementOutcome;
 use crate::statements::{StatementReport, StmtKind, StoreEffect};
 use crate::{
-    fold_ident, profile, BackgroundGuard, CatalogGen, Engine, EngineError, ProfileRun, RegStatus,
+    profile, BackgroundGuard, CatalogGen, Engine, EngineError, ProfileRun, RegStatus,
     Registrations, Scans, SourceDefs, StopReason,
 };
 

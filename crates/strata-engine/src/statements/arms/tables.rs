@@ -38,8 +38,9 @@ use datafusion::logical_expr::{CreateMemoryTable, DdlStatement, LogicalPlan, Tab
 use datafusion::prelude::{SQLOptions, SessionContext};
 
 use crate::catalog::{dependent_views, register_external, short_type, TableSpec};
+use crate::catalog_providers::{replace_table, take_table};
+use crate::ident::fold_ident;
 use crate::policy::Principal;
-use crate::providers::{replace_table, take_table};
 use crate::sink::insert_stream;
 use crate::sources::{create_table_as, insert_into, writable, Live};
 use crate::statements::ctx::{DataRoot, StmtCtx};
@@ -49,7 +50,7 @@ use crate::statements::target::{elsewhere, in_store, read_only, resolve_target, 
 use crate::statements::{Fault, StmtKind};
 use crate::tables::local_ipc::dir_path;
 use crate::tables::InternalTableStore;
-use crate::{fold_ident, InternalTables};
+use crate::InternalTables;
 use strata_core::project::{internal_source, tables_dir};
 use strata_core::util::plural;
 use strata_model::{SourceFormat, TableDef, TableOrigin};

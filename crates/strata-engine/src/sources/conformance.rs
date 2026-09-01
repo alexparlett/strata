@@ -33,6 +33,19 @@ use crate::statements::Remote;
 /// directions, so a source cannot say it
 /// is read-only while holding a writer, or say it is writable and have none.
 ///
+/// # Examples
+///
+/// ```
+/// # use strata_engine::testing::{fake_def, TestDoc};
+/// # async fn check() {
+/// strata_engine::testing::sources::conforms(
+///     TestDoc::holding("docs", &["orders"]),
+///     &fake_def::<TestDoc>("docs", "docs"),
+/// )
+/// .await;
+/// # }
+/// ```
+///
 /// # Panics
 ///
 /// On any of the above.

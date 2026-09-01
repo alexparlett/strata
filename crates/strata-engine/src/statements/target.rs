@@ -14,10 +14,11 @@ use datafusion::prelude::SessionContext;
 use datafusion::sql::sqlparser::ast::ObjectName;
 use datafusion::sql::TableReference;
 
+use crate::catalog_providers::{in_workspace, is_store_catalog};
+use crate::ident::fold_ident;
 use crate::policy::Locality;
-use crate::providers::{in_workspace, is_store_catalog};
 use crate::sql::SessionName;
-use crate::{fold_ident, CATALOG, SCHEMA};
+use crate::{CATALOG, SCHEMA};
 
 /// What a name a statement manages resolves to.
 ///
@@ -82,7 +83,7 @@ impl Target {
     /// row's provider was placed: `DROP TABLE regions` names the same def whether it is written
     /// bare or as `lake.public.regions`, because a store catalog is where a def is *registered*
     /// and never a second namespace to be in. The arm resolves the name through
-    /// [`def_ref`](crate::providers::def_ref) rather than being handed a catalog, so it needs no
+    /// [`def_ref`](crate::catalog_providers::def_ref) rather than being handed a catalog, so it needs no
     /// idea which of the two placements it got.
     ///
     /// Separate from [`workspace`](Self::workspace) rather than folded into it: that one is for
@@ -200,7 +201,7 @@ impl Remote {
 /// judging (`arms::remote::dispatched`), where no dispatch state exists. The
 /// data source's own gates — is it writable, may this caller reach it — are asked of the resolved
 /// answer, not folded into it.
-pub fn resolve_target(ctx: &SessionContext, name: &TableReference) -> Target {
+pub(crate) fn resolve_target(ctx: &SessionContext, name: &TableReference) -> Target {
     if in_workspace(name) {
         return Target::Workspace {
             name: name.table().to_string(),
@@ -244,7 +245,7 @@ pub fn resolve_target(ctx: &SessionContext, name: &TableReference) -> Target {
 ///
 /// A name of more than three parts addresses nothing a [`TableReference`] can hold, and is
 /// [`Nowhere`](Target::Nowhere) under its own spelling.
-pub fn resolve_named(ctx: &SessionContext, name: &ObjectName) -> Target {
+pub(crate) fn resolve_named(ctx: &SessionContext, name: &ObjectName) -> Target {
     match name.0.len() <= 3 {
         true => resolve_target(ctx, &TableReference::parse_str(&name.to_string())),
         false => Target::Nowhere {
@@ -322,7 +323,7 @@ pub fn elsewhere(what: &str) -> String {
 mod tests {
     use datafusion::prelude::SessionContext;
 
-    use crate::providers::fake_source;
+    use crate::catalog_providers::fake_source;
 
     use super::*;
 
@@ -354,7 +355,9 @@ mod tests {
         let ctx = session();
         ctx.register_catalog(
             "lake",
-            std::sync::Arc::new(crate::providers::StoreCatalogProvider::new("lake".into())),
+            std::sync::Arc::new(crate::catalog_providers::StoreCatalogProvider::new(
+                "lake".into(),
+            )),
         );
 
         let target = resolved(&ctx, "lake.public.regions");

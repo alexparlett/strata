@@ -48,8 +48,8 @@ pub mod mem;
 mod name;
 pub mod ordinal;
 
-#[cfg(test)]
-mod conformance;
+#[cfg(any(test, feature = "testing"))]
+pub mod conformance;
 
 pub use local_ipc::LocalIpcSnapshotStore;
 pub use mem::MemSnapshotStore;

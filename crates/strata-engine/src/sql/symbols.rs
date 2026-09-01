@@ -96,11 +96,11 @@ impl PreparedSym {
 /// lock-reads only — no I/O, no plan, no dial-out — which is what lets the consumer take it in a
 /// side effect on the render thread whenever [`generation`](Self::generation) moves.
 ///
-/// The consumer folds it into a [`Catalog`] with its own rows and its own dialect
-/// ([`Catalog::build`]); nothing here is the consumer's to decide.
+/// The consumer folds it into a [`Symbols`] with its own rows and its own dialect
+/// ([`Symbols::build`]); nothing here is the consumer's to decide.
 #[derive(Clone, Default, PartialEq)]
 pub struct LangBundle {
-    /// The engine's registered functions, **by handle** — see [`Catalog::functions`].
+    /// The engine's registered functions, **by handle** — see [`Symbols::functions`].
     pub functions: Arc<FunctionCatalog>,
     /// The statements `PREPARE` has left in this session.
     pub prepared: Vec<PreparedSym>,
@@ -167,7 +167,7 @@ pub struct RelationSym {
 /// A snapshot of everything the analysis layer resolves against, plus the engine setting it
 /// has to *read* the buffer with.
 #[derive(Clone, Default)]
-pub struct Catalog {
+pub struct Symbols {
     /// Registered tables and saved views (both address columns).
     pub tables: Vec<TableSym>,
     /// The project's database sources, for the qualified offer (DB-06) and the write-target
@@ -195,7 +195,7 @@ pub struct Catalog {
     pub dialect: String,
 }
 
-impl Catalog {
+impl Symbols {
     /// **The one constructor** — the consumer's own rows, the engine's [`LangBundle`], and the
     /// dialect from the consumer's own settings.
     ///
@@ -231,7 +231,7 @@ impl Catalog {
             databases,
             generation: _,
         } = bundle;
-        Catalog {
+        Symbols {
             tables: out,
             databases,
             functions,

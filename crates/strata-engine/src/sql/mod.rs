@@ -8,7 +8,7 @@
 //!   configured `datafusion.sql_parser.dialect`.
 //! - [`context`] — split statements + classify the caret's clause context.
 //! - [`name`] — writing a name back **into** SQL: four rules, four types.
-//! - [`symbols`] — the [`Catalog`] snapshot and in-statement alias resolution.
+//! - [`symbols`] — the [`Symbols`] snapshot and in-statement alias resolution.
 //! - [`lint`] — the token-level tier: parens, the keyword-typo lint, the tokens-only relation rung.
 //! - [`spans`] — folding a fault onto a byte range of the buffer.
 //! - [`resolve`] — the AST name resolver behind [`analyze`]: every unknown table/column in a
@@ -17,7 +17,7 @@
 //!   the router and the planner, so a statement is judged and run with the names it reaches.
 //! - [`complete`](mod@complete) — ranked completions for a caret position.
 //!
-//! Completion resolves against a [`Catalog`] snapshot the consumer holds and rebuilds when the
+//! Completion resolves against a [`Symbols`] snapshot the consumer holds and rebuilds when the
 //! catalog generation moves; [`analyze`] runs engine-side so its faults are the *same* errors a
 //! Run would hit.
 
@@ -39,7 +39,7 @@ pub use name::{ResultColumn, SessionName, WorkspaceName};
 pub(crate) use resolve::unwrap_statement;
 pub(crate) use service::analyze;
 pub use service::complete;
-pub use symbols::{Catalog, DatabaseSym, LangBundle, PreparedSym, RelationSym, SchemaSym};
+pub use symbols::{DatabaseSym, LangBundle, PreparedSym, RelationSym, SchemaSym, Symbols};
 
 /// Which registry a function came from — the docs-panel header word, and (for the
 /// caller) a coarse category. `Default` is `Scalar` so a name-only [`FunctionSym`]
@@ -180,7 +180,7 @@ impl From<&str> for FunctionSym {
 /// enriched to [`FunctionSym`]s (name + overload signatures + return type). Walked from the
 /// engine's registry at startup (`Engine::new`) and again by any statement that moves that
 /// registry (`CREATE FUNCTION` / `DROP FUNCTION`), held on the per-window
-/// [`Engine`](crate::Engine); folded into a [`Catalog`] for completion + validation +
+/// [`Engine`](crate::Engine); folded into a [`Symbols`] for completion + validation +
 /// signature help.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FunctionCatalog {

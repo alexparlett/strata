@@ -4,7 +4,7 @@
 use datafusion::sql::TableReference;
 use strata_model::SnapshotId;
 
-use crate::providers::in_workspace;
+use crate::catalog_providers::in_workspace;
 
 /// The prefix every result snapshot is registered under. Named here, next to the
 /// only thing that mints one, because two other rules key off it: the statement

@@ -190,8 +190,8 @@ flowchart LR
   other and managed by nothing it does not opt into; one qualified into a store catalog is one of
   the project's own rows reached the long way, so `Target::Store` answers for it and every arm
   behaves as it did when the tables lived in the workspace. Two predicates draw two different
-  lines: `providers::in_workspace` is the `__snap_` reserved namespace and is deliberately
-  unmoved, while `providers::def_backed` is *checkability* — whether a name has a project row
+  lines: `catalog_providers::in_workspace` is the `__snap_` reserved namespace and is
+  deliberately unmoved, while `catalog_providers::def_backed` is *checkability* — whether a name has a project row
   behind it — which is what a view's recorded dependencies split on.
 
 The statement surface and its policy tables are [STATEMENTS_SPEC.md](STATEMENTS_SPEC.md).

@@ -59,7 +59,7 @@ use datafusion::sql::sqlparser::ast::{
 };
 use datafusion::sql::sqlparser::tokenizer::Span;
 
-use crate::fold_ident;
+use crate::ident::fold_ident;
 use crate::sql::oracle::{Address, NameOracle};
 
 /// A bare name this pass refused rather than resolved, spanned into the statement it was read
@@ -280,7 +280,7 @@ mod tests {
 
     use super::SessionContext;
     use crate::builder::test_context;
-    use crate::providers::fake_source;
+    use crate::catalog_providers::fake_source;
     use crate::statements::pipeline::resolved_one;
     use crate::{Engine, RunTag, WsId};
 

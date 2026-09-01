@@ -43,7 +43,7 @@ use strata_arrow::profile::Profiled;
 /// The decoder reads results **by position** — there are no aliases to collide and no
 /// names to match on.
 #[derive(Clone, Debug, PartialEq)]
-pub enum Slot {
+pub(crate) enum Slot {
     /// The entry's row count.
     Rows,
     /// The column's non-null count. Nulls are derived (`rows - non_null`) rather than
@@ -69,7 +69,7 @@ pub enum Slot {
 /// `ident`, not `col`: `col` parses its argument (so a column named `a.b` becomes
 /// relation `a` column `b`) and lower-cases it (`A` → `a`). Column names come out of
 /// the user's files and can be anything at all.
-pub fn aggregates(columns: &[ColumnInfo], at: Profiled) -> (Vec<Expr>, Vec<Slot>) {
+pub(crate) fn aggregates(columns: &[ColumnInfo], at: Profiled) -> (Vec<Expr>, Vec<Slot>) {
     let mut exprs = vec![count_all()];
     let mut slots = vec![Slot::Rows];
     for c in columns {
@@ -119,7 +119,7 @@ pub fn aggregates(columns: &[ColumnInfo], at: Profiled) -> (Vec<Expr>, Vec<Slot>
 /// scratch tab for the user to edit and re-run.
 ///
 /// Empty on any expression the unparser can't render — no button beats a broken query.
-pub fn profile_sql(from: &str, exprs: &[Expr]) -> String {
+pub(crate) fn profile_sql(from: &str, exprs: &[Expr]) -> String {
     let mut parts = Vec::with_capacity(exprs.len());
     for e in exprs {
         match expr_to_sql(e) {
@@ -130,12 +130,27 @@ pub fn profile_sql(from: &str, exprs: &[Expr]) -> String {
     format!("SELECT\n{}\nFROM {};", parts.join(",\n"), from)
 }
 
+/// The statement a profile scan of `columns` would send, rendered — [`aggregates`] composed with
+/// [`profile_sql`].
+///
+/// The pair's only shape anything outside this module needs, and the reason neither half is
+/// public: `aggregates` answers in DataFusion `Expr`s, which is the engine's own vocabulary and
+/// not an embedder's. Empty on any expression the unparser cannot render, exactly as
+/// [`profile_sql`] is.
+///
+/// `from` arrives already rendered — see [`profile_sql`] for which renderer, and why the choice
+/// is not this function's.
+pub fn statement(from: &str, columns: &[ColumnInfo], at: Profiled) -> String {
+    let (exprs, _) = aggregates(columns, at);
+    profile_sql(from, &exprs)
+}
+
 /// Decode the aggregate's single result row into per-column facts.
 ///
 /// `columns` is the entry's schema, giving the decode a stable column order. A null
 /// result cell means the scan had nothing to say: that becomes an absent fact, never a
 /// blank row.
-pub fn decode(
+pub(crate) fn decode(
     slots: &[Slot],
     batch: &RecordBatch,
     columns: &[ColumnInfo],

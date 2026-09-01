@@ -26,7 +26,8 @@ use futures::stream::{self, StreamExt};
 use strata_model::{SourceDef, TableDef, ViewDef};
 
 use crate::catalog::registered;
-use crate::{fold_ident, CatalogGen, Engine, SourceDefs, TableMeta, TableSpec, ViewMeta};
+use crate::ident::fold_ident;
+use crate::{CatalogGen, Engine, SourceDefs, TableMeta, TableSpec, ViewMeta};
 use strata_core::project::{resolve_source, ProjectDefs};
 
 /// How many tables register at once ([`sync`]'s table phase).
@@ -442,11 +443,7 @@ fn named(desired: &CatalogSpec) -> (BTreeSet<String>, BTreeSet<String>) {
 ///
 /// Views, then tables, then data sources: the reverse of the order they register in, so a view is
 /// gone before the table it reads and a table before the store it reads through.
-async fn remove_absent(
-    engine: &Engine,
-    desired: &CatalogSpec,
-    settled: &mut impl FnMut(Stamped),
-) {
+async fn remove_absent(engine: &Engine, desired: &CatalogSpec, settled: &mut impl FnMut(Stamped)) {
     let wanted_views: BTreeSet<String> =
         desired.views.iter().map(|v| fold_ident(&v.name)).collect();
     let wanted_tables: BTreeSet<String> =

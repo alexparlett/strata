@@ -169,6 +169,16 @@ RUSTDOCFLAGS="-D rustdoc::broken_intra_doc_links" cargo doc --locked --no-deps -
 Embedder documentation lives in `strata_engine::guide` rather than in `docs/`, so that its
 examples are compiled and run by `cargo test`.
 
+Every seam `strata-engine` offers ships the conformance body its own implementations are run
+through, published under the `testing` cargo feature as `strata_engine::testing::<seam>::conforms`
+— sources, snapshots, tables, policy, formats, secrets. Each carries a doctest calling it from
+outside the crate, which is the only thing that proves the ring is reachable rather than merely
+`pub`; nothing else runs those, so they have a step of their own:
+
+```bash
+cargo test -p strata-engine --features testing --locked --doc
+```
+
 The curated lint set lives in `[workspace.lints]` in the root `Cargo.toml`, with thresholds in
 `clippy.toml`. A lint that is wrong for this codebase is allowed once at the workspace with a
 one-line reason — not suppressed per site; an inline `#[allow]` is reserved for a fact about one

@@ -6,7 +6,7 @@ use std::collections::HashSet;
 
 use crate::sql::context::CaretAnalysis;
 use crate::sql::fuzzy::match_tier;
-use crate::sql::symbols::Catalog;
+use crate::sql::symbols::Symbols;
 use strata_model::Kind;
 
 use super::{Completion, CompletionKind};
@@ -40,7 +40,7 @@ pub(super) fn column_ord(
 /// qualified refs resolve through the alias map to a catalog table (inline
 /// relations carry no dtypes); bare refs through the first in-scope relation
 /// owning the column.
-pub(super) fn comparand_kind(ca: &CaretAnalysis, catalog: &Catalog) -> Option<Kind> {
+pub(super) fn comparand_kind(ca: &CaretAnalysis, catalog: &Symbols) -> Option<Kind> {
     let (qualifier, column) = ca.comparand.as_ref()?;
     let dtype_of = |rel: &str| -> Option<String> {
         let resolved = ca
@@ -69,7 +69,7 @@ pub(super) fn comparand_kind(ca: &CaretAnalysis, catalog: &Catalog) -> Option<Ki
 /// quadratic in total width (2 x 1000 columns cost ~1M comparisons per keystroke).
 pub(super) fn other_side_columns(
     ca: &CaretAnalysis,
-    catalog: &Catalog,
+    catalog: &Symbols,
     owner: &str,
 ) -> HashSet<String> {
     let mut out = HashSet::new();

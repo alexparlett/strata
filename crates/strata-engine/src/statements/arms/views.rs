@@ -35,7 +35,7 @@ use datafusion::sql::TableReference;
 use strata_arrow::column_info;
 
 use crate::catalog::{dependents_of_view, plan_deps, view_error, ViewMeta};
-use crate::fold_ident;
+use crate::ident::fold_ident;
 use crate::policy::Principal;
 use crate::snapshots::is_snapshot_name;
 use crate::statements::ctx::StmtCtx;

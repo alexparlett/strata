@@ -8,7 +8,7 @@
 //! one does not type-check.
 //!
 //! - [`WorkspaceName`] — *fold-preserving*: renders a name so DataFusion resolves it to
-//!   [`fold_ident(name)`](crate::fold_ident), which is the identity a workspace def has actually
+//!   [`fold_ident(name)`](crate::ident::fold_ident), which is the identity a workspace def has actually
 //!   been registered under. It lower-cases `DailySales` on purpose.
 //! - [`SessionName`] — *case-preserving*: the name survives this session's parser exactly as
 //!   spelled, which is what a relation whose spelling belongs to a **server** needs, and what a
@@ -24,13 +24,18 @@
 //! `sources` and `sql` are peers inside this crate and neither may import the other
 //! (`boundaries.rs` fails the build on it).
 //!
+//! [`fold_ident`](crate::ident::fold_ident) — the identity DataFusion ends up keying a name
+//! under, and the thing [`WorkspaceName`] is *defined* against — sits below this module rather
+//! than in it, for the reason above one paragraph: `sources` folds names too, and `sources` may
+//! not import `sql`.
+//!
 //! Each type is a *rendered* fragment: minting one applies the rule, and [`Display`] is what a
 //! statement says. What a message prints is the same string — a refusal that named a relation one
 //! way while the statement reached it another would be the drift these types exist to end.
 
 use std::fmt::{self, Display, Formatter};
 
-use crate::fold_ident;
+use crate::ident::fold_ident;
 use crate::sql::context::{LITERAL_WORDS, OPERAND_EXPECTING};
 use crate::sql::lex::is_reserved_in_name_position;
 

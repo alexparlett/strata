@@ -25,7 +25,7 @@ use datafusion::catalog::TableProvider;
 use datafusion::sql::TableReference;
 use object_store::ObjectStore;
 
-use crate::fold_ident;
+use crate::ident::fold_ident;
 use crate::secrets::SecretProvider;
 use crate::statements::Remote;
 use strata_model::SourceDef;

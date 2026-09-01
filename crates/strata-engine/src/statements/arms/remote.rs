@@ -21,8 +21,9 @@ use datafusion::sql::sqlparser::tokenizer::Location;
 use datafusion::sql::TableReference;
 
 use crate::catalog::remote_dependents;
+use crate::catalog_providers::in_workspace;
+use crate::ident::fold_ident;
 use crate::policy::Principal;
-use crate::providers::in_workspace;
 use crate::sources::{execute_text, relist_at, server_ident, writable, Live};
 use crate::statements::ctx::StmtCtx;
 use crate::statements::mechanism::{mechanism, Mechanism};
@@ -30,7 +31,7 @@ use crate::statements::pipeline::Qualified;
 use crate::statements::report::{StatementOutcome, StoreEffect};
 use crate::statements::target::{read_only, resolve_named, resolve_target, Remote, Target};
 use crate::statements::StmtKind;
-use crate::{fold_ident, CATALOG, SCHEMA};
+use crate::{CATALOG, SCHEMA};
 use strata_core::util::plural;
 
 use super::left_invalid;
@@ -537,9 +538,9 @@ mod tests {
     use std::collections::BTreeMap;
 
     use crate::builder::test_context;
-    use crate::fold_ident;
+    use crate::catalog_providers::fake_source;
+    use crate::ident::fold_ident;
     use crate::policy::{Capability, CapabilityPolicyProvider};
-    use crate::providers::fake_source;
     use crate::statements::pipeline::{resolved_one, Pipeline};
 
     use super::*;

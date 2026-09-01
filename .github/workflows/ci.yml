@@ -204,8 +204,8 @@ jobs:
             -p strata-model -p strata-arrow -p strata-engine -p strata-agent
 
       # The `testing` feature is not on in any other step, so this is the only thing that
-      # holds its modules — the `DataSource` conformance ring an embedder runs against their
-      # own backend, and the two fake sources — to the same lint bar as the rest.
+      # holds its modules — the six conformance rings an embedder runs against their own
+      # implementations, and the fixtures beside them — to the same lint bar as the rest.
       #
       # `--all-targets` is load-bearing rather than tidy: it is what compiles
       # `examples/custom_source.rs`, whose `required-features = ["testing"]` keeps it out of
@@ -213,6 +213,14 @@ jobs:
       # all — the `cargo doc` step above does not build it, despite naming the same feature.
       - name: cargo clippy (testing feature)
         run: cargo clippy -p strata-engine --features testing --all-targets --locked -- -D warnings
+
+      # Each ring carries a doctest calling it the way an embedder would — from outside the
+      # crate, through `strata_engine::testing::`. That is the only thing that proves the ring
+      # is reachable rather than merely `pub`, and doctests are the one target `--all-targets`
+      # does not build, so neither the step above nor the workspace `cargo test` runs them:
+      # with the feature off the whole module is `cfg`'d out and there are no doctests to run.
+      - name: cargo test --doc (testing feature)
+        run: cargo test -p strata-engine --features testing --locked --doc
 
       # The engine with **no data sources compiled in** — the proof that a shipped source
       # reaches the engine only through the public registration an embedder calls, and that
