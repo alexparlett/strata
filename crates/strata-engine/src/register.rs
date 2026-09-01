@@ -7,7 +7,8 @@
 //!
 //! Narrower gestures are the facade's own — [`Catalog::register`](crate::Catalog::register) for
 //! one table, [`Catalog::create_view`](crate::Catalog::create_view) for one view, and
-//! [`Catalog::create_views`](crate::Catalog::create_views) for a set of them.
+//! [`Catalog::refresh`](crate::Catalog::refresh) for a work list of tables and views with no
+//! reconciliation behind it.
 //!
 //! Loading the defs ([`load_defs`](strata_core::project::load_defs)) and acting on the outcomes
 //! stay the caller's. The pass reports outcomes, never introspects DataFusion, and nothing
@@ -101,6 +102,30 @@ impl fmt::Display for RegKind {
             RegKind::Table => "table",
             RegKind::View => "view",
         })
+    }
+}
+
+/// **One def's answer, with the generation the engine answered it at** — what every call that
+/// registers hands its `settled` callback.
+///
+/// The two travel together for [`Engine::note_registration`]'s reason, one layer out: the answer
+/// and the generation it was answered at are one fact, so a host whose view of the ledger is keyed
+/// on that number never has to go and read it for itself — it arrives welded to the content the
+/// view is about, and a fold that has the one has the other.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Stamped {
+    /// The generation the catalog was at once this answer had landed.
+    pub at: CatalogGen,
+    /// What the engine answered.
+    pub outcome: RegOutcome,
+}
+
+/// Stamp `outcome` with the generation `engine` is at now — read here rather than by the caller,
+/// which is the whole of [`Stamped`]'s contract.
+fn stamp(engine: &Engine, outcome: RegOutcome) -> Stamped {
+    Stamped {
+        at: engine.catalog().generation(),
+        outcome,
     }
 }
 
@@ -211,8 +236,7 @@ pub fn table_spec(
 /// a view's known view-dependencies — the landed [`ViewMeta::views`], from a store row or
 /// from the previous pass's own answer. Names compare case-insensitively (the engine folds
 /// unquoted identifiers). A view with no known deps sorts wherever it falls — from cold that is
-/// every view, which is why [`Catalog::create_views`](crate::Catalog::create_views) keeps its
-/// fixed-point retry as well. A
+/// every view, which is why [`create_views`] keeps its fixed-point retry as well. A
 /// cycle is impossible (a view can't read itself, and DataFusion refuses mutual
 /// recursion), but a residue is appended rather than dropped: a surprise can cost
 /// ordering, never a re-create.
@@ -255,20 +279,23 @@ pub fn view_order(views: Vec<String>, deps: impl Fn(&str) -> Vec<String>) -> Vec
 /// `settled` is called with each outcome as the engine answers it, so the app folds catalog rows
 /// and log entries per answer rather than after the whole pass. A failed entry never aborts the
 /// pass.
-async fn register_pass(
+pub(crate) async fn register_pass(
     engine: &Engine,
     sources: Vec<SourceDef>,
     tables: Vec<TableSpec>,
     views: Vec<ViewDef>,
-    mut settled: impl FnMut(RegOutcome),
+    mut settled: impl FnMut(Stamped),
 ) {
     for conn in sources {
         let name = conn.named();
         let result = engine.sources().connect(conn).await;
-        settled(RegOutcome::Source {
-            name,
-            result: result.map_err(|e| e.to_string()),
-        });
+        settled(stamp(
+            engine,
+            RegOutcome::Source {
+                name,
+                result: result.map_err(|e| e.to_string()),
+            },
+        ));
     }
 
     let mut registrations = stream::iter(tables)
@@ -284,7 +311,7 @@ async fn register_pass(
         })
         .buffer_unordered(TABLE_CONCURRENCY);
     while let Some(outcome) = registrations.next().await {
-        settled(outcome);
+        settled(stamp(engine, outcome));
     }
 
     create_views(engine, views, settled).await;
@@ -304,7 +331,7 @@ async fn register_pass(
 pub(crate) async fn create_views(
     engine: &Engine,
     views: Vec<ViewDef>,
-    mut settled: impl FnMut(RegOutcome),
+    mut settled: impl FnMut(Stamped),
 ) {
     let mut pending = views;
     while !pending.is_empty() {
@@ -316,19 +343,25 @@ pub(crate) async fn create_views(
                 .register_view(def.name.clone(), def.sql.clone())
                 .await
             {
-                Ok(meta) => settled(RegOutcome::View {
-                    name: def.name,
-                    result: Ok(meta),
-                }),
+                Ok(meta) => settled(stamp(
+                    engine,
+                    RegOutcome::View {
+                        name: def.name,
+                        result: Ok(meta),
+                    },
+                )),
                 Err(e) => failed.push((def, e)),
             }
         }
         if failed.len() == before {
             for (def, e) in failed {
-                settled(RegOutcome::View {
-                    name: def.name,
-                    result: Err(e.to_string()),
-                });
+                settled(stamp(
+                    engine,
+                    RegOutcome::View {
+                        name: def.name,
+                        result: Err(e.to_string()),
+                    },
+                ));
             }
             break;
         }
@@ -362,7 +395,7 @@ pub(crate) async fn create_views(
 pub async fn sync(
     engine: &Engine,
     desired: CatalogSpec,
-    mut settled: impl FnMut(RegOutcome),
+    mut settled: impl FnMut(Stamped),
 ) -> PassReport {
     remove_absent(engine, &desired, &mut settled).await;
     let (workspace, sources) = named(&desired);
@@ -412,7 +445,7 @@ fn named(desired: &CatalogSpec) -> (BTreeSet<String>, BTreeSet<String>) {
 async fn remove_absent(
     engine: &Engine,
     desired: &CatalogSpec,
-    settled: &mut impl FnMut(RegOutcome),
+    settled: &mut impl FnMut(Stamped),
 ) {
     let wanted_views: BTreeSet<String> =
         desired.views.iter().map(|v| fold_ident(&v.name)).collect();
@@ -434,11 +467,14 @@ async fn remove_absent(
         .filter(|(_, kind)| *kind == RegKind::View)
         .chain(absent.iter().filter(|(_, kind)| *kind == RegKind::Table))
     {
-        engine.catalog().deregister(name);
-        settled(RegOutcome::Removed {
-            name: name.clone(),
-            kind: *kind,
-        });
+        let _ = engine.catalog().deregister(name);
+        settled(stamp(
+            engine,
+            RegOutcome::Removed {
+                name: name.clone(),
+                kind: *kind,
+            },
+        ));
     }
     for (name, _) in engine.source_defs.held() {
         match desired
@@ -447,13 +483,18 @@ async fn remove_absent(
             .find(|def| def.named().eq_ignore_ascii_case(&name))
         {
             None => {
-                engine.sources().disconnect(&name);
-                settled(RegOutcome::Removed {
-                    name,
-                    kind: RegKind::Source,
-                });
+                let _ = engine.sources().disconnect(&name);
+                settled(stamp(
+                    engine,
+                    RegOutcome::Removed {
+                        name,
+                        kind: RegKind::Source,
+                    },
+                ));
             }
-            Some(def) if engine.source_defs.moved(def) => engine.sources().disconnect(&name),
+            Some(def) if engine.source_defs.moved(def) => {
+                let _ = engine.sources().disconnect(&name);
+            }
             Some(_) => {}
         }
     }
@@ -505,7 +546,7 @@ mod tests {
         let mut out = Vec::new();
         engine
             .catalog()
-            .sync(engine.catalog().spec(root, defs), |o| out.push(o))
+            .sync(engine.catalog().spec(root, defs), |a| out.push(a.outcome))
             .await;
         out
     }
@@ -866,7 +907,7 @@ mod tests {
                         ("v_gone", "SELECT 1 AS n"),
                     ],
                 ),
-                |o| first.push(o),
+                |a| first.push(a.outcome),
             )
             .await;
         let mut settled = names(&first);
@@ -887,7 +928,7 @@ mod tests {
             .catalog()
             .sync(
                 desired(&root, &["kept"], &[("v_kept", "SELECT id FROM kept")]),
-                |o| second.push(o),
+                |a| second.push(a.outcome),
             )
             .await;
 
@@ -952,7 +993,7 @@ mod tests {
                     sources: vec![at("lake", "moved")],
                     ..Default::default()
                 },
-                |o| out.push(o),
+                |a| out.push(a.outcome),
             )
             .await;
 

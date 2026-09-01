@@ -501,12 +501,13 @@ stamped with the `CatalogGen` it was answered at) and hands it over as one value
 `Catalog::registrations()`. A catalog row is the **join**: the def from `ProjectState`, the
 verdict from that read.
 
-- **One read, held once.** `RegistrationsCtx` (`state/catalog.rs`) is a context `State` carrying
-  the engine's whole answer, so a walk over the rows costs no engine call and every row on screen
-  describes the same instant. It is taken again exactly where the engine has just answered: the
-  registration pass's fold, per outcome (`settle_reg`), so rows settle one at a time as they did
-  when the status lived on them; the statement fold (`catalog_settled`, beside adopting the
-  generation); and the scan claim's release, which covers a pass that was cancelled part-way.
+- **One read, held once, and derived.** `RegistrationsCtx` (`state/catalog.rs`) is a context
+  `State` carrying the engine's whole answer, so a walk over the rows costs no engine call and
+  every row on screen describes the same instant. Nothing refreshes it by hand: it is taken again
+  whenever `CatalogState::answers()` moves, which is the *answers* clock — adopted per outcome by
+  the registration pass's fold (`settle_reg`), off the report by the statement fold, off the
+  `CatalogGen` a direct gesture answers with, and at the scan claim's release. Because that clock
+  is not gated on the pass, rows settle one at a time as they did when the status lived on them.
 - **Absence is the unanswered state.** A def no pass has reached has no entry — there is no
   engine-side `Pending`, because "not yet" is a fact about the pass rather than about the def.
   What the user sees while waiting is the scan claim's own affordance (the row's held verdict and

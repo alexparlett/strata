@@ -140,10 +140,12 @@ and the clock are put on in one place. `StatementOutcome` is the arm-facing half
 the crate's public surface: a surface that folds one gesture's answer folds the other's.
 
 **The settle** (`apps/project/state/statement.rs`) is one fold for every effect, driven from the
-tab's request keeper so a statement run in a background tab still lands: store upsert on the
-matching `ProjChan` → `persisted_defs` writes `project.json` through the persist funnel →
-`catalog_settled` adopts the engine's catalog generation (every tab's diagnostics re-derive) →
-the event log. The log
+tab's request keeper so a statement run in a background tab still lands: `catalog_settled` adopts
+the report's own `at` stamp (every catalog row and every tab's diagnostics re-derive) → store
+upsert on the matching `ProjChan` → `persisted_defs` writes `project.json` through the persist
+funnel → the event log. The adoption is once, up front, off the report rather than spelled out per
+arm: a report carries the generation its effect left the catalog at, so an arm added later cannot
+forget it. The log
 entry is recorded by the fold, not by the run-logging hook, because only the fold knows whether
 the def actually reached disk — a success row logged over a failed write would promise a table the
 next open loses.
@@ -1102,7 +1104,8 @@ what `Definition::check` refuses.
 parsed statement becomes a `TableDef { origin: External }` and goes through `register_external`, so
 the store fold, the persist funnel, replay and the headless host need no code of their own and the
 settle is CTAS's exactly: `StoreEffect::TableUpserted { def, meta }` → `ProjChan::Tables` →
-`persisted_defs` → `catalog_settled`. Either gesture edits the row the other made, and Configure
+`catalog_settled` → `ProjChan::Tables` → `persisted_defs`. Either gesture edits the row the other
+made, and Configure
 opens on a typed def like any other.
 
 DataFusion *does* implement this statement, through `ListingTableFactory`, and that path stays
@@ -1325,11 +1328,11 @@ table store (`.strata/tables/<slug>/` under the default) → registers via `regi
 (`TableSpec { format: Arrow, internal: true }`) → returns `RunOutcome::Statement` carrying
 `StoreEffect::TableUpserted { def, meta }`.
 
-At settle: store upsert on `ProjChan::Tables` (the sidebar shows the row immediately, carrying
+At settle: `catalog_settled` adopts the report's own catalog-generation stamp (the window's view
+of the ledger re-derives, so the row reads `Ready`; diagnostics revalidate; other tabs resolve the
+new name) → store upsert on `ProjChan::Tables` (the sidebar shows the row immediately, carrying
 what the registration inferred) → `persisted_defs` rewrites `.strata/project.json` atomically
-through the persist funnel → `catalog_settled` takes the engine's ledger again and adopts its
-catalog generation (the row reads `Ready`; diagnostics revalidate; other tabs resolve the new
-name) → history + event log → the results pane renders a statement row ("Table 't' created, 1,204
+through the persist funnel → history + event log → the results pane renders a statement row ("Table 't' created, 1,204
 rows") — no grid, no snapshot.
 
 At next open — zero new code: `load_defs` → the scan driver → `catalog().sync` → `table_spec`

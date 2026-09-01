@@ -1150,7 +1150,7 @@ mod snapshot_tests {
             .await
             .expect("connect");
 
-        engine.sources().show_schemas("sales", &[]);
+        let _ = engine.sources().show_schemas("sales", &[]);
 
         let snapshot = engine.sources().listing();
         let SourceDetail::Catalog { schemas, .. } = &snapshot.sources[0].detail else {

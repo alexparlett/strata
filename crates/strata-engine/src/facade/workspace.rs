@@ -93,13 +93,12 @@ impl Workspace<'_> {
                     baseline: engine.overrides(),
                     policy: engine.policy.clone(),
                 };
-                let report = engine
+                let ran = engine
                     .bookkeep(ws, tag, "statement", async move {
                         arms::execute(kind, stmt, &who, cx).await
                     })
                     .await?;
-                engine.settle_effect(report.effect.as_ref());
-                Ok(RunOutcome::Statement(report))
+                Ok(RunOutcome::Statement(engine.settle_effect(ran)))
             }
         }
     }

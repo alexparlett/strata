@@ -225,7 +225,7 @@ mod tests {
             "the same question is the same key — a remount reads the cache"
         );
 
-        engine.catalog().deregister("a name this engine never held");
+        let _ = engine.catalog().deregister("a name this engine never held");
 
         assert_ne!(
             before,

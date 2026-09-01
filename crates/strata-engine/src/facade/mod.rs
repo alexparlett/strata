@@ -131,7 +131,7 @@ mod tests {
                 "table_spec",
                 "detect_partitions",
                 "create_view",
-                "create_views",
+                "refresh",
                 "drop_view",
                 "drop_table",
                 "is_internal",

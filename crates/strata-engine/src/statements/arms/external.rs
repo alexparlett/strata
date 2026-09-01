@@ -506,7 +506,7 @@ mod tests {
         let cold = Engine::builder().build();
         let mut outcomes = Vec::new();
         cold.catalog()
-            .sync(cold.catalog().spec(&root, &defs), |o| outcomes.push(o))
+            .sync(cold.catalog().spec(&root, &defs), |a| outcomes.push(a.outcome))
             .await;
         assert_eq!(outcomes.len(), 1);
         assert_eq!(read(&cold, "SELECT count(*) FROM t").await, [["3"]]);
@@ -763,7 +763,7 @@ mod tests {
             eng.source_defs.resolve("acme_lake").as_deref(),
             Some("acme_lake")
         );
-        eng.sources().disconnect("acme_lake");
+        let _ = eng.sources().disconnect("acme_lake");
         assert_eq!(eng.source_defs.resolve("acme_lake"), None);
     }
 

@@ -37,7 +37,8 @@ use strata_model::{check_catalog_name, SecretRef, SourceDef};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::{log_event, use_report, LogLevel, ReportCtx};
 use crate::apps::project::{
-    persisted_defs, refresh_catalog, Catalog, CatalogRescan, ProjChan, ProjectState,
+    catalog_settled, persisted_defs, refresh_catalog, Catalog, CatalogRescan, ProjChan,
+    ProjectState,
 };
 use crate::apps::source::{SourceCtx, SourceTarget, Status};
 use crate::components::divider::Divider;
@@ -94,7 +95,7 @@ impl Component for Footer {
             .height(Size::px(ACTION_HEIGHT))
             .enabled(busy.is_none() && note.is_none())
             .on_press({
-                move |_: Event<PressEventData>| save(ctx, project, rescan, engine.clone(), report)
+                move |_: Event<PressEventData>| save(ctx, project, rescan, catalog, engine.clone(), report)
             })
             .child(Control::new(busy.unwrap_or("Save")));
 
@@ -300,6 +301,7 @@ fn save(
     mut ctx: SourceCtx,
     project: RadioStation<ProjectState, ProjChan>,
     rescan: CatalogRescan,
+    catalog: Catalog,
     engine: EngineCtx,
     report: ReportCtx,
 ) {
@@ -319,7 +321,7 @@ fn save(
         &ctx.secret_removed.peek(),
     );
     if ops.is_empty() {
-        commit(ctx, project, rescan, engine, report);
+        commit(ctx, project, rescan, catalog, engine, report);
         return;
     }
 
@@ -327,7 +329,7 @@ fn save(
     spawn(async move {
         let landed = offload(move || run_secret_ops(&ops)).await;
         match landed {
-            Some(Ok(())) => commit(ctx, project, rescan, engine, report),
+            Some(Ok(())) => commit(ctx, project, rescan, catalog, engine, report),
             Some(Err(why)) => ctx.status.set(Status::Failed(format!(
                 "This machine's keystore could not be written, so nothing was saved. {why}"
             ))),
@@ -349,6 +351,7 @@ fn commit(
     mut ctx: SourceCtx,
     mut project: RadioStation<ProjectState, ProjChan>,
     rescan: CatalogRescan,
+    catalog: Catalog,
     engine: EngineCtx,
     report: ReportCtx,
 ) {
@@ -388,7 +391,7 @@ fn commit(
     }
 
     if let Some(old) = &moved_from {
-        engine.sources().disconnect(old);
+        catalog_settled(catalog, engine.sources().disconnect(old));
         log_event(
             report.log,
             LogLevel::Info,

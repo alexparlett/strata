@@ -263,7 +263,7 @@ fn save_view(
                     format!("View '{name}' failed to register: {e}"),
                 );
                 project.write_channel(ProjChan::Views).view_failed(&name);
-                catalog_settled(to.catalog, to.registrations, &engine);
+                catalog_settled(to.catalog, engine.catalog().generation());
             }
         }
     });

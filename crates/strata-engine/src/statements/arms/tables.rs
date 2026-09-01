@@ -1020,7 +1020,7 @@ mod tests {
         let defs = load_defs(&root).unwrap();
         let mut out = Vec::new();
         cold.catalog()
-            .sync(cold.catalog().spec(&root, &defs), |o| out.push(o))
+            .sync(cold.catalog().spec(&root, &defs), |a| out.push(a.outcome))
             .await;
 
         match &out[..] {

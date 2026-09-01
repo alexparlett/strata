@@ -16,7 +16,7 @@ use freya::prelude::{
 use freya::radio::{use_init_radio_station, use_radio, use_radio_station, RadioStation};
 use strata_core::project::{self as project_io, ProjectDefs, SessionLoadError};
 use strata_core::util::{fmt_int, plural};
-use strata_engine::register::{CatalogSpec, RegOutcome};
+use strata_engine::register::{CatalogSpec, RegOutcome, Stamped};
 use strata_engine::{CatalogGen, Registrations, SourceDefs, TableSpec};
 use strata_model::{SessionSnapshot, ViewDef, WindowGeom};
 
@@ -25,8 +25,8 @@ use crate::state::ConfigStation;
 use crate::task::offload;
 
 use super::catalog::{
-    claim_scan, registrations_settled, request_scan, use_init_catalog, use_init_catalog_rescan,
-    use_init_registrations, CatalogRescan, RegistrationsCtx, ScanGuard, ScanScope,
+    catalog_settled, claim_scan, request_scan, use_init_catalog, use_init_catalog_rescan,
+    use_init_registrations, Catalog, CatalogRescan, ScanGuard, ScanScope,
 };
 use super::history::{History, HistoryCtx};
 use super::log::{log_event, LogCtx, LogLevel};
@@ -155,7 +155,7 @@ pub fn use_init_project(
         ProjectState::from_defs(loaded.defs.clone(), root)
     });
     let catalog = use_init_catalog();
-    let registrations = use_init_registrations(engine);
+    let registrations = use_init_registrations(engine, catalog);
     let rescan = use_init_catalog_rescan();
     let engine = engine.clone();
     use_hook(move || {
@@ -164,7 +164,7 @@ pub fn use_init_project(
     });
     use_side_effect(move || {
         let request = rescan.read().clone();
-        let Some(guard) = claim_scan(catalog, registrations, &engine) else {
+        let Some(guard) = claim_scan(catalog, &engine) else {
             return;
         };
         let work = plan_scan(
@@ -176,7 +176,7 @@ pub fn use_init_project(
         spawn(scan_catalog(
             engine.clone(),
             station,
-            registrations,
+            catalog,
             log,
             guard,
             work,
@@ -189,8 +189,8 @@ pub fn use_init_project(
 ///
 /// `Catalog` is the whole project, so it goes through `catalog().sync`, which reconciles: what
 /// the spec does not name is deregistered. `Table` is a work list of one row plus the views over
-/// it, which the same call would read as "the project is now one table" — so it registers that
-/// table and re-creates those views directly.
+/// it, which the same call would read as "the project is now one table" — so it goes through
+/// `catalog().refresh`, the same phases with no reconciliation behind them.
 enum ScanWork {
     /// Every def in the project — project open and the sidebar's ↻.
     Catalog(CatalogSpec),
@@ -367,12 +367,12 @@ pub fn refresh_catalog(rescan: CatalogRescan) {
 async fn scan_catalog(
     engine: EngineCtx,
     station: RadioStation<ProjectState, ProjChan>,
-    registrations: RegistrationsCtx,
+    catalog: Catalog,
     log: LogCtx,
     _scan: ScanGuard,
     work: ScanWork,
 ) {
-    register_defs(engine, station, registrations, log, work).await;
+    register_defs(engine, station, catalog, log, work).await;
 }
 
 /// What the project subtree needs off disk before it can mount: the defs and the persisted
@@ -447,38 +447,35 @@ pub async fn load_project(root: PathBuf) -> Result<Rc<Loaded>, String> {
 async fn register_defs(
     engine: EngineCtx,
     mut station: RadioStation<ProjectState, ProjChan>,
-    registrations: RegistrationsCtx,
+    catalog: Catalog,
     log: LogCtx,
     work: ScanWork,
 ) {
-    let mut settle = |outcome| settle_reg(&mut station, registrations, &engine, log, outcome);
+    let mut settle = |stamped| settle_reg(&mut station, catalog, log, stamped);
     match work {
         ScanWork::Catalog(spec) => {
             engine.catalog().sync(spec, &mut settle).await;
         }
         ScanWork::Table { spec, views } => {
-            let name = spec.name.clone();
-            let result = engine
-                .catalog()
-                .register(spec)
-                .await
-                .map_err(|e| e.to_string());
-            settle(RegOutcome::Table { name, result });
-            engine.catalog().create_views(views, &mut settle).await;
+            engine.catalog().refresh(vec![spec], views, &mut settle).await;
         }
         ScanWork::Nothing => {}
     }
 }
 
-/// Fold one def's answer into the window: what it **learned** onto its catalog row, the engine's
-/// ledger taken again beside it, and the answer itself into the event log — the store half of
-/// every registration gesture, so the two calls above cannot answer a row differently.
+/// Fold one def's answer into the window: the stamp it arrived with adopted, what it **learned**
+/// onto its catalog row, and the answer itself into the event log — the store half of every
+/// registration gesture, so the two calls above cannot answer a row differently.
 ///
-/// **Whether the def registered is not written here.** That is the engine's own answer, and this
-/// re-reads it ([`registrations_settled`]) rather than copying it onto the row: a row is the def
-/// joined with the ledger, and per outcome is exactly as often as it moves. What lands on the row
-/// is only the payload — a table's `TableMeta`, a view's `ViewMeta` — dropped on a refusal, which
-/// learned nothing.
+/// **Whether the def registered is not written here.** That is the engine's own answer, and the
+/// window's view of the ledger derives from the stamp adopted on the first line rather than
+/// copying a status onto the row: a row is the def joined with the ledger, and per outcome is
+/// exactly as often as it moves. What lands on the row is only the payload — a table's
+/// `TableMeta`, a view's `ViewMeta` — dropped on a refusal, which learned nothing.
+///
+/// The adoption is [`Stamped::at`]'s whole reason for riding the outcome: this fold cannot land a
+/// row's payload without also moving the clock the row's other half is read on, because the two
+/// arrive as one value.
 ///
 /// [`RegOutcome::Removed`] arrives only from `Catalog::sync`, and only for something the *engine*
 /// holds that the project's own defs no longer name — the spec is built from the store rows, so
@@ -486,13 +483,12 @@ async fn register_defs(
 /// its observer saw.
 fn settle_reg(
     station: &mut RadioStation<ProjectState, ProjChan>,
-    registrations: RegistrationsCtx,
-    engine: &EngineCtx,
+    catalog: Catalog,
     log: LogCtx,
-    outcome: RegOutcome,
+    stamped: Stamped,
 ) {
-    registrations_settled(registrations, engine);
-    match outcome {
+    catalog_settled(catalog, stamped.at);
+    match stamped.outcome {
         RegOutcome::Source { name, result } => match result {
             Ok(()) => log_event(log, LogLevel::Ok, format!("Connected '{name}'")),
             Err(e) => {
@@ -688,14 +684,38 @@ pub fn use_autosave(restored: Option<WindowGeom>, filled_by_app: State<bool>) {
 mod tests {
     use std::env;
     use std::process;
+    use std::thread::sleep;
 
+    use freya::prelude::{
+        rect, use_consume, use_init_theme, ChildrenExt, Component, ContainerSizeExt, IntoElement,
+    };
     use freya::radio::RadioStation;
+    use freya_testing::TestingRunner;
     use futures::executor::block_on;
+    use strata_core::theme::load;
     use strata_engine::{RunTag, TableMeta, WsId};
     use strata_model::{SourceFormat, TableDef, TableOrigin};
 
     use super::*;
-    use crate::apps::project::state::Log;
+    use crate::apps::project::state::{CatalogState, Log, RegistrationsCtx};
+    use crate::theme::strata_theme;
+
+    /// A window root's ledger wiring and nothing else: the derivation under test, plus the handle
+    /// published back to the test — a context provided *inside* the tree is out of the runner
+    /// root's reach, and what the assertions read is the value the subtree actually derived.
+    #[derive(PartialEq)]
+    struct Derived;
+
+    impl Component for Derived {
+        fn render(&self) -> impl IntoElement {
+            let engine = use_consume::<EngineCtx>();
+            let catalog = use_consume::<Catalog>();
+            let ledger = use_init_registrations(&engine, catalog);
+            let mut published = use_consume::<State<Option<RegistrationsCtx>>>();
+            use_hook(move || published.set(Some(ledger)));
+            rect()
+        }
+    }
 
     /// A scratch project folder with a `.strata/`, unique per test (they run in threads of
     /// one process, so the pid alone wouldn't separate them).
@@ -948,6 +968,120 @@ mod tests {
         );
     }
 
+    /// **The ledger is derived, and its clock is not the one a pass withholds** — EA-30's whole
+    /// property, driven through the real fold on a real engine.
+    ///
+    /// Two things have to be true at once while a pass is in flight, and they are what the three
+    /// hand-refresh call sites bought: a def the pass has already answered for shows its answer
+    /// **now**, one row at a time, rather than every row waiting for the last table; and nothing
+    /// resolves names against a catalog that is still being applied. So the claim is held open
+    /// across both folds and released only at the end — which is also where the invariant the
+    /// ruling asks for is checked: the window's adopted answers stamp is the engine's own.
+    ///
+    /// A runner, because the derivation is a side effect and there is no derivation without a
+    /// scope to run it in. The pass itself is [`register_defs`] verbatim, one work list at a time,
+    /// so what settles the rows is production code rather than a hand-built outcome.
+    #[test]
+    fn a_pass_answers_row_by_row_while_nothing_resolves_against_it() {
+        let root = scratch("row-by-row");
+        fs::write(root.join("t.csv"), "id\n1\n").unwrap();
+        let engine = EngineCtx::default();
+        engine.set_data_dir(&root);
+        let log: LogCtx = State::create_global(Log::default());
+        let catalog: Catalog = State::create_global(CatalogState::Cold);
+        let published: State<Option<RegistrationsCtx>> = State::create_global(None);
+        let station =
+            RadioStation::<ProjectState, ProjChan>::create_global(ProjectState::from_defs(
+                ProjectDefs {
+                    tables: vec![csv("first"), csv("second")],
+                    ..Default::default()
+                },
+                root.clone(),
+            ));
+
+        let mut runner = {
+            let engine = engine.clone();
+            TestingRunner::new(
+                || {
+                    use_init_theme(|| strata_theme(&load("midnight")));
+                    rect().expanded().child(Derived).into_element()
+                },
+                (400., 300.).into(),
+                move |r| {
+                    r.provide_root_context(|| engine.clone());
+                    r.provide_root_context(|| catalog);
+                    r.provide_root_context(|| published);
+                },
+                1.,
+            )
+            .0
+        };
+        runner.sync_and_update();
+        let ledger = (*published.peek()).expect("the subtree derived its ledger");
+
+        let guard = claim_scan(catalog, &engine).expect("the pass claims");
+        let register = |name: &str| {
+            let spec = engine
+                .catalog()
+                .table_spec(&root, &csv(name), &SourceDefs::of(&[]));
+            block_on(register_defs(
+                engine.clone(),
+                station,
+                catalog,
+                log,
+                ScanWork::Table {
+                    spec,
+                    views: Vec::new(),
+                },
+            ));
+        };
+        let answered = |runner: &mut TestingRunner, name: &str| {
+            for _ in 0..200 {
+                runner.sync_and_update();
+                if ledger.peek().workspace.is_ready(name) {
+                    return true;
+                }
+                sleep(Duration::from_millis(5));
+            }
+            false
+        };
+
+        register("first");
+        assert!(
+            answered(&mut runner, "first"),
+            "the first def's answer reached the window while the pass still held the claim"
+        );
+        assert!(
+            !ledger.peek().workspace.is_ready("second"),
+            "and it reached it alone — the rows settle one at a time"
+        );
+        assert!(
+            catalog.peek().generation().is_none(),
+            "while nothing resolves against a catalog that is still being applied"
+        );
+
+        register("second");
+        assert!(
+            answered(&mut runner, "second"),
+            "the second def's answer lands on its own, still mid-pass"
+        );
+
+        drop(guard);
+        runner.sync_and_update();
+        assert_eq!(
+            catalog.peek().answers(),
+            engine.catalog().generation(),
+            "the window's adopted answers stamp is the engine's own"
+        );
+        assert_eq!(
+            catalog.peek().generation(),
+            Some(engine.catalog().generation()),
+            "…and names resolve against it again"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
     /// **A shrunk project leaves no ghost table.** The scan driver's whole-catalog work list is
     /// the store's own rows handed to `catalog().sync`, which reconciles — so a table the project
     /// no longer defines stops resolving, and the fold records that it did.
@@ -981,7 +1115,7 @@ mod tests {
             block_on(register_defs(
                 engine.clone(),
                 station,
-                State::create_global(Registrations::default()),
+                State::create_global(CatalogState::Cold),
                 log,
                 work,
             ));

@@ -349,7 +349,7 @@ async fn enumeration(engine: &Engine) {
         "every schema the role can see, and every relation in them"
     );
 
-    engine
+    let _ = engine
         .sources()
         .show_schemas(CATALOG, &["public".to_string(), "warehouse".to_string()]);
     let listing = schemas_of(engine, CATALOG);
@@ -381,7 +381,7 @@ async fn enumeration(engine: &Engine) {
         ]),
         "a remote view is listed as one, which pg_tables could not have said"
     );
-    engine
+    let _ = engine
         .sources()
         .show_schemas(CATALOG, &["public".to_string()]);
 
@@ -1068,7 +1068,7 @@ async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
          an identity, so nothing the engine sees tells a rename from a second source"
     );
 
-    engine.sources().disconnect(&was.named());
+    let _ = engine.sources().disconnect(&was.named());
     assert!(
         engine
             .ws(WsId(1))
@@ -1082,7 +1082,7 @@ async fn reconnect_and_disconnect(engine: &Engine, port: u16) {
         "and retiring it is the renaming gesture's own call, which is what Save makes"
     );
 
-    engine.sources().disconnect(&renamed.named());
+    let _ = engine.sources().disconnect(&renamed.named());
     assert!(
         engine
             .ws(WsId(1))
@@ -1216,7 +1216,7 @@ async fn unqualified_names(engine: &Engine, port: u16) {
         "…and writing it in full still resolves, which is the half that scoping never bounded"
     );
 
-    engine
+    let _ = engine
         .sources()
         .show_schemas(CATALOG, &["public".to_string(), "analytics".to_string()]);
     assert_eq!(
@@ -1224,7 +1224,7 @@ async fn unqualified_names(engine: &Engine, port: u16) {
         vec![vec!["2".to_string()]],
         "showing the schema is what puts it in reach of a bare name"
     );
-    engine
+    let _ = engine
         .sources()
         .show_schemas(CATALOG, &["public".to_string()]);
     assert!(
@@ -1362,7 +1362,7 @@ async fn ambiguous_names(engine: &Engine, port: u16) {
         "and qualifying it is the fix the message asks for"
     );
 
-    engine
+    let _ = engine
         .sources()
         .show_schemas(CATALOG, &["public".to_string()]);
     assert_eq!(
@@ -2416,7 +2416,7 @@ async fn replay(engine: &Engine, root: &Path, defs: &ProjectDefs) -> Vec<RegOutc
     let mut out = Vec::new();
     engine
         .catalog()
-        .sync(engine.catalog().spec(root, defs), |o| out.push(o))
+        .sync(engine.catalog().spec(root, defs), |a| out.push(a.outcome))
         .await;
     out
 }

@@ -42,8 +42,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
     // The closure is called per def as the engine answers for it, so a host with rows on screen
     // flips one at a time rather than waiting for the pass.
-    let report = futures::executor::block_on(engine.catalog().sync(spec, |outcome| {
-        println!("registered: {outcome:?}");
+    let report = futures::executor::block_on(engine.catalog().sync(spec, |stamped| {
+        println!("at {:?}: {:?}", stamped.at, stamped.outcome);
     }));
     println!("catalog generation {:?}\n", report.generation);
 

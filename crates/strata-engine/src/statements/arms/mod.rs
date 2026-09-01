@@ -2,12 +2,14 @@
 //! (`docs/STATEMENTS_SPEC.md` §4 + §7).
 //!
 //! [`Workspace::run`](crate::Workspace::run) classifies once, in front of dispatch; a
-//! statement the editor implements itself lands here as its [`StmtKind`], and comes back as a
-//! [`StatementReport`] — what to say, how many rows it moved, and the
-//! [`StoreEffect`](crate::StoreEffect) the app
-//! folds into `ProjectState`. Nothing here returns rows and nothing here touches the snapshot
-//! lifecycle: DDL never retires a snapshot (`docs/SNAPSHOT_SPEC.md` §4), so a tab that creates a
-//! table can still page the result it had.
+//! statement the editor implements itself lands here as its [`StmtKind`], and comes back as an
+//! [`Unsettled`] — what to say, how many rows it moved, and the
+//! [`StoreEffect`](crate::StoreEffect) the app folds into `ProjectState`. It stops one field
+//! short of a [`StatementReport`](crate::StatementReport): the generation the statement left the
+//! catalog at is not knowable until the effect has settled, so
+//! [`settle_effect`](crate::Engine::settle_effect) is what mints the report. Nothing here returns
+//! rows and nothing here touches the snapshot lifecycle: DDL never retires a snapshot
+//! (`docs/SNAPSHOT_SPEC.md` §4), so a tab that creates a table can still page the result it had.
 //!
 //! **One contract, for every arm.** `async fn(&StmtCtx, &Principal, &Qualified)
 //! -> Result<StatementOutcome, String>` — the engine minus everything an arm may not touch, who
@@ -48,7 +50,7 @@ use crate::policy::Principal;
 use crate::providers::def_ref;
 use crate::statements::ctx::StmtCtx;
 use crate::statements::pipeline::Qualified;
-use crate::statements::report::{StatementOutcome, StatementReport};
+use crate::statements::report::{StatementOutcome, Unsettled};
 use crate::statements::StmtKind;
 use strata_core::util::plural;
 
@@ -66,7 +68,7 @@ pub(crate) use views::{create as create_view, drop as drop_view};
 ///
 /// The timer and the kind are stamped here rather than in the arms, so a report can never
 /// disagree with the statement that produced it — and the same stamping serves the direct
-/// catalog gestures, which reach an arm's body without a statement to classify (`stamped`).
+/// catalog gestures, which reach an arm's body without a statement to classify (`unsettled`).
 ///
 /// Wildcard-free on [`StmtKind`], so a kind the engine gains is a compile error here rather than
 /// a statement the router admits and nothing performs.
@@ -75,7 +77,7 @@ pub(crate) async fn execute(
     stmt: Qualified,
     who: &Principal,
     cx: StmtCtx,
-) -> Result<StatementReport, String> {
+) -> Result<Unsettled, String> {
     let start = Instant::now();
     let outcome = match kind {
         StmtKind::CreateTable => tables::create_table(&cx, who, &stmt).await,
@@ -95,20 +97,18 @@ pub(crate) async fn execute(
         StmtKind::DropFunction => functions::drop(&cx, who, &stmt).await,
         StmtKind::CreateExternalTable => external::create(&cx, who, &stmt).await,
     }?;
-    Ok(stamped(kind, start, outcome))
+    Ok(unsettled(kind, start, outcome))
 }
 
-/// [`execute`]'s stamp, for the gestures that reach an arm's body directly — the catalog pane's
-/// drop of a table or a view, which has no statement to classify but owes the app the same
-/// answer shape as the typed statement beside it.
+/// [`execute`]'s stamp of the kind and the clock, for the gestures that reach an arm's body
+/// directly — the catalog pane's drop of a table or a view, which has no statement to classify
+/// but owes the app the same answer shape as the typed statement beside it.
 ///
-/// One report shape for both gestures, so a surface that folds one folds the other.
-pub(crate) fn stamped(
-    kind: StmtKind,
-    start: Instant,
-    outcome: StatementOutcome,
-) -> StatementReport {
-    StatementReport {
+/// One report shape for both gestures, so a surface that folds one folds the other. The catalog
+/// generation is **not** stamped here and cannot be: settling the effect is what moves it, which
+/// is why an arm's answer stops at an [`Unsettled`].
+pub(crate) fn unsettled(kind: StmtKind, start: Instant, outcome: StatementOutcome) -> Unsettled {
+    Unsettled {
         kind,
         message: outcome.message,
         count: outcome.count,

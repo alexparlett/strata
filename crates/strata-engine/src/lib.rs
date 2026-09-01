@@ -86,7 +86,7 @@ pub use sources::RemoteRelation;
 pub use statements::arms::{drop_intent, duplicate_column, SessionScope};
 pub use statements::{
     Fault, Form, Mechanism, PolicyRefusal, Reason, Refusal, Remote, StatementReport, StmtKind,
-    StoreEffect, Target,
+    StoreEffect, Target, Unsettled,
 };
 pub use tables::{InternalTableStore, LocalIpcTableStore, MemTableStore};
 
@@ -1245,10 +1245,11 @@ impl Engine {
     }
 
     /// Forget what the workspace def `name` last answered, and move the generation — every
-    /// funnel that deregisters one.
-    fn forget_registration(&self, name: &str) {
+    /// funnel that deregisters one. Answers the generation it moved to, which is what
+    /// [`Catalog::deregister`] hands its caller.
+    fn forget_registration(&self, name: &str) -> CatalogGen {
         self.ledger.forget(name);
-        self.generation.bump();
+        self.generation.bump()
     }
 
     /// Publish "this engine has work in flight". Called from **every**
@@ -1425,8 +1426,22 @@ impl Engine {
     /// Where a statement moves the [`CatalogGen`], on every arm but
     /// [`RescanTable`](StoreEffect::RescanTable): re-reading a row's counts cannot change what
     /// any name resolves to, since the sink schema-checks before it writes.
-    fn settle_effect(&self, effect: Option<&StoreEffect>) {
-        let Some(effect) = effect else { return };
+    ///
+    /// **And so it is what mints the report.** The generation this statement leaves the catalog
+    /// at is decided right here, and a host's view of the ledger is keyed on it — so the two are
+    /// one call, exactly as [`note_registration`](Self::note_registration) is: an answer and the
+    /// generation it was answered at cannot be minted a step apart without one of them being read
+    /// at the wrong moment.
+    fn settle_effect(&self, ran: Unsettled) -> StatementReport {
+        if let Some(effect) = ran.effect.as_ref() {
+            self.learn_from(effect);
+        }
+        ran.at(self.generation.current())
+    }
+
+    /// [`settle_effect`](Self::settle_effect)'s match, which is exhaustive on [`StoreEffect`]
+    /// with no wildcard for the reason that call gives.
+    fn learn_from(&self, effect: &StoreEffect) {
         match effect {
             StoreEffect::TableUpserted { def, .. } => {
                 self.note_origin(&def.name, def.origin.is_internal());
@@ -1437,7 +1452,7 @@ impl Engine {
                 self.catalog().cancel_profile(name);
                 self.note_origin(name, false);
                 self.note_scans(name, None);
-                self.forget_registration(name);
+                let _ = self.forget_registration(name);
             }
             StoreEffect::ViewUpserted { def, meta } => {
                 self.catalog().cancel_profile(&def.name);
@@ -1453,7 +1468,7 @@ impl Engine {
             StoreEffect::ViewRemoved { name } => {
                 self.catalog().cancel_profile(name);
                 self.note_scans(name, None);
-                self.forget_registration(name);
+                let _ = self.forget_registration(name);
             }
             StoreEffect::FunctionsChanged
             | StoreEffect::PreparedChanged
@@ -4108,8 +4123,8 @@ mod ledger_tests {
         );
 
         catalog.drop_view("v".into()).await.expect("drop view");
-        catalog.deregister("t");
-        engine.sources().disconnect("lake");
+        let _ = catalog.deregister("t");
+        let _ = engine.sources().disconnect("lake");
 
         let ledger = catalog.registrations();
         for gone in ["t", "v"] {

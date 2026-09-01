@@ -128,7 +128,7 @@ mod tests {
             .await
             .expect("register");
         moved("registering a second table", &engine);
-        catalog.deregister("gone");
+        let _ = catalog.deregister("gone");
         moved("deregistering a table", &engine);
 
         catalog
@@ -185,11 +185,11 @@ mod tests {
             .await
             .expect("the fake source connects");
         moved("a source registering its catalog", &engine);
-        engine
+        let _ = engine
             .sources()
             .show_schemas("sales", &["public".to_string()]);
         moved("changing which schemas a data source shows", &engine);
-        engine.sources().disconnect("lake");
+        let _ = engine.sources().disconnect("lake");
         moved("forgetting a data source", &engine);
 
         let report = engine.catalog().sync(CatalogSpec::default(), |_| {}).await;

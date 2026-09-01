@@ -37,8 +37,8 @@ use strata_model::SourceDef;
 
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
-    catalog_settled, persisted_defs, use_catalog, use_registrations, use_report, Catalog, ProjChan,
-    ProjectState, RegistrationsCtx, ReportCtx,
+    catalog_settled, persisted_defs, use_catalog, use_report, Catalog, ProjChan, ProjectState,
+    ReportCtx,
 };
 use crate::components::dialog::{CheckboxRow, Dialog, DialogHeader};
 use crate::components::icon::{Icon, IconName};
@@ -108,19 +108,19 @@ fn apply(
     project: RadioStation<ProjectState, ProjChan>,
     engine: &EngineCtx,
     catalog: Catalog,
-    registrations: RegistrationsCtx,
     report: ReportCtx,
     url: &str,
     schemas: Vec<String>,
 ) {
     let mut project = project;
-    {
+    let at = {
         let mut p = project.write_channel(ProjChan::Sources);
         p.update_source_def(url, |def| def.schemas.clone_from(&schemas));
-        engine.sources().show_schemas(url, &schemas);
+        let at = engine.sources().show_schemas(url, &schemas);
         persisted_defs(&p, report);
-    }
-    catalog_settled(catalog, registrations, engine);
+        at
+    };
+    catalog_settled(catalog, at);
 }
 
 /// Mounted at the window root beside the other dialogs, on the same terms: while open, its key
@@ -143,7 +143,6 @@ impl Component for SchemasPicker {
         let url = slot.read().clone();
         let engine = use_consume::<EngineCtx>();
         let catalog = use_catalog();
-        let registrations = use_registrations();
         let radio = use_radio::<ProjectState, ProjChan>(ProjChan::Sources);
         let project = use_radio_station::<ProjectState, ProjChan>();
         let report = use_report();
@@ -230,7 +229,6 @@ impl Component for SchemasPicker {
                 project,
                 &engine,
                 catalog,
-                registrations,
                 report,
                 &url,
                 draft.peek().iter().cloned().collect(),
@@ -328,7 +326,10 @@ mod tests {
             move |r| {
                 let engine = r.provide_root_context(EngineCtx::default);
                 let catalog = r.provide_root_context(|| {
-                    State::create(CatalogState::Settled(CatalogGen::default()))
+                    State::create(CatalogState::Settled {
+                        generation: CatalogGen::default(),
+                        answers: CatalogGen::default(),
+                    })
                 });
                 r.provide_root_context(|| State::create(Registrations::default()));
                 let target = r.provide_root_context(|| State::create(None::<String>));

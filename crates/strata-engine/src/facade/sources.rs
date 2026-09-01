@@ -12,7 +12,7 @@ use crate::sources::source::SourceInfo;
 use crate::sources::store::s3;
 use crate::sources::{self, RemoteRelation, SchemaVisibility, SourceDetail, SourcesSnapshot};
 use crate::sql::{DatabaseSym, RelationSym, SchemaSym};
-use crate::{fold_ident, Dependents, Engine, EngineError, RegStatus, CATALOG};
+use crate::{fold_ident, CatalogGen, Dependents, Engine, EngineError, RegStatus, CATALOG};
 
 /// This engine's data sources, from [`Engine::sources`].
 ///
@@ -70,7 +70,7 @@ impl Sources<'_> {
             .await
             .map_err(|e| EngineError::task("connect", e))?;
         if engine.source_defs.resolve(&name).is_none() {
-            self.disconnect(&name);
+            let _ = self.disconnect(&name);
         } else {
             let generation = engine.generation.bump();
             engine
@@ -91,7 +91,12 @@ impl Sources<'_> {
     /// is why the def an object store registered under is kept beside the name until now. Neither
     /// is a fault when it does nothing: a data source that never worked registered nothing, and a
     /// catalog kind put no store on the session at all. See [`sources::disconnect`].
-    pub fn disconnect(self, name: &str) {
+    /// **Answers the generation it moved to** — the number a host's view of the ledger is keyed
+    /// on, welded to the gesture that moved it so nothing has to go and read it. `must_use` for
+    /// that reason: dropping it leaves every surface joined against the answers of a moment that
+    /// has gone.
+    #[must_use]
+    pub fn disconnect(self, name: &str) -> CatalogGen {
         let engine = self.engine;
         let def = engine.source_defs.def(name);
         sources::disconnect(
@@ -103,7 +108,7 @@ impl Sources<'_> {
         );
         engine.source_defs.forget(name);
         engine.ledger.forget_source(name);
-        engine.generation.bump();
+        engine.generation.bump()
     }
 
     /// Every data source this engine holds, read as of one moment — see [`SourcesSnapshot`].
@@ -139,14 +144,16 @@ impl Sources<'_> {
     /// Moves the [`generation`](crate::Catalog::generation) whether or not this engine held the
     /// data source: over-invalidating once is cheaper than leaving a caller answering about a
     /// scoping that has moved.
-    pub fn show_schemas(self, name: &str, schemas: &[String]) {
+    /// It **answers the generation it moved to**, for [`disconnect`](Self::disconnect)'s reason.
+    #[must_use]
+    pub fn show_schemas(self, name: &str, schemas: &[String]) -> CatalogGen {
         let engine = self.engine;
         if let Some(mut def) = engine.source_defs.def(name) {
             def.schemas = schemas.to_vec();
             engine.source_defs.note(&def);
             engine.live.show(&def);
         }
-        engine.generation.bump();
+        engine.generation.bump()
     }
 
     /// The qualified names completion may offer — one [`DatabaseSym`] per data source that

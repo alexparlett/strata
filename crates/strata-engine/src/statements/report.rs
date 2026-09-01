@@ -8,6 +8,7 @@ use strata_model::{TableDef, ViewDef};
 
 use crate::catalog::{TableMeta, ViewMeta};
 use crate::statements::StmtKind;
+use crate::CatalogGen;
 
 /// What one intercepted statement did — the `RunOutcome::Statement` the results pane renders
 /// as a status row and the app folds into its stores.
@@ -30,6 +31,45 @@ pub struct StatementReport {
     /// catalog holds; deliberately not a `StoreEffect::None` variant beside it, which would be
     /// a second way to say the same thing and a second arm every fold has to remember.
     pub effect: Option<StoreEffect>,
+    /// **The generation this statement left the catalog at.** A host keys its view of the
+    /// registration ledger on this number, so it rides the report rather than being read
+    /// separately: a fold that has the report has the stamp, and there is no version of the fold
+    /// that adopts one without the other. Unmoved where the statement registered nothing.
+    pub at: CatalogGen,
+}
+
+/// What one intercepted statement did **before its effect has settled** — a
+/// [`StatementReport`] minus the one field that cannot be known yet.
+///
+/// The generation a statement leaves the catalog at is not knowable while the arm is still
+/// running: `Engine::settle_effect` is what moves it, from the effect below. So an arm's answer
+/// stops here, and the call that settles the effect is the only thing that can mint the report —
+/// which is what stops a report being stamped with a number that had already gone by.
+pub struct Unsettled {
+    /// Which statement ran.
+    pub kind: StmtKind,
+    /// The sentence the user reads.
+    pub message: String,
+    /// Rows the statement moved, where it moved any.
+    pub count: Option<u64>,
+    /// Wall-clock the statement took.
+    pub elapsed_ms: u128,
+    /// What the app folds into its catalog.
+    pub effect: Option<StoreEffect>,
+}
+
+impl Unsettled {
+    /// This statement's report, stamped with the generation `at` its effect left the catalog at.
+    pub(crate) fn at(self, at: CatalogGen) -> StatementReport {
+        StatementReport {
+            kind: self.kind,
+            message: self.message,
+            count: self.count,
+            elapsed_ms: self.elapsed_ms,
+            effect: self.effect,
+            at,
+        }
+    }
 }
 
 /// What an arm answers with — [`StatementReport`] minus the two fields `execute` owns. An arm

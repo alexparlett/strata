@@ -23,5 +23,5 @@ pub use classify::{classify_stmt, Classified, Fault, Form, StmtKind};
 pub use ctx::{DataRoot, StmtCtx};
 pub use mechanism::{mechanism, Mechanism};
 pub use pipeline::{PolicyRefusal, Reason, Refusal};
-pub use report::{StatementOutcome, StatementReport, StoreEffect};
+pub use report::{StatementOutcome, StatementReport, StoreEffect, Unsettled};
 pub use target::{resolve_target, Remote, Target};
