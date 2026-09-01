@@ -29,7 +29,7 @@
 //!   never hides the others' diagnostics.
 //!
 //! - [`complete`] — the ranked offer for a caret position: **pure and sync**, over a
-//!   [`Catalog`](super::Catalog) snapshot the consumer holds. That is the keystroke contract, and
+//!   [`Symbols`](super::Symbols) snapshot the consumer holds. That is the keystroke contract, and
 //!   it is what makes the offer free: no engine, no lock, no I/O on the path a character typed
 //!   has to finish.
 //!
@@ -57,7 +57,7 @@ use crate::sql::spans::{
     df_error_diag, diag, is_incomplete, is_unresolved_column, leading_keywords_span, overlaps,
     statement_ranges,
 };
-use crate::sql::symbols::Catalog;
+use crate::sql::symbols::Symbols;
 use crate::sql::{complete as offer, Completion, FunctionCatalog};
 use crate::statements::pipeline::{classify, parse_range, qualify, Admitted, Pipeline};
 use strata_model::{Diagnostic, Severity};
@@ -65,10 +65,10 @@ use strata_model::{Diagnostic, Severity};
 /// Completions for the caret at byte `caret` in `sql`, ranked — the keystroke entry.
 ///
 /// Pure and synchronous over `catalog`, which is the consumer's held snapshot
-/// ([`Catalog::build`](Catalog::build), re-assembled when
+/// ([`Symbols::build`], re-assembled when
 /// [`LangBundle::generation`](super::LangBundle::generation) moves). `manual` marks an explicit
 /// trigger (⌃/⌘Space) — it widens the offer by lifting the obscure-keyword tail gate.
-pub fn complete(catalog: &Catalog, sql: &str, caret: usize, manual: bool) -> Vec<Completion> {
+pub fn complete(catalog: &Symbols, sql: &str, caret: usize, manual: bool) -> Vec<Completion> {
     offer::offer(catalog, sql, caret, manual)
 }
 

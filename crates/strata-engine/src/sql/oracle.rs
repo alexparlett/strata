@@ -23,8 +23,8 @@ use datafusion::prelude::SessionContext;
 use datafusion::sql::sqlparser::ast::{Ident, ObjectName, ObjectNamePart};
 use datafusion::sql::sqlparser::tokenizer::Span;
 
-use crate::fold_ident;
-use crate::providers::shown_schemas;
+use crate::catalog_providers::shown_schemas;
+use crate::ident::fold_ident;
 use crate::sql::name::SessionName;
 
 /// One relation, addressed the way the thing that holds it spells it: the catalog as the

@@ -595,7 +595,7 @@ and not its catalog would resolve every path and hold no table. The object store
 The catalog has one schema, `public`, in the workspace catalog's own shape, and it **enumerates
 nothing** — a bucket cannot say what its tables are. What it holds is exactly what the project's
 own table defs put there: `register_external` places a table's provider in the catalog its def
-names (`providers::def_home`) instead of the workspace, building the same `ListingTable` it always
+names (`catalog_providers::def_home`) instead of the workspace, building the same `ListingTable` it always
 built. Catalog-is-the-store is intact; the defs answer for membership, not the bucket.
 
 That is what makes **Forget structural**: `Sources::disconnect` deregisters the catalog and its
@@ -607,7 +607,7 @@ half-finish.
 
 - The **qualified** address always works. `sql::qualify` already searched every registered
   catalog, so a bare name resolves across them with no change there.
-- **Programmatic** lookups do not parse SQL, so they go through `providers::def_ref`, which
+- **Programmatic** lookups do not parse SQL, so they go through `catalog_providers::def_ref`, which
   resolves a project name to wherever its def was placed. Without it, `ctx.table("regions")` —
   bare resolution being the *default* catalog's — would simply not find a bucket table.
 - `resolve_target` answers `Target::Store`, and every arm that manages a target says what it does
@@ -616,7 +616,7 @@ half-finish.
   not "describe its own relations" the way a server does and the fix is a LOCATION rather than a
   server.
 - `in_workspace` is **untouched**, so the `__snap_` namespace is exactly as wide as it was. The
-  *checkability* split is a different predicate: `providers::def_backed` is what `plan_deps` uses,
+  *checkability* split is a different predicate: `catalog_providers::def_backed` is what `plan_deps` uses,
   so a view over a bucket table records it as a workspace name and is still named when that table
   drops.
 
@@ -936,7 +936,7 @@ DB-11 extended the same rule to every target that addresses a relation which alr
 `DROP`'s, an `UPDATE`'s, a `DELETE`'s — for the same reason and with the same three safeguards.
 
 **Why the statement and not the session.** DataFusion has one default catalog and one default
-schema and no search path, so the other design is to *move* the default. `providers::in_workspace`
+schema and no search path, so the other design is to *move* the default. `catalog_providers::in_workspace`
 answers `true` for every bare name, and four rules turn on that answer: the `__snap_` fence, what
 a write may target, and the two halves of a view's recorded dependencies. A moved default makes
 all four wrong at once — most sharply the last, where a view whose body says `orders` would be

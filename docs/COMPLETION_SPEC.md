@@ -426,11 +426,11 @@ What is left is genuinely proportional to the offer:
 **The wiring, since EA-17.** The language service has two doors and nothing else:
 `Lang::analyze(sql)` (async, the squiggles and the MCP validate tool) and
 `sql::complete(&catalog, buffer, caret, manual)` (pure, sync, engine-free). What
-`complete` reads is a `Catalog` snapshot the consumer **holds**, assembled once by the
+`complete` reads is a `Symbols` snapshot the consumer **holds**, assembled once by the
 one constructor:
 
 ```rust
-sql::Catalog::build(store_tables, store_views, engine.lang().bundle(), dialect)
+sql::Symbols::build(store_tables, store_views, engine.lang().bundle(), dialect)
 ```
 
 Three inputs, from the three places that own them. `LangBundle` is the engine's own

@@ -52,7 +52,7 @@ use keyring_core::mock;
 use strata_arrow::column_info;
 use strata_arrow::profile::Profiled;
 
-use strata_engine::profile::{aggregates, profile_sql};
+use strata_engine::profile;
 use strata_engine::sources::mysql::settings::PASSWORD as PASSWORD_KEY;
 use strata_engine::sources::{
     put_secret, SchemaListingView, SchemaVisibility, SourceDetail, SourceListing,
@@ -489,7 +489,7 @@ fn schemas_of(engine: &Engine, name: &str) -> Vec<SchemaListingView> {
 /// is that the two halves agree — that the names `Sources::database_syms` carries are the names the
 /// catalog actually resolves.
 async fn qualified_offer(engine: &Engine) {
-    let catalog = sql::Catalog::build([], [], engine.lang().bundle(), String::new());
+    let catalog = sql::Symbols::build([], [], engine.lang().bundle(), String::new());
     let offer = |sql: &str| {
         let mut labels = sql::complete(&catalog, sql, sql.len(), false)
             .into_iter()
@@ -665,8 +665,7 @@ async fn profiling(engine: &Engine) {
         column_info(&Field::new("total", DataType::Int32, true)),
         column_info(&Field::new("tags", DataType::Utf8, true)),
     ];
-    let (exprs, _) = aggregates(&columns, Profiled::Database);
-    let statement = profile_sql(&name, &exprs);
+    let statement = profile::statement(&name, &columns, Profiled::Database);
     assert!(
         !statement.is_empty(),
         "every expression in the remote set has to unparse before it can federate"
@@ -1205,7 +1204,7 @@ async fn remote_writes(engine: &Engine, port: u16) {
         .await
         .expect("the same data source, opted in to writes");
 
-    let catalog = sql::Catalog::build([], [], engine.lang().bundle(), String::new());
+    let catalog = sql::Symbols::build([], [], engine.lang().bundle(), String::new());
     let offered: Vec<String> = sql::complete(&catalog, "INSERT INTO ", 12, false)
         .into_iter()
         .map(|c| c.label)

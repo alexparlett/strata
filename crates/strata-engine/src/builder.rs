@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use datafusion::execution::memory_pool::MemoryPool;
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 use datafusion::prelude::SessionContext;
 use tokio::runtime::Builder as RuntimeBuilder;
 
@@ -270,7 +270,10 @@ impl EngineBuilder {
 /// The `SessionContext` a default builder produces, for a test that needs a session and not a
 /// whole engine. Through the builder, so what those tests run on cannot drift from what an engine
 /// runs on.
-#[cfg(test)]
+///
+/// Reachable under the `testing` feature too, because the storage conformance rings register what
+/// they read back on one.
+#[cfg(any(test, feature = "testing"))]
 pub(crate) fn test_context(overrides: &BTreeMap<String, String>) -> SessionContext {
     let builder = EngineBuilder::new().with_config(overrides.clone());
     build_context(

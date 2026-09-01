@@ -14,7 +14,7 @@ use strata_model::ColumnInfo;
 
 /// `events(user_id, amount, status, ts)` + `users(user_id, name, guid)` + a saved
 /// view `spenders(user_id, total)` + a few functions.
-fn catalog() -> Catalog {
+fn catalog() -> Symbols {
     fn col(name: &str, dtype: DataType) -> ColumnInfo {
         column_info(&Field::new(name, dtype, true))
     }
@@ -33,7 +33,7 @@ fn catalog() -> Catalog {
         col("user_id", DataType::Int64),
         col("total", DataType::Float64),
     ];
-    Catalog::build(
+    Symbols::build(
         [("events", &events[..], false), ("users", &users[..], false)],
         [("spenders", &spenders[..])],
         bundle(Arc::new(FunctionCatalog {
@@ -275,7 +275,7 @@ fn a_column_named_execute_does_not_govern_its_clause() {
         column_info(&Field::new(name, DataType::Utf8, true))
     }
     let cols = [col("execute"), col("deallocate"), col("amount")];
-    let cat = Catalog::build(
+    let cat = Symbols::build(
         [("jobs", &cols[..], false)],
         [],
         bundle(Arc::default()),
@@ -473,7 +473,7 @@ fn weird_identifiers_insert_quoted() {
         column_info(&Field::new(name, DataType::Utf8, true))
     }
     let cols = [col("Amount USD"), col("order"), col("plain")];
-    let cat = Catalog::build(
+    let cat = Symbols::build(
         [("t", &cols[..], false)],
         [],
         bundle(Arc::default()),
@@ -603,7 +603,7 @@ fn grammar_vocabulary_columns_insert_quoted() {
         column_info(&Field::new(name, DataType::Utf8, true))
     }
     let cols = [col("null"), col("case"), col("asc"), col("plain")];
-    let cat = Catalog::build(
+    let cat = Symbols::build(
         [("t", &cols[..], false)],
         [],
         bundle(Arc::default()),
@@ -836,7 +836,7 @@ fn drop_and_insert_operands_filter_by_statement() {
     }
     let cols = [col("id")];
     let scratch = [col("id"), col("ts")];
-    let cat = Catalog::build(
+    let cat = Symbols::build(
         [
             ("events", &cols[..], false),
             ("scratch", &scratch[..], true),
@@ -865,7 +865,7 @@ fn drop_and_insert_operands_filter_by_statement() {
     let items = complete(&cat, sql, sql.len(), false);
     assert_eq!(labels(&items), vec!["ts", "id"]);
     let vals = [col("values"), col("n")];
-    let vcat = Catalog::build(
+    let vcat = Symbols::build(
         [("v", &vals[..], true)],
         [],
         bundle(Arc::default()),
@@ -916,7 +916,7 @@ fn deallocate_prepare_still_offers_prepared_names() {
         name: "spend".into(),
         params: Vec::new(),
     }];
-    let cat = Catalog::build(
+    let cat = Symbols::build(
         [],
         [],
         LangBundle {
@@ -943,7 +943,7 @@ fn lead_named_columns_never_govern() {
         col("prepare"),
         col("amount"),
     ];
-    let cat = Catalog::build(
+    let cat = Symbols::build(
         [("jobs", &cols[..], false)],
         [],
         bundle(Arc::default()),
@@ -1049,7 +1049,7 @@ fn create_function_body_offers_arguments_and_functions_only() {
 fn drop_function_offers_only_created_functions() {
     let mut created: FunctionSym = "my_udf".into();
     created.created = true;
-    let cat = Catalog::build(
+    let cat = Symbols::build(
         [],
         [],
         bundle(Arc::new(FunctionCatalog {
@@ -1290,8 +1290,8 @@ mod qualified {
     /// The fixture's catalog with `databases` on it — the shape a
     /// [`LangBundle`](crate::sql::LangBundle) puts there, set directly because these tests author
     /// the databases rather than take an engine's.
-    fn with_databases(databases: Vec<DatabaseSym>) -> Catalog {
-        Catalog {
+    fn with_databases(databases: Vec<DatabaseSym>) -> Symbols {
+        Symbols {
             databases,
             ..catalog()
         }
@@ -1301,7 +1301,7 @@ mod qualified {
     /// deliberately shares a bare name with nothing in the workspace and `users` deliberately
     /// does — the workspace fixture has a `users` table, which is what proves the two namespaces
     /// are answered apart.
-    fn with_pg() -> Catalog {
+    fn with_pg() -> Symbols {
         with_databases(vec![DatabaseSym {
             name: "pg".into(),
             writable: false,
@@ -1324,7 +1324,7 @@ mod qualified {
     }
 
     /// A second data source that has never answered: a name from the def, and nothing under it.
-    fn unconnected() -> Catalog {
+    fn unconnected() -> Symbols {
         with_databases(vec![DatabaseSym {
             name: "warehouse".into(),
             writable: false,
@@ -1332,7 +1332,7 @@ mod qualified {
         }])
     }
 
-    fn offer(sql_with_caret: &str, cat: &Catalog) -> Vec<Completion> {
+    fn offer(sql_with_caret: &str, cat: &Symbols) -> Vec<Completion> {
         let caret = sql_with_caret.find('|').expect("caret marker");
         complete(cat, &sql_with_caret.replace('|', ""), caret, false)
     }
@@ -1525,14 +1525,14 @@ mod positions {
 
     /// `events` and `spenders` are the fixture's own; `scratch` is a table Strata owns (the only
     /// kind an `INSERT` may target). `open_pg` accepts writes and `locked_pg` does not.
-    fn catalog_with(databases: Vec<DatabaseSym>) -> Catalog {
+    fn catalog_with(databases: Vec<DatabaseSym>) -> Symbols {
         fn col(name: &str) -> ColumnInfo {
             column_info(&Field::new(name, DataType::Int64, true))
         }
         let cols = [col("id")];
-        Catalog {
+        Symbols {
             databases,
-            ..Catalog::build(
+            ..Symbols::build(
                 [("events", &cols[..], false), ("scratch", &cols[..], true)],
                 [("spenders", &cols[..])],
                 bundle(Arc::default()),
@@ -1552,12 +1552,12 @@ mod positions {
         }
     }
 
-    fn offer(sql_with_caret: &str, cat: &Catalog) -> Vec<Completion> {
+    fn offer(sql_with_caret: &str, cat: &Symbols) -> Vec<Completion> {
         let caret = sql_with_caret.find('|').expect("caret marker");
         complete(cat, &sql_with_caret.replace('|', ""), caret, false)
     }
 
-    fn both() -> Catalog {
+    fn both() -> Symbols {
         catalog_with(vec![
             database("open_pg", true),
             database("locked_pg", false),
@@ -1625,7 +1625,7 @@ mod positions {
     /// has its own surface; the editor is not it.
     #[test]
     fn a_def_that_failed_to_register_is_still_offered() {
-        let failed = Catalog::build(
+        let failed = Symbols::build(
             [("unreachable", &[][..], false)],
             [],
             bundle(Arc::default()),

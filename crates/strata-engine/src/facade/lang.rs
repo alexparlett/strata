@@ -44,7 +44,7 @@ impl Lang<'_> {
     }
 
     /// **Everything the language service needs off this engine, as of one moment** — the sync
-    /// half of the wiring, folded into a [`Catalog`](crate::sql::Catalog) by the caller.
+    /// half of the wiring, folded into a [`Symbols`](crate::sql::Symbols) by the caller.
     ///
     /// Lock-reads only: no I/O, no plan, no round trip. One call rather than four because these
     /// are four reads of one session that must describe one instant, and because the caller has
@@ -117,7 +117,7 @@ impl Lang<'_> {
 
 #[cfg(test)]
 mod tests {
-    use crate::sql::Catalog;
+    use crate::sql::Symbols;
     use crate::{Engine, RunTag, WsId};
 
     /// **One read, one instant.** Every field of the bundle is the same answer the narrower call
@@ -146,7 +146,7 @@ mod tests {
     async fn the_constructor_folds_the_bundle_and_keeps_what_is_not_the_engines() {
         let eng = Engine::builder().build();
         let bundle = eng.lang().bundle();
-        let catalog = Catalog::build(
+        let catalog = Symbols::build(
             [("orders", &[][..], true)],
             [("recent", &[][..])],
             bundle.clone(),

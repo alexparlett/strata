@@ -13,15 +13,14 @@
 pub mod arms;
 pub mod classify;
 pub(crate) mod copy_job;
-pub mod ctx;
+pub(crate) mod ctx;
 pub mod mechanism;
 pub(crate) mod pipeline;
 pub mod report;
 pub mod target;
 
 pub use classify::{classify_stmt, Classified, Fault, Form, StmtKind};
-pub use ctx::{DataRoot, StmtCtx};
 pub use mechanism::{mechanism, Mechanism};
 pub use pipeline::{PolicyRefusal, Reason, Refusal};
 pub use report::{StatementOutcome, StatementReport, StoreEffect, Unsettled};
-pub use target::{resolve_target, Remote, Target};
+pub use target::{Remote, Target};

@@ -338,7 +338,7 @@ three answers are its refusals — a store catalog's in its own words (`in_store
 bucket does not describe its own relations the way a server does and the fix is a LOCATION rather
 than a server. An arm that manages a **def** asks `target.def(what)` instead, which accepts both
 placements: `lake.public.regions` and a bare `regions` are one project row, and the arm resolves
-it through `providers::def_ref` rather than being handed a catalog. `resolve_target` is a **pure function of the session**: the editor asks it of a statement it
+it through `catalog_providers::def_ref` rather than being handed a catalog. `resolve_target` is a **pure function of the session**: the editor asks it of a statement it
 is only judging, where no dispatch state exists, so the source's own gates (is it writable, may
 this caller reach it) are asked of the resolved answer rather than folded into it.
 
@@ -471,7 +471,7 @@ catalog there was. A database source can perfectly well hold a relation somebody
 `__snap_3`, and there the name reserves nothing, hides nothing and collides with nothing: it is
 not the namespace a Run mints into, the workspace schema provider is not what enumerates it, and
 reading it hands back that server's rows rather than another tab's result. So the predicate is
-`is_snapshot_ref`, which is `is_snapshot_name` scoped by `providers::in_workspace` — one
+`is_snapshot_ref`, which is `is_snapshot_name` scoped by `catalog_providers::in_workspace` — one
 definition, beside `snapshot_name`, asked by the refusal, by the hiding rule and by the same
 `in_workspace` that decides what an intercepted statement may target. Writing to a remote
 `__snap_3` is still refused; it is refused for being remote, which is the true reason. The scoping
@@ -510,7 +510,7 @@ a compile break, and `classify`'s own test pins those literals verbatim.
 
 ## 5. The provider layer — identity and visibility, never lifecycle
 
-`engine/providers.rs`, installed in `build_context` before anything registers. Two jobs and no
+`engine/catalog_providers.rs`, installed in `build_context` before anything registers. Two jobs and no
 third:
 
 - **Identity.** One catalog (`strata`) with exactly one schema (`public`), tables keyed by
@@ -701,7 +701,7 @@ confirm cannot promise what the report then contradicts: an internal drop names 
 external one keeps "the source files on disk are not deleted".
 
 Completion (ED-11): `INSERT INTO |` offers only tables built with `internal: true` on the
-`Catalog` snapshot — the store's `TableOrigin` is the internal-set authority for the offer,
+`Symbols` snapshot — the store's `TableOrigin` is the internal-set authority for the offer,
 `Catalog::is_internal` stays the dispatch gate, one fact read from the store because the store
 built the snapshot. The **column list** offers the target's own columns, and only for a target
 an INSERT may reach — offering columns of a statement dispatch refuses would be dishonest.
@@ -807,7 +807,7 @@ schema discarded, which made `pg.public.orders` indistinguishable from a workspa
 `orders`: dropping that table named a view which never read it, the view's own missing-dependency
 check cried wolf over a relation the store has no row for, and a forget of the source matched
 nothing anywhere. So `PlanDeps` has **two** lists — `tables`, workspace scans by bare name, and
-`remote`, non-workspace scans qualified whole — split by the same `providers::in_workspace` the
+`remote`, non-workspace scans qualified whole — split by the same `catalog_providers::in_workspace` the
 statement gate uses. `ViewMeta` carries the split through under those same two names, because
 every question `tables` answers is asked of the project's own rows and a remote relation has none.
 `remote` holds the plan's **recorded reference** form — every part bare — and never a rendered
@@ -953,7 +953,7 @@ restart drops the overlay silently, which is the same sentence read the other wa
 | `is_owned_key` | "This option is managed by Strata and cannot be set" | Strata names its own catalog, schema and `collect_spans` |
 | `datafusion.runtime.*` | "Engine runtime options require a restart. Set them in Settings" | they configure the `RuntimeEnv`, fixed at engine start |
 | `datafusion.format.*` | "Display options are set in Settings" | the grid formatter and the chart read's cache identity both come from the Settings store, so a session value would split-brain them |
-| `datafusion.sql_parser.dialect` | "The SQL dialect is set in Settings" | the same rule, one surface over: completion carries the dialect on its own `Catalog` snapshot, built from Settings, while the validator and the planner read it live — so a session value leaves the editor lexing the buffer by rules the planner has stopped using (WJ-04) |
+| `datafusion.sql_parser.dialect` | "The SQL dialect is set in Settings" | the same rule, one surface over: completion carries the dialect on its own `Symbols` snapshot, built from Settings, while the validator and the planner read it live — so a session value leaves the editor lexing the buffer by rules the planner has stopped using (WJ-04) |
 
 The last two are **one rule with two surfaces**: a key some part of the app reads from the Settings
 store rather than from the session cannot have a session value, or the two answer differently about
@@ -1074,14 +1074,14 @@ run exactly once at engine construction into an immutable field — true of the 
 statement could move it. `Functions` holds it as an `Arc<FunctionCatalog>` re-walked by the arm
 that changed the registry **and by nothing else**, so the built-in set still costs one walk;
 `Lang::functions()` hands out the `Arc`. The report carries `StoreEffect::FunctionsChanged`,
-whose settle moves the catalog generation, which is what every tab's `Catalog` snapshot is memoized on.
+whose settle moves the catalog generation, which is what every tab's `Symbols` snapshot is memoized on.
 
 **Which surfaces that actually reaches** — three, and it is worth naming them rather than saying
 "the language service", because they read the swap by two different routes:
 
 | Surface | Reads | Shows |
 |---|---|---|
-| the autocomplete row | the memoized `Catalog` snapshot, rebuilt on the catalog generation | the name, and `FunctionSym::detail()` — the argument list, by name (`add_one(x)`) — as the row's dim right-hand annotation, which is where this codebase puts signature help |
+| the autocomplete row | the memoized `Symbols` snapshot, rebuilt on the catalog generation | the name, and `FunctionSym::detail()` — the argument list, by name (`add_one(x)`) — as the row's dim right-hand annotation, which is where this codebase puts signature help |
 | diagnostics | `Lang::analyze`, which dry-plans against the **live** `SessionContext` and takes the catalog by handle for its lexical lints | a call that squiggled a moment ago stops squiggling, and starts again after the drop |
 | `SHOW FUNCTIONS` / `information_schema.routines` | DataFusion's own enumeration | the name, the return type, and the `Documentation` the factory built — description and call form |
 

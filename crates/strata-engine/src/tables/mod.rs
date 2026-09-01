@@ -51,8 +51,8 @@ use datafusion::prelude::SessionContext;
 pub mod local_ipc;
 pub mod mem;
 
-#[cfg(test)]
-mod conformance;
+#[cfg(any(test, feature = "testing"))]
+pub mod conformance;
 
 pub use local_ipc::LocalIpcTableStore;
 pub use mem::MemTableStore;

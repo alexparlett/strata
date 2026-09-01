@@ -205,9 +205,13 @@ impl SecretProvider for MemSecrets {
     }
 }
 
+#[cfg(any(test, feature = "testing"))]
+pub mod conformance;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::secrets::conformance::conforms;
 
     /// A provider that cannot look, ever — a locked keystore or an unreachable secrets manager,
     /// on a machine where neither can be arranged.
@@ -225,30 +229,6 @@ mod tests {
             source: "orders".into(),
             slot: SecretRef::mint(),
             env: &["STRATA_TEST_PGPASSWORD"],
-        }
-    }
-
-    /// The clauses every [`SecretProvider`] keeps, whatever it reads from. The request is one the
-    /// provider may or may not answer — the contract is about the shape of the answer, not about
-    /// which arm a given provider is in.
-    fn conforms(provider: &dyn SecretProvider, request: &SecretRequest) {
-        let first = provider.secret(request);
-        let second = provider.secret(request);
-        assert_eq!(
-            first.is_ok(),
-            second.is_ok(),
-            "two reads of one request must agree"
-        );
-        match (first, second) {
-            (Ok(a), Ok(b)) => assert!(
-                a.map(|s| s.expose().to_string()) == b.map(|s| s.expose().to_string()),
-                "a read must not consume what it read"
-            ),
-            (Err(a), Err(b)) => {
-                assert!(!a.trim().is_empty(), "a fault must say what went wrong");
-                assert_eq!(a, b, "a fault must not change its wording between reads");
-            }
-            _ => unreachable!("the ok-ness was asserted equal above"),
         }
     }
 

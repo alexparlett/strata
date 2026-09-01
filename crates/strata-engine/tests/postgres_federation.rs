@@ -45,7 +45,7 @@ use strata_arrow::column_info;
 use strata_arrow::profile::Profiled;
 use strata_core::project::ProjectDefs;
 
-use strata_engine::profile::{aggregates, profile_sql};
+use strata_engine::profile;
 use strata_engine::register::RegOutcome;
 use strata_engine::sources::postgres::settings::PASSWORD as PASSWORD_KEY;
 use strata_engine::sources::{
@@ -432,7 +432,7 @@ fn schemas_of(engine: &Engine, name: &str) -> Vec<SchemaListingView> {
 /// The offers are compared **sorted**, because what only a server can pin is *which* names the
 /// offer holds; their ranking is `complete/tests.rs`'s and needs no server.
 async fn qualified_offer(engine: &Engine) {
-    let catalog = sql::Catalog::build([], [], engine.lang().bundle(), String::new());
+    let catalog = sql::Symbols::build([], [], engine.lang().bundle(), String::new());
     let offer = |sql: &str| {
         let mut labels = sql::complete(&catalog, sql, sql.len(), false)
             .into_iter()
@@ -591,8 +591,7 @@ async fn profiling(engine: &Engine) {
         column_info(&Field::new("total", DataType::Int32, true)),
         column_info(&Field::new("tags", DataType::Utf8, true)),
     ];
-    let (exprs, _) = aggregates(&columns, Profiled::Database);
-    let statement = profile_sql(&name, &exprs);
+    let statement = profile::statement(&name, &columns, Profiled::Database);
     assert!(
         !statement.is_empty(),
         "every expression in the remote set has to unparse before it can federate"
@@ -694,11 +693,10 @@ async fn profiling(engine: &Engine) {
 /// stays the thing profiling would actually have sent.
 async fn unsplit_expression_set_fails_on_the_server(engine: &Engine, name: &str) {
     let columns = [column_info(&Field::new("total", DataType::Int32, true))];
-    let (exprs, _) = aggregates(&columns, Profiled::Workspace);
-    let sql = profile_sql(name, &exprs);
+    let sql = profile::statement(name, &columns, Profiled::Workspace);
 
     // Two ways the median is fatal, and only the unparser can say which this build is. If it
-    // refuses the expression outright, `profile_sql` answers empty and no federated statement
+    // refuses the expression outright, `profile::statement` answers empty and no federated statement
     // could ever have carried it — the claim is already settled. Otherwise it renders a function
     // name, and the server is what refuses.
     if sql.is_empty() {

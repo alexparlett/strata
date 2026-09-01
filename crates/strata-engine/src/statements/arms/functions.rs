@@ -53,12 +53,13 @@ use datafusion::sql::sqlparser::ast::{
     Ident, Statement as SqlStatement, Value,
 };
 
+use crate::ident::fold_ident;
 use crate::policy::Principal;
+use crate::registered_function;
 use crate::statements::ctx::StmtCtx;
 use crate::statements::pipeline::Qualified;
 use crate::statements::report::{StatementOutcome, StoreEffect};
 use crate::statements::StmtKind;
-use crate::{fold_ident, registered_function};
 
 /// DataFusion's seam for `CREATE FUNCTION`, installed on every engine (`build_context`).
 ///
@@ -626,7 +627,7 @@ impl ScalarUDFImpl for SqlMacro {
 #[cfg(test)]
 mod tests {
 
-    use crate::sql::{complete, Catalog, CompletionKind};
+    use crate::sql::{complete, CompletionKind, Symbols};
     use crate::{Engine, RunOutcome, RunRows, RunTag, StatementReport, StoreEffect, WsId};
 
     /// Run one statement and take its report — anything else is a test asking the wrong question.
@@ -671,7 +672,7 @@ mod tests {
     /// What completion offers for `prefix`, through the language service's own snapshot of the
     /// engine — which is the thing the editor rebuilds on a catalog epoch, not the registry.
     fn offered(eng: &Engine, prefix: &str) -> Vec<(String, String)> {
-        let catalog = Catalog::build([], [], eng.lang().bundle(), "generic".into());
+        let catalog = Symbols::build([], [], eng.lang().bundle(), "generic".into());
         complete(&catalog, prefix, prefix.len(), false)
             .into_iter()
             .filter(|c| c.kind == CompletionKind::Function)
@@ -722,7 +723,7 @@ mod tests {
         );
 
         let dropped = |eng: &Engine| {
-            let catalog = Catalog::build([], [], eng.lang().bundle(), "generic".into());
+            let catalog = Symbols::build([], [], eng.lang().bundle(), "generic".into());
             complete(&catalog, "DROP FUNCTION ", 14, false)
                 .into_iter()
                 .map(|c| c.label)
@@ -994,7 +995,7 @@ mod tests {
 
     /// **A created function is known to the diagnostics pass too, not only to completion.**
     /// Those are two different readers of the swap: completion resolves against the language
-    /// service's `Catalog` snapshot, while `Lang::analyze` dry-plans against the live
+    /// service's `Symbols` snapshot, while `Lang::analyze` dry-plans against the live
     /// `SessionContext` and takes the catalog by handle for its lexical lints. A squiggle left
     /// under a call the very same buffer can Run is the disagreement the epoch bump exists to
     /// prevent, and it is worth pinning from this end because the app-side wiring

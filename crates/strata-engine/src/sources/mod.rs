@@ -56,10 +56,10 @@ use self::source::{
     ConnectRefusal, Listing, Registrants, Relation, ServerIdent, SourceCatalog, SourceInfo,
     SourceMode, Sourced,
 };
+use super::catalog_providers::{deregister_catalog, is_store_catalog, StoreCatalogProvider};
 use super::connect::{self, Registration};
-use super::fold_ident;
-use super::providers::{deregister_catalog, is_store_catalog, StoreCatalogProvider};
 use super::secrets::{SecretProvider, SecretRequest};
+use crate::ident::fold_ident;
 use crate::policy::{Locality, TargetFacts};
 use crate::statements::Remote;
 use crate::{CatalogGen, Ledger, RegStatus};
@@ -278,7 +278,7 @@ impl Live {
     /// Keyed by the **catalog name** rather than the data source's, because that is what a
     /// statement wrote and what the session's catalog list resolved; folded on both sides, since
     /// a catalog name is
-    /// an unquoted identifier ([`StrataCatalogList`](crate::providers::StrataCatalogList)).
+    /// an unquoted identifier ([`StrataCatalogList`](crate::catalog_providers::StrataCatalogList)).
     fn at(&self, catalog: &str) -> Option<Connected> {
         let folded = fold_ident(catalog);
         let held = self.0.lock().unwrap();
@@ -1408,6 +1408,140 @@ mod dependents_tests {
         assert!(
             engine.sources().dependents("lake").views.is_empty(),
             "the view is gone, and so is what it read"
+        );
+    }
+}
+
+/// **The shell's own decisions**, which are the ones nothing else can pin.
+///
+/// The rest of this module is exercised end to end elsewhere and deliberately not restated here:
+/// the connect/enumerate/read/forget round trip runs against the two fake sources in
+/// [`fake`]'s tests, the catalog registration and its generation in `lib.rs`'s
+/// `remote_catalog_tests`, and everything a live server decides — pushdown, the write statements,
+/// the JSON family, a relist — in the Postgres and MySQL container suites, which are the behavior
+/// oracle for this layer.
+///
+/// What is left over is the scoping, the URL composition and the three lookups that must fail
+/// closed on a catalog no source registered.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sources::fake::{fake_def, TestSql};
+    use crate::sources::source::SourceKind;
+    use crate::Engine;
+
+    fn listing(schemas: &[(&str, &[&str])]) -> Listing {
+        Listing::of(schemas.iter().flat_map(|(schema, relations)| {
+            relations.iter().map(move |name| {
+                (
+                    (*schema).to_string(),
+                    Relation {
+                        name: (*name).to_string(),
+                        view: false,
+                    },
+                )
+            })
+        }))
+    }
+
+    fn asking(schemas: &[&str]) -> SourceDef {
+        SourceDef {
+            schemas: schemas.iter().map(|s| (*s).to_string()).collect(),
+            ..fake_def::<TestSql>("sales", "server")
+        }
+    }
+
+    /// A def's namespaces are matched the way SQL matches them, so `Public` and `public` are one
+    /// ask.
+    #[test]
+    fn the_shown_set_folds_the_defs_own_spelling() {
+        assert_eq!(
+            shown_of(&asking(&["Public", "Sales"])),
+            BTreeSet::from(["public".to_string(), "sales".to_string()])
+        );
+    }
+
+    /// **Three states, one list.** A namespace the def asks for shows its relations; one the
+    /// server has and the def does not ask for is listed empty rather than dropped, so a picker
+    /// can offer it; one the def asks for and the server does not have says so rather than
+    /// vanishing, which is the only way a typo in the schema list is visible.
+    #[test]
+    fn a_scoped_listing_tags_every_namespace_and_sorts_by_name() {
+        let views = scoped(
+            &listing(&[("public", &["orders"]), ("staging", &["scratch"])]),
+            &asking(&["public", "archive"]),
+        );
+        let tagged: Vec<(&str, SchemaVisibility, usize)> = views
+            .iter()
+            .map(|v| (v.name.as_str(), v.visibility, v.relations.len()))
+            .collect();
+        assert_eq!(
+            tagged,
+            vec![
+                ("archive", SchemaVisibility::EnabledButMissing, 0),
+                ("public", SchemaVisibility::Live, 1),
+                ("staging", SchemaVisibility::NotEnabled, 0),
+            ]
+        );
+    }
+
+    /// A source whose relations are addressed by name reads no files, so there is no
+    /// `scheme://authority` to register an object store under.
+    #[test]
+    fn a_source_that_reads_no_files_composes_no_object_store_url() {
+        let mut registrants = Registrants::default();
+        registrants.insert(TestSql::default());
+        assert_eq!(
+            registration_url(&registrants, &fake_def::<TestSql>("sales", "server")),
+            None
+        );
+    }
+
+    /// **Fails closed by construction.** A catalog no live source registered is not writable, has
+    /// no facts a [`RemoteScope::Only`](crate::RemoteScope::Only) could match, and spells an
+    /// identifier the standard way rather than composing a statement from a rule nobody stated.
+    #[test]
+    fn a_catalog_no_source_registered_answers_the_closed_way() {
+        let live = Live::default();
+        assert!(!writable(&live, "sales"));
+        assert_eq!(
+            source_facts(&live, "sales"),
+            TargetFacts {
+                locality: Locality::Remote,
+                kind: None,
+                source: None,
+            }
+        );
+        assert_eq!(
+            server_ident(&live, "sales", "orders").as_str(),
+            "\"orders\""
+        );
+    }
+
+    /// A live catalog answers with its backend kind, the name its user gave it, and — because it
+    /// is the source's rule and not ours — that source's own identifier spelling.
+    #[tokio::test]
+    async fn a_live_catalog_answers_its_kind_its_name_and_its_sources_own_spelling() {
+        let engine = Engine::builder()
+            .with_source(TestSql::holding("server", &["orders"]))
+            .build();
+        engine
+            .sources()
+            .connect(fake_def::<TestSql>("sales", "server"))
+            .await
+            .expect("the fixture connects");
+
+        assert_eq!(
+            source_facts(&engine.live, "sales"),
+            TargetFacts::remote(TestSql::NAME, "sales")
+        );
+        assert!(
+            !writable(&engine.live, "sales"),
+            "a def says nothing about writes, so it is read-only"
+        );
+        assert_eq!(
+            server_ident(&engine.live, "sales", "orders").as_str(),
+            "\"orders\""
         );
     }
 }

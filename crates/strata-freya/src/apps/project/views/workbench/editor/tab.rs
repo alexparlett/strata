@@ -30,7 +30,7 @@ use strata_model::TabId;
 /// listeners, and keeps the buffer's rebindable undo/redo chords (`EditBindings`) synced
 /// from the settings so the text layer matches whatever the user bound.
 ///
-/// It also **holds the completion snapshot**: one `sql::Catalog::build` off the store's rows and
+/// It also **holds the completion snapshot**: one `sql::Symbols::build` off the store's rows and
 /// the engine's `lang().bundle()`, re-assembled by a side effect keyed on the catalog generation
 /// and nothing else. That snapshot is what makes `sql::complete` engine-free on the keystroke
 /// path — see `docs/COMPLETION_SPEC.md` §8.
@@ -85,14 +85,14 @@ impl Component for EditorTab {
         let engine = use_consume::<EngineCtx>();
         let project = use_radio_station::<ProjectState, ProjChan>();
         let generation = use_catalog();
-        let mut catalog = use_state(sql::Catalog::default);
+        let mut catalog = use_state(sql::Symbols::default);
         {
             use_side_effect(move || {
                 let p = project.read();
                 let _ = generation.read();
                 let dialect =
                     effective(&settings.read().settings.engine, DIALECT_KEY).unwrap_or_default();
-                *catalog.write() = sql::Catalog::build(
+                *catalog.write() = sql::Symbols::build(
                     p.tables.iter().map(|t| {
                         (
                             t.def.name.as_str(),

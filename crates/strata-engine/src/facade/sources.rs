@@ -8,11 +8,12 @@ use strata_arrow::column_info;
 use strata_model::SourceDef;
 
 use crate::catalog;
+use crate::ident::fold_ident;
 use crate::sources::source::SourceInfo;
 use crate::sources::store::s3;
 use crate::sources::{self, RemoteRelation, SchemaVisibility, SourceDetail, SourcesSnapshot};
 use crate::sql::{DatabaseSym, RelationSym, SchemaSym};
-use crate::{fold_ident, CatalogGen, Dependents, Engine, EngineError, RegStatus, CATALOG};
+use crate::{CatalogGen, Dependents, Engine, EngineError, RegStatus, CATALOG};
 
 /// This engine's data sources, from [`Engine::sources`].
 ///

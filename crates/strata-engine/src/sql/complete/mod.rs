@@ -15,8 +15,8 @@ use std::ops::Range;
 
 use datafusion::sql::sqlparser::keywords::ALL_KEYWORDS;
 
-use crate::fold_ident;
 use crate::formats::OptionKind;
+use crate::ident::fold_ident;
 use crate::sql::context::{
     analyze_caret, function_arguments, refine_statement_clause, statement_tokens, CaretAnalysis,
     Clause, ColumnList, Context, ListSource, Role,
@@ -25,7 +25,7 @@ use crate::sql::lex::{
     caret_extends_numeric_literal, caret_in_string_or_comment, lex, literal_at, TokKind,
 };
 use crate::sql::name::SessionName;
-use crate::sql::symbols::{Catalog, DatabaseSym, PreparedSym, RelationSym, SchemaSym, TableSym};
+use crate::sql::symbols::{DatabaseSym, PreparedSym, RelationSym, SchemaSym, Symbols, TableSym};
 use crate::sql::FunctionSym;
 use crate::statements::arms::refuse_reserved_key;
 use strata_arrow::config::{key_def, Kind as KeyKind, ENGINE_KEYS};
@@ -75,7 +75,7 @@ pub struct Completion {
 ///
 /// `manual` marks an explicit trigger (⌃/⌘Space) — it widens the offer by lifting the
 /// obscure-keyword tail gate (an explicit ask deserves the full vocabulary).
-pub(crate) fn offer(catalog: &Catalog, sql: &str, caret: usize, manual: bool) -> Vec<Completion> {
+pub(crate) fn offer(catalog: &Symbols, sql: &str, caret: usize, manual: bool) -> Vec<Completion> {
     if caret_in_string_or_comment(sql, caret) {
         return options_literal_completions(sql, caret, catalog, manual).unwrap_or_default();
     }
@@ -213,7 +213,7 @@ pub(crate) fn offer(catalog: &Catalog, sql: &str, caret: usize, manual: bool) ->
 /// dishonest.
 fn push_list_columns(
     pool: &mut Pool,
-    catalog: &Catalog,
+    catalog: &Symbols,
     list: &ColumnList,
     replace: &Range<usize>,
     internal_only: bool,
@@ -264,7 +264,7 @@ fn push_list_columns(
 fn push_relation_targets(
     pool: &mut Pool,
     ca: &CaretAnalysis,
-    catalog: &Catalog,
+    catalog: &Symbols,
     replace: &Range<usize>,
 ) {
     let refs = &ca.projection;
@@ -303,7 +303,7 @@ fn push_relation_targets(
 /// written into the ranking.
 fn push_remote_relations(
     pool: &mut Pool,
-    catalog: &Catalog,
+    catalog: &Symbols,
     replace: &Range<usize>,
     offered: impl Fn(&DatabaseSym) -> bool,
 ) {
@@ -345,7 +345,7 @@ fn push_remote_relations(
 /// connected database, and an `UPDATE`/`DELETE` only the latter (a workspace relation is refused
 /// by the arm, and offering one would bait the user into a statement already decided against).
 /// A read-only connection is offered at neither, for the same reason.
-fn push_write_targets(pool: &mut Pool, catalog: &Catalog, replace: &Range<usize>, internal: bool) {
+fn push_write_targets(pool: &mut Pool, catalog: &Symbols, replace: &Range<usize>, internal: bool) {
     if internal {
         for t in catalog.tables.iter().filter(|t| t.internal && !t.is_view) {
             pool.push(&t.name, T_PRIMARY, || table_item(t, replace));
@@ -360,7 +360,7 @@ fn push_write_targets(pool: &mut Pool, catalog: &Catalog, replace: &Range<usize>
 ///
 /// Built once per offer rather than asked per relation, which would be quadratic in the size of a
 /// database on every keystroke the popup is open.
-fn shared_names(catalog: &Catalog) -> HashSet<String> {
+fn shared_names(catalog: &Symbols) -> HashSet<String> {
     let mut seen: HashMap<String, usize> = HashMap::new();
     let names = catalog
         .tables
@@ -436,7 +436,7 @@ fn remote_relation_item(
 fn push_dot_items(
     pool: &mut Pool,
     ca: &CaretAnalysis,
-    catalog: &Catalog,
+    catalog: &Symbols,
     chain: &[String],
     replace: &Range<usize>,
 ) {
@@ -474,7 +474,7 @@ fn push_dot_items(
 fn push_dot_columns(
     pool: &mut Pool,
     ca: &CaretAnalysis,
-    catalog: &Catalog,
+    catalog: &Symbols,
     rel: &str,
     replace: &Range<usize>,
 ) {
@@ -522,7 +522,7 @@ const FALLBACK_COLUMN_CAP: usize = 2048;
 fn push_scope_columns(
     pool: &mut Pool,
     ca: &CaretAnalysis,
-    catalog: &Catalog,
+    catalog: &Symbols,
     replace: &Range<usize>,
 ) {
     let affinity = comparand_kind(ca, catalog);
@@ -693,7 +693,7 @@ fn push_value_words(pool: &mut Pool, values: &[&str], replace: &Range<usize>) {
 fn options_literal_completions(
     sql: &str,
     caret: usize,
-    catalog: &Catalog,
+    catalog: &Symbols,
     manual: bool,
 ) -> Option<Vec<Completion>> {
     let (open, close) = literal_at(sql, caret)?;

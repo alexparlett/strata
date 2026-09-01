@@ -1,8 +1,12 @@
-//! The contract every [`SnapshotStore`] is held to, run against each shipped store.
+//! The contract every [`SnapshotStore`] is held to, as a body any implementation can be run
+//! through.
 //!
-//! One body, two callers: a seam with a single implementation is a seam only by intention, and
-//! this is what stops the trait's law from quietly becoming whatever
-//! [`LocalIpcSnapshotStore`](super::LocalIpcSnapshotStore) happens to do.
+//! One body, three callers: the two shipped stores, and whatever an embedder wrote. A seam with a
+//! single implementation is a seam only by intention, and this is what stops the trait's law from
+//! quietly becoming whatever [`LocalIpcSnapshotStore`](super::LocalIpcSnapshotStore) happens to do.
+//!
+//! Available to embedders under the `testing` cargo feature — see
+//! [`guide::storage`](crate::guide::storage).
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
@@ -16,8 +20,30 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef, UnionFiel
 use datafusion::arrow::record_batch::RecordBatch;
 use strata_model::SnapshotId;
 
-use super::{snapshot_name, LocalIpcSnapshotStore, MemSnapshotStore, SnapshotStore};
+use super::{snapshot_name, SnapshotStore};
 use crate::builder::test_context;
+
+/// Runs `store` through the whole contract, panicking on the first clause it does not keep.
+///
+/// `store` has to be empty: the body settles snapshots of its own and then asserts what a purge
+/// leaves, so anything already held would be swept.
+///
+/// # Examples
+///
+/// ```
+/// # use strata_engine::snapshots::MemSnapshotStore;
+/// # async fn check() {
+/// strata_engine::testing::snapshots::conforms(&MemSnapshotStore::new()).await;
+/// # }
+/// ```
+///
+/// # Panics
+///
+/// On any clause the store does not keep.
+pub async fn conforms(store: &dyn SnapshotStore) {
+    the_contract(store).await;
+    purge_keeps_only_the_live(store).await;
+}
 
 /// A result with a union column in it — the type parquet cannot write at all, and so the one
 /// that says whether a store keeps a result's type or a coerced picture of it.
@@ -204,42 +230,48 @@ async fn purge_keeps_only_the_live(store: &dyn SnapshotStore) {
     assert!(store.open(&ctx, SnapshotId(2)).await.is_err());
 }
 
-/// A store rooted in a scratch directory, so the suite never writes into the machine-shared root.
-fn local() -> LocalIpcSnapshotStore {
-    let mut root = std::env::temp_dir();
-    root.push(format!("strata_conformance_{}", std::process::id()));
-    LocalIpcSnapshotStore::new_in(root)
-}
+#[cfg(test)]
+mod tests {
+    use super::super::{LocalIpcSnapshotStore, MemSnapshotStore};
+    use super::*;
 
-#[tokio::test]
-async fn local_ipc_keeps_the_contract() {
-    let store = local();
-    the_contract(&store).await;
-    store.purge_orphans(&HashSet::new());
-}
+    /// A store rooted in a scratch directory, so the suite never writes into the machine-shared root.
+    fn local() -> LocalIpcSnapshotStore {
+        let mut root = std::env::temp_dir();
+        root.push(format!("strata_conformance_{}", std::process::id()));
+        LocalIpcSnapshotStore::new_in(root)
+    }
 
-#[tokio::test]
-async fn mem_keeps_the_contract() {
-    the_contract(&MemSnapshotStore::new()).await;
-}
+    #[tokio::test]
+    async fn local_ipc_keeps_the_contract() {
+        let store = local();
+        the_contract(&store).await;
+        store.purge_orphans(&HashSet::new());
+    }
 
-#[tokio::test]
-async fn local_ipc_purges_only_orphans() {
-    let store = local();
-    purge_keeps_only_the_live(&store).await;
-}
+    #[tokio::test]
+    async fn mem_keeps_the_contract() {
+        the_contract(&MemSnapshotStore::new()).await;
+    }
 
-#[tokio::test]
-async fn mem_purges_only_orphans() {
-    purge_keeps_only_the_live(&MemSnapshotStore::new()).await;
-}
+    #[tokio::test]
+    async fn local_ipc_purges_only_orphans() {
+        let store = local();
+        purge_keeps_only_the_live(&store).await;
+    }
 
-/// The union column is what makes the fidelity claim testable, so it must genuinely be one:
-/// a store that silently coerced it would pass every other assertion above.
-#[test]
-fn the_fixture_carries_a_union() {
-    assert!(matches!(
-        result_schema().field(1).data_type(),
-        DataType::Union(_, UnionMode::Sparse)
-    ));
+    #[tokio::test]
+    async fn mem_purges_only_orphans() {
+        purge_keeps_only_the_live(&MemSnapshotStore::new()).await;
+    }
+
+    /// The union column is what makes the fidelity claim testable, so it must genuinely be one:
+    /// a store that silently coerced it would pass every other assertion above.
+    #[test]
+    fn the_fixture_carries_a_union() {
+        assert!(matches!(
+            result_schema().field(1).data_type(),
+            DataType::Union(_, UnionMode::Sparse)
+        ));
+    }
 }

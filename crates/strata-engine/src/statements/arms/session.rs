@@ -189,7 +189,7 @@ pub async fn reset(
 /// *Settings store* rather than from the session cannot have a session value, or the two answer
 /// differently about the same buffer. `datafusion.format.*` is the grid formatter and the chart
 /// read's cache identity; `datafusion.sql_parser.dialect` is the language service, which carries
-/// it on its own `Catalog` snapshot because a completion pass reached from a keystroke has no
+/// it on its own `Symbols` snapshot because a completion pass reached from a keystroke has no
 /// engine to ask — while the planner and the validator read it live. A session value there leaves
 /// the editor lexing the buffer by rules the planner has stopped using.
 ///
@@ -314,7 +314,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::{DIALECT, DISPLAY, OWNED, RESTART};
-    use crate::sql::{complete, Catalog, CompletionKind};
+    use crate::sql::{complete, CompletionKind, Symbols};
     use crate::statements::Fault;
     use crate::{
         Engine, RunOutcome, RunRows, RunTag, StatementReport, StoreEffect, WsId, CATALOG, SCHEMA,
@@ -513,7 +513,7 @@ mod tests {
     /// a native `SET` does.
     ///
     /// The dialect is here for the same reason `format.*` is, and it is the one that bites
-    /// silently: the language service carries the dialect on its own `Catalog` snapshot, built
+    /// silently: the language service carries the dialect on its own `Symbols` snapshot, built
     /// from the **Settings** store, while the validator and the planner read it **live** — so a
     /// session value leaves completion lexing the buffer by rules the planner has already stopped
     /// using. Nothing fails; the two layers just quietly disagree.
@@ -704,7 +704,7 @@ mod tests {
         statement(&eng, "PREPARE spend(INT) AS SELECT $1 AS n")
             .await
             .expect("prepared");
-        let catalog = |eng: &Engine| Catalog::build([], [], eng.lang().bundle(), "generic".into());
+        let catalog = |eng: &Engine| Symbols::build([], [], eng.lang().bundle(), "generic".into());
 
         let cat = catalog(&eng);
         for sql in ["EXECUTE ", "DEALLOCATE ", "DEALLOCATE PREPARE "] {

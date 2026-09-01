@@ -46,7 +46,7 @@ struct Registry {
     /// snapshot on every catalog epoch, and deep-copying ~1000 symbols per rebuild is the one
     /// thing that would make that pass felt.
     catalog: Arc<FunctionCatalog>,
-    /// [`fold_ident`](crate::fold_ident)ed names of the functions this session created.
+    /// [`fold_ident`](crate::ident::fold_ident)ed names of the functions this session created.
     created: BTreeSet<String>,
 }
 

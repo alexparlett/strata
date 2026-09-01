@@ -20,8 +20,9 @@ use std::path::Path;
 
 use strata_core::project::{relativize, resolve_source};
 use strata_core::util::one_char;
+use strata_engine::duplicate_column;
+use strata_engine::ident::fold_ident;
 use strata_engine::sql::ResultColumn;
-use strata_engine::{duplicate_column, fold_ident};
 use strata_model::{
     CsvRead, FileCompression, JsonRead, JsonShape, SourceDef, SourceFormat, TableDef, TableOrigin,
 };

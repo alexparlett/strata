@@ -3,7 +3,8 @@
 //!
 //! This crate is the workspace's **one DataFusion boundary**: nothing else names DataFusion
 //! (`strata-freya` carries a dev-dependency so a test can build a fixture, and that is all). It
-//! sits on [`strata_arrow`], whose Arrow-level vocabulary it hands back — [`RecordBatch`],
+//! sits on [`strata_arrow`], whose Arrow-level vocabulary it hands back —
+//! [`RecordBatch`](strata_arrow::RecordBatch),
 //! [`column_info`](strata_arrow::column_info), the [`plan`](strata_arrow::plan) model an EXPLAIN
 //! is read into — and on `strata-core`, whose services it reads: `util`, `project` and `secret`.
 //! Neither points back.
@@ -11,6 +12,10 @@
 //! Beside the facade live [`sql`] (the language service: validation, completion, symbols),
 //! [`profile`] (a catalog entry's column statistics) and [`register`] (the project registration
 //! pass: connect, register tables, create views).
+//!
+//! **Embedding this crate? Start at [`guide::embedding`]** — build an engine, give it a catalog,
+//! run a statement, read what it settled. [`guide`] indexes the rest: reading JSON stock
+//! DataFusion refuses, writing a [`DataSource`](sources::source::DataSource), writing a store.
 //!
 //! [`Engine`] holds the `SessionContext` plus a private multi-thread Tokio runtime: every call
 //! spawns its work onto that runtime and awaits the `JoinHandle`, which is executor-agnostic — so
@@ -36,9 +41,11 @@ pub mod arrow_stats;
 mod boundaries;
 pub mod builder;
 mod catalog;
+mod catalog_providers;
 mod chart;
 /// The all-or-nothing contract a data source registers under, shared by [`store`] and [`sources`].
 mod connect;
+mod dependencies;
 mod error;
 mod explain;
 pub mod export;
@@ -47,16 +54,20 @@ pub mod formats;
 mod functions;
 mod generation;
 pub mod guide;
+pub mod ident;
 mod ipc;
 pub mod json_poly;
+mod ledger;
+mod lifecycle;
+mod outcome;
 pub mod policy;
 pub mod profile;
-mod providers;
 mod query;
 pub mod register;
 pub mod secrets;
 mod sink;
 pub mod snapshots;
+mod source_defs;
 pub mod sources;
 pub mod sql;
 pub mod statements;
@@ -67,9 +78,13 @@ pub mod udf_package;
 pub mod udfs;
 
 pub use catalog::{TableMeta, TableSpec, ViewMeta};
+pub use dependencies::{Dependencies, Dependents};
 pub use error::{EngineError, StopReason};
 pub use facade::{Catalog, Lang, SnapshotReads, Sources, Work, Workspace};
 pub use generation::CatalogGen;
+pub use ledger::{Answers, Ledger, RegStatus, Registration, Registrations};
+pub use lifecycle::SnapshotPin;
+pub use outcome::{ConfigOutcome, RunOutcome, RunRows, SnapshotPage};
 pub use policy::{
     Admit, Capability, CapabilityPolicyProvider, DenyCode, Grant, GrantFamily, Grants, Locality,
     PolicyProvider, Principal, RemoteScope, RemoteSel, TargetFacts,
@@ -78,6 +93,7 @@ pub use query::ReadPolicy;
 pub use snapshots::{
     LocalIpcSnapshotStore, MemSnapshotStore, SnapshotSink, SnapshotStats, SnapshotStore,
 };
+pub use source_defs::SourceDefs;
 pub use sources::source::{
     ConnectFault, ConnectRefusal, DataSource, Field, Located, SourceCatalog, SourceInfo,
     SourceKind, SourceMode, SourceSetting, Sourced, When,
@@ -95,10 +111,10 @@ pub use udf_package::UdfPackage;
 
 use secrets::SecretProvider;
 
+use strata_arrow::config;
 use strata_arrow::config::{display_subset, DisplayStamp};
-use strata_arrow::{config, RecordBatch};
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 #[cfg(test)]
 use std::fs::File;
 use std::future::Future;
@@ -107,7 +123,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Instant;
 
-use datafusion::common::TableReference;
 use datafusion::execution::memory_pool::MemoryPool;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::{FunctionRegistry, SessionState, SessionStateBuilder};
@@ -116,18 +131,23 @@ use datafusion::prelude::*;
 use datafusion::sql::parser::Statement as DFStatement;
 use datafusion_federation::FederatedQueryPlanner;
 use tokio::runtime::Runtime;
-use tokio::task::AbortHandle;
 
+use catalog_providers::{StrataCatalogList, StrataCatalogProvider};
+use dependencies::Scans;
 use formats::Formats;
 use functions::Functions;
 use generation::GenClock;
-use providers::{StrataCatalogList, StrataCatalogProvider};
+use ident::fold_ident;
+use lifecycle::{
+    BackgroundGuard, ClassifyGuard, Classifying, DispatchGuard, ExportHold, InFlight, Lifecycle,
+    ProfileRun,
+};
 use query::{run_and_snapshot, CellFormat};
 use snapshots::snapshot_name;
 use sources::source::Registrants as SourceRegistry;
 use sources::Live;
 use statements::arms::StrataFunctionFactory;
-use strata_model::{Cell, QueryOutput, SnapshotId, SourceDef, TabId};
+use strata_model::{SnapshotId, TabId};
 
 /// A workspace's stable identity — the query tab that owns a run and its current
 /// snapshot (`docs/SNAPSHOT_SPEC.md` §4). Wide enough that a frontend passes its
@@ -153,252 +173,6 @@ impl From<TabId> for WsId {
 /// this — see [`Workspace::query`].
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct RunTag(pub u128);
-
-/// A settled query: the snapshot handle with page 1, that page still typed, and the display
-/// config its cells were rendered under.
-///
-/// `output` holds the rows as display cells; `batch` holds the same rows typed, for a caller
-/// that copies or exports them rather than showing them.
-///
-/// `display` is reported rather than asked for. A run renders under the config the engine is
-/// running with when it is dispatched, so a caller showing these rows compares this against the
-/// config it holds now to tell whether they still render the way a fresh read would.
-#[derive(Debug)]
-pub struct RunRows {
-    /// Page 1 as display cells, with the snapshot handle and the run's own figures.
-    pub output: QueryOutput,
-    /// The same rows, still typed.
-    pub batch: RecordBatch,
-    /// The display config the cells were rendered under.
-    pub display: DisplayStamp,
-}
-
-/// One page of a settled snapshot: the cells, and the same rows still typed.
-///
-/// [`RunRows`]'s shape, for a page after the first.
-#[derive(Debug)]
-pub struct SnapshotPage {
-    /// The page as display cells.
-    pub rows: Vec<Vec<Cell>>,
-    /// The same rows, still typed.
-    pub batch: RecordBatch,
-}
-
-/// Whether a config change took effect, or is waiting on a restart.
-///
-/// A `datafusion.runtime.*` key configures the `RuntimeEnv`, which is fixed when the engine is
-/// built, so it is recorded rather than applied and the caller owes the user a restart.
-#[must_use]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ConfigOutcome {
-    /// Every changed key is live on the session.
-    Applied,
-    /// At least one changed key needs a new engine to take effect.
-    RestartOwed,
-}
-
-/// What a **Run** settled to ([`Workspace::run`]) — the two things a press can produce.
-///
-/// The split is the router's, not a mode the caller picks: a Run is one press, and whether it
-/// produces rows or performs a statement is a property of what was typed.
-pub enum RunOutcome {
-    /// Exactly [`Workspace::query`]'s answer — the snapshot handle + page 1. Byte-for-byte the
-    /// path that shipped: same supersede, same retire-on-dispatch, same pins.
-    Rows(RunRows),
-    /// An intercepted statement's report. **No snapshot**, and none retired: a tab that
-    /// creates a table can still page the result it already had
-    /// (`docs/SNAPSHOT_SPEC.md` §4 — DDL does not retire snapshots).
-    Statement(StatementReport),
-}
-
-/// An in-flight **profile scan**: which dispatch it is, and the handle that cancels it.
-///
-/// Keyed by catalog entry rather than by workspace, because a profile belongs to the *data*:
-/// it is asked for from the catalog, cached per entry, and two tables profile concurrently.
-/// There is no snapshot — a scan materializes one aggregate row and returns it.
-struct ProfileRun {
-    /// Engine-unique, monotonic — the same "am I still the latest?" check [`InFlight`] uses,
-    /// for the same reason: a re-scan supersedes, and the superseded call must not tear down
-    /// the entry the newer one now owns.
-    dispatch: u64,
-    abort: AbortHandle,
-}
-
-/// A workspace's in-flight run or explain: which dispatch it is, the snapshot it is
-/// materializing (`None` for an explain), and the abort handle that cancels it.
-struct InFlight {
-    /// Engine-unique, monotonic — the identity every "am I still the latest run?" check
-    /// compares. A [`RunTag`] can't do that job: it is the caller's nonce, and a repeat
-    /// dispatch of the same tag would make the superseded call mistake the *new* entry
-    /// for its own and tear down state it doesn't own.
-    dispatch: u64,
-    /// The caller's nonce, kept for exactly one thing: [`Workspace::cancel`]'s guard.
-    tag: RunTag,
-    snapshot: Option<SnapshotId>,
-    abort: AbortHandle,
-    start: Instant,
-}
-
-/// A statement being **classified** — the window in front of dispatch.
-///
-/// Registered *without* superseding, which is the whole reason it is a second map rather than an
-/// `InFlight` with no snapshot: everywhere else registration **is** supersede
-/// ([`bookkeep`](Engine::bookkeep) aborts what the workspace was running before it registers), and
-/// a Run press must not destroy a scan that is minutes in before anyone knows the typed statement
-/// is even valid. So a classification is visible to [`Workspace::cancel`],
-/// [`Workspace::is_running`] and the close-while-running flag, and invisible to supersede.
-///
-/// It matters because classification can **await**: an embedder's [`PolicyProvider`] may be a
-/// service, and without this the whole of its round trip is a stretch in which a tab looks idle
-/// and Cancel does nothing.
-struct Classifying {
-    /// Engine-unique, monotonic — the same "am I still the latest?" identity [`InFlight`] uses.
-    /// A second `run` on the same workspace replaces the entry rather than aborting it, so the
-    /// first one's settle path has to know the entry is no longer its own.
-    dispatch: u64,
-    tag: RunTag,
-    abort: AbortHandle,
-    start: Instant,
-}
-
-/// Undoes a dispatch whose caller went away before it could settle.
-///
-/// A dispatch publishes its [`InFlight`] entry *before* awaiting the spawned work, so until
-/// the settle path runs the workspace looks busy. That was safe while every caller was
-/// freya-query, which by design never cancels an execution — but an agent's run is
-/// awaited inside an MCP request future, and a client cancellation, a dropped data source or
-/// the agent server shutting down all drop it mid-await. Without this the entry is never
-/// removed: [`publish_inflight`](Engine::publish_inflight) latches the window's in-flight flag
-/// on for the engine's life, so every later close, re-root and restart asks the T2 confirm
-/// about a query that finished long ago, `is_running` reports a phantom, and the snapshot the
-/// detached task materialized is never retired.
-///
-/// Armed for the await and [`disarm`](Self::disarm)ed by the settle path, so the ordinary
-/// route pays nothing. The drop repeats the settle path's own `latest` check for the reason
-/// that check exists: a superseded call must not tear down the entry a newer dispatch owns.
-struct DispatchGuard<'a> {
-    engine: &'a Engine,
-    ws: WsId,
-    dispatch: u64,
-    armed: bool,
-}
-
-impl<'a> DispatchGuard<'a> {
-    fn arm(engine: &'a Engine, ws: WsId, dispatch: u64) -> Self {
-        Self {
-            engine,
-            ws,
-            dispatch,
-            armed: true,
-        }
-    }
-
-    /// The dispatch settled on its own terms; leave the entry to the settle path.
-    fn disarm(&mut self) {
-        self.armed = false;
-    }
-}
-
-impl Drop for DispatchGuard<'_> {
-    fn drop(&mut self) {
-        if !self.armed {
-            return;
-        }
-        let Ok(mut lc) = self.engine.lifecycle.lock() else {
-            return;
-        };
-        if lc.inflight.get(&self.ws).map(|f| f.dispatch) != Some(self.dispatch) {
-            return;
-        }
-        if let Some(f) = lc.inflight.remove(&self.ws) {
-            self.engine.abort_inflight(f);
-        }
-        self.engine.publish_inflight(&lc);
-    }
-}
-
-/// Removes a classification whose caller went away before it settled — [`DispatchGuard`]'s job
-/// for the window in front of dispatch, and for the same reason: a latched entry keeps the
-/// in-flight flag on for the engine's life, so every later close asks about a statement nobody
-/// is classifying any more.
-struct ClassifyGuard<'a> {
-    engine: &'a Engine,
-    ws: WsId,
-    dispatch: u64,
-    armed: bool,
-}
-
-impl<'a> ClassifyGuard<'a> {
-    fn arm(engine: &'a Engine, ws: WsId, dispatch: u64) -> Self {
-        Self {
-            engine,
-            ws,
-            dispatch,
-            armed: true,
-        }
-    }
-
-    /// The classification settled on its own terms; leave the entry to `classify_bracket`.
-    fn disarm(&mut self) {
-        self.armed = false;
-    }
-}
-
-impl Drop for ClassifyGuard<'_> {
-    fn drop(&mut self) {
-        if !self.armed {
-            return;
-        }
-        let Ok(mut lc) = self.engine.lifecycle.lock() else {
-            return;
-        };
-        if lc.classifying.get(&self.ws).map(|c| c.dispatch) != Some(self.dispatch) {
-            return;
-        }
-        if let Some(c) = lc.classifying.remove(&self.ws) {
-            c.abort.abort();
-        }
-        self.engine.publish_inflight(&lc);
-    }
-}
-
-/// The engine's lifecycle bookkeeping, all under one lock (never held across an await):
-/// which run is in flight per workspace, which snapshot each workspace currently owns, and
-/// which catalog entries are being profiled.
-#[derive(Default)]
-struct Lifecycle {
-    inflight: HashMap<WsId, InFlight>,
-    /// Statements being classified — see [`Classifying`]. Read by `cancel`, `is_running` and
-    /// `publish_inflight` beside `inflight`, and by supersede by nobody.
-    classifying: HashMap<WsId, Classifying>,
-    current: HashMap<WsId, SnapshotId>,
-    /// In-flight profile scans by entry identity ([`fold_ident`] of the name — tables and
-    /// views share one namespace).
-    profiles: HashMap<String, ProfileRun>,
-    /// How many pieces of **background** work are in flight — an export writing a file, a
-    /// drop deleting a table's data. A **count, not a map**: nothing addresses one of
-    /// these — no cancel, no supersede, no per-item state to look up. All it has to do is keep
-    /// [`publish_inflight`](Engine::publish_inflight) true while something is half-done, so the
-    /// close-while-running confirm asks before the window takes the runtime away.
-    ///
-    /// Not per-kind, because the question every reader asks is the same one: is anything the
-    /// user would rather finish still going? A second counter would be a second answer to it.
-    background: usize,
-    /// Snapshots a caller is **holding open**, and how many holds each has
-    /// ([`SnapshotReads::pin`]). A pinned snapshot survives its workspace re-running.
-    pins: HashMap<SnapshotId, usize>,
-    /// Snapshots whose retire arrived while they were pinned. They are retired for real
-    /// when the last pin releases — deferred, never skipped, so nothing leaks.
-    deferred: HashSet<SnapshotId>,
-    /// What each live snapshot's write pass observed ([`SnapshotStats`]) — today the
-    /// exact per-column null counts a partitioned export has to check.
-    ///
-    /// Here rather than in the file because a snapshot never outlives its process, so this has
-    /// exactly its lifetime: inserted when it materializes, dropped when it retires. The Arrow
-    /// IPC snapshot carries no statistics of its own, and asking the file was never the point —
-    /// the write pass already streams every batch.
-    stats: HashMap<SnapshotId, SnapshotStats>,
-}
 
 /// A window's engine. Create once per project window (cheap to share as `Arc<Engine>`);
 /// dropping it aborts in-flight work and removes its snapshot directory.
@@ -578,610 +352,6 @@ impl InternalTables {
             true => set.insert(fold_ident(name)),
             false => set.remove(&fold_ident(name)),
         };
-    }
-}
-
-/// What each registered name reads: a table's data source, or a view's scans.
-///
-/// The [`InternalTables`] shape, with the same limits, and it answers one question —
-/// [`Sources::dependents`]. It is not a second catalog: what a host's row says about a name is
-/// the host's, and none of it is here.
-///
-/// Registration is a reconciliation, so this is too. Every funnel that registers a name notes
-/// what it reads and every funnel that takes one out forgets it, and [`sync`](register::sync)
-/// prunes to the names its `CatalogSpec` holds. That last step is what keeps a table whose
-/// registration **failed** answerable — it is noted from the spec, and no deregistration will
-/// ever report it — without its entry outliving the def.
-///
-/// Bounded by what the last pass established: a def no pass has reached is not here, and a view
-/// the engine could not create has no scans to record.
-#[derive(Clone, Debug, Default)]
-pub struct Dependencies(Arc<Mutex<BTreeMap<String, Scanned>>>);
-
-/// What a data source is holding up — [`Sources::dependents`]'s answer.
-///
-/// Two lists, because a caller counting them counts two different things. Both are alphabetical
-/// and name each thing once.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Dependents {
-    /// Workspace tables whose def reads its files through this data source. Always empty for a
-    /// data source that registers a **catalog**: no def can name one.
-    pub tables: Vec<String>,
-    /// The views left invalid — those over [`tables`](Self::tables) for an object store, and
-    /// those scanning its catalog for a source.
-    pub views: Vec<String>,
-}
-
-/// One registered name, in its own spelling, and what it reads.
-///
-/// The spelling is carried because the map is keyed by [`fold_ident`], names being matched the way
-/// SQL matches them, while a caller renders the name as it was written.
-#[derive(Clone, Debug)]
-struct Scanned {
-    name: String,
-    scans: Scans,
-}
-
-/// What one name reads. Two arms and no third: a saved query registers nothing.
-#[derive(Clone, Debug)]
-enum Scans {
-    /// A table, and the data source its files are read through — `None` over local files.
-    Table(Option<String>),
-    /// A view, and the two lists [`ViewMeta`] records: workspace scans bare, everything else
-    /// qualified whole.
-    View {
-        tables: Vec<String>,
-        remote: Vec<String>,
-    },
-}
-
-impl Dependencies {
-    /// The tables read through the data source called `name`, alphabetically.
-    ///
-    /// Case-insensitive, because a data source's name is a SQL identifier and
-    /// [`Sources::resolve`] answers that way — which is also what decides, one level down,
-    /// whether the table registered over that store at all.
-    fn over(&self, name: &str) -> Vec<String> {
-        self.named(|scans| match scans {
-            Scans::Table(Some(held)) => held.eq_ignore_ascii_case(name),
-            _ => false,
-        })
-    }
-
-    /// The views scanning any of `tables`, alphabetically and each named once.
-    ///
-    /// Flat rather than transitive on purpose, and still complete: DataFusion inlines a view it
-    /// reads, so a view over a view records the *base* tables of both.
-    fn above(&self, tables: &[String]) -> Vec<String> {
-        let wanted: BTreeSet<String> = tables.iter().map(|t| fold_ident(t)).collect();
-        self.named(|scans| match scans {
-            Scans::View { tables, .. } => tables.iter().any(|t| wanted.contains(&fold_ident(t))),
-            Scans::Table(_) => false,
-        })
-    }
-
-    /// The views scanning through the catalog `catalog`, alphabetically and each named once.
-    ///
-    /// Matched on the qualified name's **first part**, folded: that part is the catalog, which is
-    /// what [`ViewMeta`] keeps its two lists apart for.
-    fn reading(&self, catalog: &str) -> Vec<String> {
-        let wanted = fold_ident(catalog);
-        self.named(|scans| match scans {
-            Scans::View { remote, .. } => remote
-                .iter()
-                .filter_map(|dep| dep.split('.').next())
-                .any(|part| fold_ident(part) == wanted),
-            Scans::Table(_) => false,
-        })
-    }
-
-    /// Every held name whose scans `wanted` accepts, in its own spelling, alphabetically.
-    fn named(&self, wanted: impl Fn(&Scans) -> bool) -> Vec<String> {
-        let held = self.0.lock().unwrap();
-        let mut found: Vec<String> = held
-            .values()
-            .filter(|held| wanted(&held.scans))
-            .map(|held| held.name.clone())
-            .collect();
-        found.sort();
-        found
-    }
-
-    /// Record what registering `name` established about what it reads.
-    fn note(&self, name: &str, scans: Scans) {
-        self.0.lock().unwrap().insert(
-            fold_ident(name),
-            Scanned {
-                name: name.to_string(),
-                scans,
-            },
-        );
-    }
-
-    /// Forget `name` — every funnel that deregisters one.
-    fn forget(&self, name: &str) {
-        self.0.lock().unwrap().remove(&fold_ident(name));
-    }
-
-    /// Keep only the names `wanted` holds — [`sync`](register::sync)'s reconciliation, and the
-    /// only thing that can retire an entry no deregistration will ever report.
-    pub(crate) fn retain(&self, wanted: &BTreeSet<String>) {
-        self.0
-            .lock()
-            .unwrap()
-            .retain(|held, _| wanted.contains(held));
-    }
-}
-
-/// What the engine last answered for one def, and nothing about how it was asked.
-///
-/// Two arms, not three: a def the engine has not answered for is **absent** from the
-/// [`Ledger`], because "no answer yet" is a fact about the pass rather than about the def, and a
-/// third arm here would let a caller store one. What "not yet" looks like on screen is the
-/// scanning affordance the host already has.
-///
-/// The refusal is carried **whole** — a limit belongs to whichever surface has one, never to the
-/// string every other surface reads.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RegStatus {
-    /// It registered: a table resolves, a view plans, a data source's store or catalog is on the
-    /// session.
-    Ready,
-    /// The engine refused it. The def still exists; there is just nothing working behind it.
-    Failed {
-        /// Why, in the engine's own words.
-        reason: String,
-        /// The same refusal as a fact, where the thing that refused could tell — a **connect**'s
-        /// own facet ([`ConnectFault`]), and `None` for every registration that is not one.
-        ///
-        /// A table and a view register against the session and fail in the planner's words, which
-        /// nothing here is in a position to classify; a data source is a login, and a source that
-        /// reads its server's codes can say which credential was refused. Carried beside the
-        /// sentence rather than instead of it: the sentence is what every surface shows, and this
-        /// is what one surface points with.
-        fault: Option<ConnectFault>,
-    },
-}
-
-impl RegStatus {
-    /// A refusal with nothing to point at — the sentence alone.
-    pub fn failed(reason: impl Into<String>) -> RegStatus {
-        RegStatus::Failed {
-            reason: reason.into(),
-            fault: None,
-        }
-    }
-
-    /// What the engine answered for `result`, discarding the payload — which is what a
-    /// *status* is, and what registration **learned** is the answer's own.
-    fn of<T, E: ToString>(result: &Result<T, E>) -> RegStatus {
-        match result {
-            Ok(_) => RegStatus::Ready,
-            Err(e) => RegStatus::failed(e.to_string()),
-        }
-    }
-
-    /// What the engine answered for a **connect**, which is the one registration whose refusal
-    /// carries a facet.
-    ///
-    /// Its own constructor rather than a `ToString` through [`of`](Self::of): reading the sentence
-    /// back off `Display` would drop exactly the half this exists to keep.
-    fn of_connect<T>(result: &Result<T, ConnectRefusal>) -> RegStatus {
-        match result {
-            Ok(_) => RegStatus::Ready,
-            Err(refusal) => RegStatus::Failed {
-                reason: refusal.reason.clone(),
-                fault: refusal.fault,
-            },
-        }
-    }
-
-    /// Whether the def registered.
-    pub fn is_ready(&self) -> bool {
-        matches!(self, RegStatus::Ready)
-    }
-
-    /// The refusal, if this is one — a host's problem row, and the sentence a tooltip clips.
-    pub fn reason(&self) -> Option<&str> {
-        match self {
-            RegStatus::Failed { reason, .. } => Some(reason),
-            RegStatus::Ready => None,
-        }
-    }
-
-    /// The declared secret key whose value the server rejected, where the source said so.
-    ///
-    /// What the data source editor's row for that key keys on: the def expects a secret, this
-    /// machine holds one, and the last connect was turned away over it. `None` for every other
-    /// answer, including a failure this engine could not classify — an unrecognised refusal must
-    /// read as *unknown*, never as a wrong password.
-    pub fn rejected(&self) -> Option<&'static str> {
-        match self {
-            RegStatus::Failed {
-                fault: Some(ConnectFault::Rejected { key }),
-                ..
-            } => Some(key),
-            _ => None,
-        }
-    }
-}
-
-/// One def's entry in the [`Ledger`]: what the engine answered, and the generation it answered at.
-///
-/// The stamp is what makes a status readable as *this* answer rather than the one before it. A
-/// gesture that asks for a registration keeps the generation it asked at and waits for an entry
-/// stamped past it; without that, a re-save of a table that already registered reads its own
-/// previous `Ready` as the answer to the question it has only just asked.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Registration {
-    /// What the engine answered.
-    pub status: RegStatus,
-    /// The generation it answered at.
-    pub generation: CatalogGen,
-}
-
-/// **The registration ledger**: what this engine last answered for each def it was asked to
-/// register — data sources, tables and views alike.
-///
-/// Registration outcomes are the engine's own decisions, so the engine retains them and every
-/// embedder reads this one record rather than keeping its own. The [`InternalTables`] shape,
-/// with the same limits: every funnel that registers a name notes what it answered, every funnel
-/// that takes one out forgets it, and [`sync`](register::sync) prunes to the names its
-/// `CatalogSpec` holds — which is the only thing that can retire the entry of a def whose
-/// registration *failed*, since no deregistration will ever report one.
-///
-/// **Two namespaces, because two names can be the same word.** The workspace catalog holds
-/// tables and views in one namespace (a name is at most one of them), and a data source's name is
-/// the handle its user gave it — so a bucket called `events` and a table called `events` are
-/// different things, and one map keyed by name would land one answer on both.
-///
-/// It is not a second catalog. What a def *is* stays the host's (the store writes the defs);
-/// this says only what happened when the engine was asked to register one.
-#[derive(Clone, Debug, Default)]
-pub struct Ledger {
-    /// Tables and views, by [`fold_ident`]ed name.
-    workspace: Arc<Mutex<BTreeMap<String, Registration>>>,
-    /// Data sources, by [`fold_ident`]ed name.
-    sources: Arc<Mutex<BTreeMap<String, Registration>>>,
-}
-
-impl Ledger {
-    /// Record what registering the workspace def `name` answered.
-    fn note(&self, name: &str, status: RegStatus, generation: CatalogGen) {
-        note_in(&self.workspace, name, status, generation);
-    }
-
-    /// Forget the workspace def `name` — every funnel that deregisters one.
-    fn forget(&self, name: &str) {
-        self.workspace.lock().unwrap().remove(&fold_ident(name));
-    }
-
-    /// Record what connecting the data source `name` answered.
-    fn note_source(&self, name: &str, status: RegStatus, generation: CatalogGen) {
-        note_in(&self.sources, name, status, generation);
-    }
-
-    /// Forget the data source `name` — [`Sources::disconnect`].
-    fn forget_source(&self, name: &str) {
-        self.sources.lock().unwrap().remove(&fold_ident(name));
-    }
-
-    /// What the engine last answered for the data source `name`.
-    pub(crate) fn source(&self, name: &str) -> Option<Registration> {
-        self.sources.lock().unwrap().get(&fold_ident(name)).cloned()
-    }
-
-    /// Every answer this engine holds, both namespaces, taken under one read and stamped with
-    /// the generation the caller read for it — [`Catalog::registrations`].
-    fn registrations(&self, generation: CatalogGen) -> Registrations {
-        Registrations {
-            generation,
-            workspace: Answers(self.workspace.lock().unwrap().clone()),
-            sources: Answers(self.sources.lock().unwrap().clone()),
-        }
-    }
-
-    /// Keep only the defs `desired` names — [`sync`](register::sync)'s reconciliation, and the
-    /// only thing that retires the entry of a def whose registration failed.
-    pub(crate) fn retain(&self, workspace: &BTreeSet<String>, sources: &BTreeSet<String>) {
-        self.workspace
-            .lock()
-            .unwrap()
-            .retain(|held, _| workspace.contains(held));
-        self.sources
-            .lock()
-            .unwrap()
-            .retain(|held, _| sources.contains(held));
-    }
-}
-
-/// One [`Ledger`] map's write, folded so the two namespaces cannot disagree about how a name is
-/// keyed.
-fn note_in(
-    map: &Mutex<BTreeMap<String, Registration>>,
-    name: &str,
-    status: RegStatus,
-    generation: CatalogGen,
-) {
-    map.lock()
-        .unwrap()
-        .insert(fold_ident(name), Registration { status, generation });
-}
-
-/// What the engine last answered for every def it was asked to register, read as of one moment —
-/// [`Catalog::registrations`]'s answer, and the whole ledger.
-///
-/// Taken under one read and stamped with the [`generation`](Self::generation) it was taken at,
-/// for [`SourcesSnapshot`](sources::SourcesSnapshot)'s reason: a caller that asked per row would
-/// be describing a different instant per row. Key a derived answer on the generation and re-derive
-/// when [`Catalog::generation`] stops matching it.
-///
-/// The two namespaces are reached separately ([`workspace`](Self::workspace) /
-/// [`sources`](Self::sources)) because they are separate: a bucket called `events` and a table
-/// called `events` are different things.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Registrations {
-    /// The generation the ledger was read at.
-    pub generation: CatalogGen,
-    /// What the engine answered for the workspace catalog's tables and views.
-    pub workspace: Answers,
-    /// What the engine answered for the project's data sources.
-    pub sources: Answers,
-}
-
-/// One namespace of the ledger, as a caller reads it — see [`Registrations`].
-///
-/// Opaque, because the keys are [`fold_ident`]ed and a map handed out raw would be one a caller
-/// could put an unfolded name into.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Answers(BTreeMap<String, Registration>);
-
-impl Answers {
-    /// Answers a caller already holds, folded and stamped the way the ledger's own are.
-    ///
-    /// [`SourcesSnapshot`](sources::SourcesSnapshot)'s affordance, for its reason: what this
-    /// crate hands out is a **value**, and a consumer that can only ever receive one built by an
-    /// engine cannot be exercised against the states it draws.
-    pub fn recorded(
-        answers: impl IntoIterator<Item = (String, RegStatus)>,
-        generation: CatalogGen,
-    ) -> Answers {
-        Answers(
-            answers
-                .into_iter()
-                .map(|(name, status)| (fold_ident(&name), Registration { status, generation }))
-                .collect(),
-        )
-    }
-
-    /// What the engine last answered for `name`, or `None` for a def no pass has reached.
-    ///
-    /// One lookup for a table and a view, because they are one namespace: the workspace catalog
-    /// cannot hold a table and a view of the same name, so the kind adds nothing a caller does
-    /// not already know from the row it is drawing.
-    ///
-    /// Folded, because a name reaches this from a def (whatever the user typed) and from the
-    /// planner (which folds an unquoted identifier) alike.
-    pub fn of(&self, name: &str) -> Option<&Registration> {
-        self.0.get(&fold_ident(name))
-    }
-
-    /// What the engine last answered for `name`, without the generation it answered at.
-    pub fn status(&self, name: &str) -> Option<&RegStatus> {
-        self.of(name).map(|reg| &reg.status)
-    }
-
-    /// The refusal `name` last landed, if it landed one.
-    pub fn problem(&self, name: &str) -> Option<&str> {
-        self.of(name).and_then(|reg| reg.status.reason())
-    }
-
-    /// Whether `name` is registered right now.
-    pub fn is_ready(&self, name: &str) -> bool {
-        self.of(name).is_some_and(|reg| reg.status.is_ready())
-    }
-
-    /// Whether the engine has answered for `name` **since** `asked_at` — what a gesture that
-    /// asked for a registration waits on, so a def's previous answer is never read as this one.
-    ///
-    /// A re-save of a table that already registered is the case: its row carries `Ready` from
-    /// the pass before, and a caller that read the status alone would take that as the answer to
-    /// the question it has only just asked.
-    pub fn answered_since(&self, name: &str, asked_at: CatalogGen) -> Option<&RegStatus> {
-        self.of(name)
-            .filter(|reg| reg.generation > asked_at)
-            .map(|reg| &reg.status)
-    }
-}
-
-/// The data sources this engine has been told about: the last def handed to
-/// [`Sources::connect`] for each name, keyed by that name.
-///
-/// It answers two questions from the one map — may a typed `CREATE EXTERNAL TABLE` name this
-/// bucket, and what does this engine hold a data source for ([`Sources::listing`]). The def rather
-/// than the identity alone is what makes the second answerable without asking the host: an engine
-/// told about a data source can say what kind serves it and what it registers, live or not.
-///
-/// It is not a second copy of the catalog. What a host's row says about a data source — whether it
-/// is waiting, the sentence a failure left — is the host's, and nothing here records it.
-///
-/// **Membership, not connectivity.** [`Sources::connect`] notes the def whether what it describes
-/// went in or not, because a data source that cannot resolve a credential today is still a
-/// data source this project has: the def a statement writes is durable and the fix (`aws sso
-/// login`, a region typed into the editor, ↻) happens afterwards. Asking DataFusion's object-store
-/// registry instead would have answered *no* for exactly those, in a sentence — "not a data source
-/// in this project" — that would then be false. (What the *session* holds right now is a different
-/// question, and [`Sources::listing`] answers it as `live`.)
-///
-/// Rebuilt by the pass, like the origin set: the registration pass's first phase calls `connect` for
-/// every def, and [`Sources::disconnect`] — the Forget gesture and the edit that moves a
-/// data source's identity — is the one removal.
-#[derive(Clone, Debug, Default)]
-pub struct SourceDefs(Arc<Mutex<BTreeMap<String, SourceDef>>>);
-
-/// What a data source is *registered* as, for the one question `sync` asks of it: has this def
-/// moved where it went on the session?
-///
-/// `{kind}:{address}` — both halves, because the registration URL is composed from both
-/// ([`SourceKind::SCHEME`](crate::SourceKind::SCHEME) plus the address). It is **not** an
-/// identity in any other sense: what a data source *is* is its name, which the user writes and
-/// nothing derives (`SourceDef::named`).
-fn source_identity(def: &SourceDef) -> String {
-    format!("{}:{}", def.kind.trim(), def.setting("address"))
-}
-
-impl SourceDefs {
-    /// The data source `name` addresses, **in the data source's own spelling** — `None` when this
-    /// project has none.
-    ///
-    /// Answering with the stored string rather than a bool is what keeps a def's `data source`
-    /// field equal to the name everything else addresses it by: the store's picker, the table
-    /// spec's path composition and the Forget confirm all match on that exact string.
-    ///
-    /// The fallback compares **case-insensitively**, because a data source's name is a SQL
-    /// identifier and queries fold one. The exact hit is tried first so the ordinary case costs
-    /// one lookup.
-    pub fn resolve(&self, name: &str) -> Option<String> {
-        let held = self.0.lock().unwrap();
-        if held.contains_key(name) {
-            return Some(name.to_string());
-        }
-        held.keys()
-            .find(|held| held.eq_ignore_ascii_case(name))
-            .cloned()
-    }
-
-    /// The def this engine was last handed for the data source called `name`, matched the way
-    /// [`resolve`](Self::resolve) matches.
-    fn def(&self, name: &str) -> Option<SourceDef> {
-        let held = self.0.lock().unwrap();
-        held.get(name).cloned().or_else(|| {
-            held.iter()
-                .find(|(held, _)| held.eq_ignore_ascii_case(name))
-                .map(|(_, def)| def.clone())
-        })
-    }
-
-    /// Every data source this engine has been told about, in name order — what
-    /// [`Sources::listing`] walks.
-    ///
-    /// **Membership, not liveness**, exactly as the rest of this type is: a data source whose
-    /// credentials this machine cannot resolve today is still one the project has, and the
-    /// listing says so by answering `live: false` rather than by leaving it out.
-    fn all(&self) -> Vec<SourceDef> {
-        self.0.lock().unwrap().values().cloned().collect()
-    }
-
-    /// The data source whose `(kind, address)` is `identity` — for the one caller that arrives
-    /// with a written location rather than with a name: a typed `CREATE EXTERNAL TABLE … LOCATION
-    /// 's3://acme-lake/events/'`, which has to be matched against what the project holds.
-    pub fn named(&self, identity: &str) -> Option<String> {
-        self.0
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|(_, held)| held.named().eq_ignore_ascii_case(identity))
-            .map(|(name, _)| name.clone())
-    }
-
-    /// The data sources a set of defs describes, for a caller that holds defs rather than a live
-    /// engine.
-    ///
-    /// The registration pass composes its table specs **before** its first phase registers
-    /// anything, so at that moment no engine can answer what a table's data source is; the defs in
-    /// hand are the only thing that can. Building the same type from them rather than reading the
-    /// defs directly is what keeps one lookup rule — including the case-insensitive fallback,
-    /// which a hand-rolled `find` over the defs would quietly drop.
-    /// The `scheme://authority` the data source called `name` hangs its remote paths off, or
-    /// `None` for one that reads no files.
-    ///
-    /// The registry answers the scheme, because it is the *kind's*; this holds the def that names
-    /// the kind. Both halves are needed and neither has the other, which is why the composition
-    /// lives here rather than on either.
-    pub fn prefix(&self, registrants: &sources::source::Registrants, name: &str) -> Option<String> {
-        registrants.prefix(&self.def(name)?)
-    }
-
-    /// The data source a written `scheme://authority/…` reads through, by name.
-    ///
-    /// [`prefix`](Self::prefix) backwards, for the one caller that arrives with a URL rather than
-    /// with a data source — a typed `CREATE EXTERNAL TABLE … LOCATION 's3://acme-lake/events/'`,
-    /// which has to be matched against the project's own data sources. Matched by **prefix**
-    /// rather than by parsing the URL into a kind, because two kinds can share a scheme and only
-    /// the project's own defs say which bucket is which.
-    pub fn by_prefix(
-        &self,
-        registrants: &sources::source::Registrants,
-        url: &str,
-    ) -> Option<String> {
-        let url = url.trim_end_matches('/');
-        self.all().into_iter().find_map(|def| {
-            let prefix = registrants.prefix(&def)?;
-            let prefix = prefix.trim_end_matches('/');
-            url.eq_ignore_ascii_case(prefix).then(|| def.named())
-        })
-    }
-
-    /// The connections `defs` describes.
-    pub fn of(defs: &[SourceDef]) -> Self {
-        let held = Self::default();
-        for def in defs {
-            held.note(def);
-        }
-        held
-    }
-
-    /// Every data source this engine has been told about, as `(name, identity)` — what
-    /// [`sync`](crate::register::sync) diffs a desired set against.
-    ///
-    /// Both halves, because a def whose bucket or **kind** was edited keeps its name and changes
-    /// the URL its object store went in under: a diff by name alone leaves that URL registered
-    /// with nothing addressing it.
-    ///
-    /// The identity is [`source_identity`] — the pair, not the address alone, because the URL is
-    /// composed from both and an `s3` bucket re-pointed at `gcs` keeps its address while moving
-    /// where it registered.
-    pub(crate) fn held(&self) -> Vec<(String, String)> {
-        self.0
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|(name, def)| (name.clone(), source_identity(def)))
-            .collect()
-    }
-
-    /// Whether `def` would register somewhere other than where this engine currently holds it —
-    /// the one question [`sync`](crate::register::sync)'s diff asks about a name it is keeping.
-    ///
-    /// Both sides are computed here, and looked up through [`def`](Self::def) so the match folds
-    /// case: a name is a SQL identifier, and comparing the two halves any other way answers
-    /// "moved" for a source that has not, which costs every live source a teardown per pass.
-    ///
-    /// A name this engine holds nothing for has not moved: there is nothing to take back.
-    pub(crate) fn moved(&self, def: &SourceDef) -> bool {
-        self.def(&def.named())
-            .is_some_and(|held| source_identity(&held) != source_identity(def))
-    }
-
-    /// Hold `def` under its own spelling, replacing whatever this engine held for that name.
-    ///
-    /// Case-folded on the way in, so a source renamed `Lake` to `lake` replaces its entry rather
-    /// than sitting beside it: two entries for one source are what [`held`](Self::held) reports,
-    /// so the diff would carry a phantom name and a forget of one would leave the other
-    /// answering.
-    fn note(&self, def: &SourceDef) {
-        let name = def.named();
-        let mut held = self.0.lock().unwrap();
-        held.retain(|key, _| !key.eq_ignore_ascii_case(&name));
-        held.insert(name, def.clone());
-    }
-
-    /// Stop holding the data source called `name`, matched the way [`def`](Self::def) matches it.
-    fn forget(&self, name: &str) {
-        self.0
-            .lock()
-            .unwrap()
-            .retain(|key, _| !key.eq_ignore_ascii_case(name));
     }
 }
 
@@ -1767,106 +937,6 @@ impl Engine {
     }
 }
 
-/// One piece of **background** engine work in flight — an export writing a file, a drop
-/// deleting a table's data. Holding one is what keeps the close-while-running flag true
-/// (`Lifecycle::background`), so the window asks before it takes the runtime away.
-///
-/// A guard rather than a matching pair of statements because every holder **awaits**, and a
-/// dropped future must not be able to leak the count: a leaked increment would make every later
-/// window close claim work was running for the rest of the engine's life. Borrows the engine, so
-/// it cannot outlive the call.
-struct BackgroundGuard<'a> {
-    engine: &'a Engine,
-}
-
-impl<'a> BackgroundGuard<'a> {
-    /// Constructing the guard *is* the acquire, so there is no way to hold one without having
-    /// taken what it releases.
-    fn new(engine: &'a Engine) -> Self {
-        let mut lc = engine.lifecycle.lock().unwrap();
-        lc.background += 1;
-        engine.publish_inflight(&lc);
-        Self { engine }
-    }
-}
-
-impl Drop for BackgroundGuard<'_> {
-    fn drop(&mut self) {
-        let mut lc = self.engine.lifecycle.lock().unwrap();
-        lc.background = lc.background.saturating_sub(1);
-        self.engine.publish_inflight(&lc);
-    }
-}
-
-/// One in-flight export's bookkeeping — [`BackgroundGuard`]'s count, plus a hold on the snapshot
-/// being written — released together by `Drop`.
-///
-/// The export half is the pin: a write must read the snapshot it was opened on even if the tab
-/// behind it re-runs. **Owned**, unlike [`BackgroundGuard`], because the thing it protects is the
-/// spawned write and not the call that started it — see [`SnapshotReads::export`] for what a
-/// caller-scoped guard let happen.
-struct ExportHold {
-    snapshot: SnapshotId,
-    /// **Weak, and that is load-bearing.** This hold rides on a task running on the runtime the
-    /// engine owns, so a strong `Arc` here would close a cycle — engine owns runtime owns task
-    /// owns hold owns engine — and the engine would never drop. The write does not need it
-    /// either: `run_export` holds its own clone of the `SessionContext`. An engine that has gone
-    /// has no bookkeeping left to correct, so a failed upgrade is the whole handling.
-    engine: Weak<Engine>,
-}
-
-impl ExportHold {
-    /// Claim both halves. Constructing the hold *is* the acquire, so there is no way to hold one
-    /// without having taken what it releases.
-    fn new(engine: &Engine, snapshot: SnapshotId) -> Self {
-        let mut lc = engine.lifecycle.lock().unwrap();
-        *lc.pins.entry(snapshot).or_insert(0) += 1;
-        lc.background += 1;
-        engine.publish_inflight(&lc);
-        drop(lc);
-        Self {
-            snapshot,
-            engine: engine.self_ref.clone(),
-        }
-    }
-}
-
-impl Drop for ExportHold {
-    fn drop(&mut self) {
-        let Some(engine) = self.engine.upgrade() else {
-            return;
-        };
-        engine.release_pin(self.snapshot);
-        let mut lc = engine.lifecycle.lock().unwrap();
-        lc.background = lc.background.saturating_sub(1);
-        engine.publish_inflight(&lc);
-    }
-}
-
-/// A hold on one snapshot, keeping it readable past the re-run that would otherwise retire it
-/// (see [`SnapshotReads::pin`]). Dropping it releases the hold, and retires the snapshot if
-/// a retire arrived while it was pinned and this was the last hold.
-///
-/// Holds an `Arc<Engine>` rather than a borrow so it can be parked in UI state for a window's
-/// lifetime — which is the whole point of it existing.
-pub struct SnapshotPin {
-    engine: Arc<Engine>,
-    snapshot: SnapshotId,
-}
-
-impl SnapshotPin {
-    /// The snapshot this pin is holding open.
-    pub fn snapshot(&self) -> SnapshotId {
-        self.snapshot
-    }
-}
-
-impl Drop for SnapshotPin {
-    fn drop(&mut self) {
-        self.engine.release_pin(self.snapshot);
-    }
-}
-
 impl Drop for Engine {
     /// The window is closing: abort everything in flight and tell the store nothing of ours is
     /// live any more. (A store that keeps them across processes sweeps what an abrupt exit
@@ -1899,37 +969,6 @@ impl Drop for Engine {
     }
 }
 
-/// The **engine identity** of a catalog name: the string DataFusion ends up keying the
-/// object under, once [`WorkspaceName`](sql::WorkspaceName) has rendered `name` into a statement.
-///
-/// It is not a re-derivation of DataFusion's rules — it *asks* `TableReference::parse_str`,
-/// the very function `ctx.register_table(&str)` and `ctx.table(&str)` resolve a plain
-/// `&str` through. So a view created via [`WorkspaceName`](sql::WorkspaceName) and a table registered from the
-/// same def name land on the same identity by construction: a single bare word folds to
-/// ASCII-lowercase (`MyView` → `myview`, `Order` → `order`), and anything the parser can't
-/// read as one identifier — a space, a hyphen, a leading digit, a stray quote — is the
-/// name verbatim.
-///
-/// A dotted name parses as *qualified*, which we deliberately don't honour: the engine owns
-/// one schema and a catalog name is an opaque label, so `a.b` is the literal name `a.b`.
-/// (Nothing regresses: `register_table("a.b")` resolves to schema `a`, which doesn't exist,
-/// so such a table never registered either.)
-/// `pub` because the empty-table panel asks the same question of its column rows: two
-/// rows collide exactly when the create arm's own fold says they do, and a form approximating
-/// that with a case-insensitive compare would refuse pairs the engine accepts.
-pub fn fold_ident(name: &str) -> String {
-    match TableReference::parse_str(name) {
-        TableReference::Bare { table } => table.to_string(),
-        _ => name.to_string(),
-    }
-}
-
-/// Render `name` for interpolation into a statement, such that DataFusion resolves it to
-/// exactly [`fold_ident(name)`](fold_ident): bare when the folded name is a plain
-/// lowercase word that isn't reserved in a name position, double-quoted (any embedded `"`
-/// doubled) otherwise.
-///
-/// **Fold-preserving is the contract**, and it is what makes this safe to add to a shipped app.
 /// Build a `SessionContext` honouring the engine config `overrides`: the
 /// `ConfigOptions` keys go on the `SessionConfig`; the `datafusion.runtime.*` keys
 /// build a `RuntimeEnv` (parsed via `parse_capacity_limit`). Bad values are logged
@@ -2131,6 +1170,7 @@ fn build_runtime(
 
 #[cfg(test)]
 mod tests {
+    use datafusion::common::TableReference;
     use std::pin::Pin;
     use std::task::{Context, Waker};
 
@@ -3931,7 +2971,7 @@ mod read_options_tests {
 #[cfg(test)]
 mod remote_catalog_tests {
     use super::*;
-    use crate::providers::fake_source;
+    use crate::catalog_providers::fake_source;
     use crate::sources::fake::{fake_def, TestDoc};
 
     /// **The workspace is not a database, by construction.** The catalogs an agent is told about
@@ -4023,241 +3063,5 @@ mod remote_catalog_tests {
                 "{name}"
             );
         }
-    }
-}
-
-/// **The registration ledger's own claim**, as one checklist: every funnel that registers a def
-/// records what the engine answered, every funnel that takes one out forgets it, and a pass
-/// prunes the entries neither reported.
-///
-/// Kept together rather than beside each facade method for [`generation`]'s reason — the claim
-/// is that nothing registers without being recorded, and a checklist is only checkable read
-/// whole. Driven through the facade, because that is the surface a host has.
-#[cfg(test)]
-mod ledger_tests {
-    use std::path::{Path, PathBuf};
-    use std::{env, fs, process};
-
-    use strata_model::{SourceDef, SourceFormat, ViewDef};
-
-    use super::*;
-    use crate::register::CatalogSpec;
-
-    /// A scratch project folder per test, holding one two-column CSV.
-    fn scratch(tag: &str) -> PathBuf {
-        let dir = env::temp_dir().join(format!("strata_ledger_{}_{tag}", process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("t.csv"), "id,name\n1,a\n2,b\n").unwrap();
-        dir
-    }
-
-    fn spec(root: &Path, name: &str, file: &str) -> TableSpec {
-        TableSpec {
-            name: name.into(),
-            paths: vec![root.join(file).display().to_string()],
-            format: SourceFormat::from_name("csv"),
-            partitions: Vec::new(),
-            source: None,
-            internal: false,
-        }
-    }
-
-    /// A bucket refused before any socket opens — an S3 data source with no region.
-    fn unreachable(name: &str) -> SourceDef {
-        SourceDef {
-            config: [("address".to_string(), "acme-lake".to_string())]
-                .into_iter()
-                .collect(),
-            kind: "s3".into(),
-            name: name.into(),
-            ..Default::default()
-        }
-    }
-
-    #[tokio::test]
-    async fn every_registration_is_recorded_and_every_removal_forgotten() {
-        let root = scratch("gestures");
-        let engine = Engine::builder().with_data_dir(&root).build();
-        let catalog = engine.catalog();
-        assert_eq!(
-            catalog.registrations(),
-            Registrations::default(),
-            "an engine that has registered nothing has answered for nothing"
-        );
-
-        catalog
-            .register(spec(&root, "t", "t.csv"))
-            .await
-            .expect("t");
-        let refused = catalog
-            .register(spec(&root, "gone", "missing.csv"))
-            .await
-            .expect_err("no such file");
-        catalog
-            .create_view("v".into(), "SELECT id FROM t".into())
-            .await
-            .expect("create view");
-        let _ = engine.sources().connect(unreachable("lake")).await;
-
-        let ledger = catalog.registrations();
-        assert_eq!(ledger.workspace.status("t"), Some(&RegStatus::Ready));
-        assert_eq!(ledger.workspace.status("v"), Some(&RegStatus::Ready));
-        assert_eq!(
-            ledger.workspace.problem("gone").map(str::to_string),
-            Some(refused.to_string()),
-            "the refusal is kept whole, in the engine's own words"
-        );
-        assert!(
-            ledger
-                .sources
-                .problem("lake")
-                .is_some_and(|why| why.contains("region")),
-            "a data source's refusal is its own namespace's: {:?}",
-            ledger.sources.problem("lake")
-        );
-        assert_eq!(
-            ledger.workspace.status("nothing_of_the_sort"),
-            None,
-            "a name no pass reached is absent rather than a state of its own"
-        );
-
-        catalog.drop_view("v".into()).await.expect("drop view");
-        let _ = catalog.deregister("t");
-        let _ = engine.sources().disconnect("lake");
-
-        let ledger = catalog.registrations();
-        for gone in ["t", "v"] {
-            assert_eq!(ledger.workspace.of(gone), None, "'{gone}' was taken out");
-        }
-        assert_eq!(ledger.sources.of("lake"), None, "and so was the bucket");
-        assert!(
-            ledger.workspace.problem("gone").is_some(),
-            "the def that never registered is reported by no removal, so it is still here"
-        );
-
-        engine.catalog().sync(CatalogSpec::default(), |_| {}).await;
-        assert_eq!(
-            engine.catalog().registrations(),
-            Registrations {
-                generation: engine.catalog().generation(),
-                ..Default::default()
-            },
-            "and a pass over a catalog that names nothing prunes it"
-        );
-
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    /// **A gesture waits for its own answer, not for the one before it.** A re-registered def
-    /// already carries `Ready` from the pass before, so a caller reading the status alone would
-    /// take that as the answer to the question it has only just asked — which is a Configure Save
-    /// closing its window over a registration that has not happened.
-    #[tokio::test]
-    async fn an_answer_is_told_from_the_one_before_it_by_the_generation() {
-        let root = scratch("since");
-        let engine = Engine::builder().with_data_dir(&root).build();
-        let catalog = engine.catalog();
-        catalog
-            .register(spec(&root, "t", "t.csv"))
-            .await
-            .expect("t");
-
-        let asked_at = catalog.generation();
-        assert_eq!(
-            catalog
-                .registrations()
-                .workspace
-                .answered_since("t", asked_at),
-            None,
-            "the answer it already had is not this gesture's"
-        );
-
-        catalog
-            .register(spec(&root, "t", "t.csv"))
-            .await
-            .expect("re-registered");
-
-        assert_eq!(
-            catalog
-                .registrations()
-                .workspace
-                .answered_since("t", asked_at),
-            Some(&RegStatus::Ready),
-            "and the new one is"
-        );
-
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    /// A view is upserted by a typed statement as much as by ⌘S, and both funnels record —
-    /// `settle_effect` is the second one, and a fold that skipped it would leave the row a
-    /// statement had just created reading as unanswered.
-    #[tokio::test]
-    async fn a_typed_statement_records_what_it_registered() {
-        let root = scratch("typed");
-        let engine = Engine::builder().with_data_dir(&root).build();
-        engine
-            .catalog()
-            .register(spec(&root, "t", "t.csv"))
-            .await
-            .expect("t");
-        engine
-            .ws(WsId(1))
-            .run(
-                RunTag(1),
-                "CREATE VIEW typed AS SELECT id FROM t".into(),
-                10,
-            )
-            .await
-            .expect("typed view DDL");
-
-        assert_eq!(
-            engine.catalog().registrations().workspace.status("typed"),
-            Some(&RegStatus::Ready)
-        );
-
-        engine
-            .ws(WsId(1))
-            .run(RunTag(2), "DROP VIEW typed".into(), 10)
-            .await
-            .expect("typed drop");
-
-        assert_eq!(
-            engine.catalog().registrations().workspace.of("typed"),
-            None,
-            "and the drop forgets it"
-        );
-
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    /// A pass keeps what its spec still names, whatever the answer was — the entry a host's row
-    /// is joined against must survive a re-scan that re-answers it.
-    #[tokio::test]
-    async fn a_pass_keeps_what_it_still_names() {
-        let root = scratch("retain");
-        let engine = Engine::builder().with_data_dir(&root).build();
-        let desired = CatalogSpec {
-            tables: vec![
-                spec(&root, "t", "t.csv"),
-                spec(&root, "gone", "missing.csv"),
-            ],
-            views: vec![ViewDef {
-                name: "v".into(),
-                sql: "SELECT id FROM t".into(),
-            }],
-            ..Default::default()
-        };
-
-        engine.catalog().sync(desired.clone(), |_| {}).await;
-        engine.catalog().sync(desired, |_| {}).await;
-
-        let ledger = engine.catalog().registrations();
-        assert_eq!(ledger.workspace.status("t"), Some(&RegStatus::Ready));
-        assert_eq!(ledger.workspace.status("v"), Some(&RegStatus::Ready));
-        assert!(ledger.workspace.problem("gone").is_some());
-
-        let _ = fs::remove_dir_all(&root);
     }
 }

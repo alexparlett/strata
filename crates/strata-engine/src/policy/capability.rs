@@ -288,6 +288,7 @@ mod tests {
     use futures::executor::block_on;
 
     use super::*;
+    use crate::policy::conformance::conforms;
 
     /// A provider that cannot decide, ever — an unreachable decision point.
     struct Unreachable;
@@ -305,42 +306,6 @@ mod tests {
             _: &TargetFacts,
         ) -> Result<Admit, String> {
             Err("the policy service is unreachable".into())
-        }
-    }
-
-    /// The clauses every [`PolicyProvider`] keeps, whatever it decides from. `who` is a caller the
-    /// provider may or may not allow — the contract is about the shape of the answer, not about
-    /// which arm a given provider is in.
-    fn conforms(provider: &dyn PolicyProvider, who: &Principal) {
-        let targets = [
-            TargetFacts::workspace(),
-            TargetFacts::remote("postgres", "postgres://acme/orders"),
-        ];
-        for family in GrantFamily::ALL {
-            let coarse = block_on(provider.admit(who, family));
-            assert_eq!(
-                coarse,
-                block_on(provider.admit(who, family)),
-                "two asks about {family:?} must agree"
-            );
-            if let Err(why) = &coarse {
-                assert!(!why.trim().is_empty(), "a fault must say what went wrong");
-            }
-            for target in &targets {
-                let fine = block_on(provider.permit(who, family, target));
-                assert_eq!(
-                    fine,
-                    block_on(provider.permit(who, family, target)),
-                    "two asks about {family:?} at {target:?} must agree"
-                );
-                if matches!(coarse, Ok(Admit::Deny(_))) {
-                    assert!(
-                        !matches!(fine, Ok(Admit::Allow)),
-                        "{family:?} is denied coarsely, so the arm must not permit it at \
-                         {target:?}"
-                    );
-                }
-            }
         }
     }
 

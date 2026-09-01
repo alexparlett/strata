@@ -12,6 +12,8 @@
 //! [`GrantFamily`] and words every refusal; this module answers about callers and targets.
 
 pub mod capability;
+#[cfg(any(test, feature = "testing"))]
+pub mod conformance;
 
 pub use capability::{Capability, CapabilityPolicyProvider, Grant, Grants, RemoteScope, RemoteSel};
 

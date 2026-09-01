@@ -21,8 +21,10 @@
 //! be taken again ([`Formats::insert`]): a factory registered over `parquet` / `csv` / `json` /
 //! `arrow` would silently replace the writer every other `COPY` in the session uses.
 
-#[cfg(test)]
-pub(crate) mod fake;
+#[cfg(any(test, feature = "testing"))]
+pub mod conformance;
+#[cfg(any(test, feature = "testing"))]
+pub mod fake;
 mod shipped;
 
 pub(crate) use shipped::compression_type;

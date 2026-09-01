@@ -12,8 +12,21 @@
 //! | Set with | [`with_snapshot_store`](crate::EngineBuilder::with_snapshot_store) | [`with_table_store`](crate::EngineBuilder::with_table_store) |
 //!
 //! Each ships two implementations — a durable default and an in-RAM one — and both run the same
-//! contract-conformance module, which is where to look for what an implementation has to satisfy.
+//! contract-conformance body, which is where to look for what an implementation has to satisfy.
 //! The `Mem` impls are the short ones and the better read.
+//!
+//! **Run yours through the same body.** Under the `testing` cargo feature, each seam's ring is one
+//! call: [`testing::snapshots::conforms`](crate::testing::snapshots::conforms) and
+//! [`testing::tables::conforms`](crate::testing::tables::conforms), both taking an empty store and
+//! panicking on the first clause it does not keep.
+//!
+//! ```no_run
+//! # use strata_engine::snapshots::MemSnapshotStore;
+//! #[tokio::test]
+//! async fn my_store_keeps_the_contract() {
+//!     strata_engine::testing::snapshots::conforms(&MemSnapshotStore::new()).await;
+//! }
+//! ```
 //!
 //! # `SnapshotStore`: where a result's bytes live
 //!

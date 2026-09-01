@@ -29,7 +29,7 @@ use datafusion::sql::TableReference;
 
 use super::source::{Listing, Located, Relation, SourceCatalog};
 use super::Shown;
-use crate::fold_ident;
+use crate::ident::fold_ident;
 
 /// One source's catalog: the namespaces the latest enumeration found, each a
 /// [`SourceSchemaProvider`].
