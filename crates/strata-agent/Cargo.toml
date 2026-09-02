@@ -1,6 +1,6 @@
 [package]
 name = "strata-agent"
-version = "0.2.0"
+version.workspace = true
 edition = "2021"
 description = "Strata's agent-access core: the read-only tool vocabulary, the `Host` seam that answers it, and the MCP server that serves it. Frontend-agnostic — no Freya, no window, no renderer."
 license = "MIT"

@@ -1,6 +1,6 @@
 [package]
 name = "strata-engine"
-version = "0.2.0"
+version.workspace = true
 edition = "2021"
 description = "Strata's DataFusion boundary: the direct-call async `Engine` facade, the statement router, snapshots, export, profiling, the SQL language service and the project registration pass. The only crate that touches DataFusion."
 license = "MIT"

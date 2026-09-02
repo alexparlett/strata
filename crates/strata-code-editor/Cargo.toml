@@ -1,6 +1,6 @@
 [package]
 name = "strata-code-editor"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 description = "Strata's owned code-editor surface — vendored from freya-code-editor (marc2332/freya, MIT) so we control cursor style, gutter, line highlight, syntax palette, squiggles, and autocomplete. Editing engine (freya-edit) + grammar (tree-sitter) stay upstream deps."
 license = "MIT"

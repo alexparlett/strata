@@ -1,6 +1,6 @@
 [package]
 name = "strata-arrow"
-version = "0.2.0"
+version.workspace = true
 edition = "2021"
 description = "Strata's Arrow-level vocabulary: column info, value trees, results serialization, the EXPLAIN plan model, the engine-key and client-option catalogues. Sits between `strata-model` and `strata-engine` and touches no DataFusion."
 license = "MIT"
