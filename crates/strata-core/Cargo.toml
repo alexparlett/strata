@@ -1,6 +1,6 @@
 [package]
 name = "strata-core"
-version = "0.2.0"
+version.workspace = true
 edition = "2021"
 description = "Strata's framework-agnostic app core: config, keymap, theme, project persistence, the OS-keystore secret store, the model-listings satellite and the updater mechanism. DataFusion-free — the engine is `strata-engine`, which depends on this crate."
 license = "MIT"

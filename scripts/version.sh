@@ -2,11 +2,12 @@
 #
 # Read, resolve or write the version Strata calls itself.
 #
-# `crates/strata-freya/Cargo.toml` is the single place that number is written: the bundle script
-# reads it for CFBundleShortVersionString and the DMG name, and the Release workflow reads it for
-# the tag and the release title. This script is the only thing that knows where it lives, so those
-# three cannot drift, and a bump is a command anyone can run rather than a `sed` typed into a YAML
-# file that nobody can test.
+# The root `Cargo.toml`'s `[workspace.package] version` is the single place that number is written,
+# and every member inherits it with `version.workspace = true` - one workspace, one version, because
+# these crates ship as one application. The bundle script reads it for CFBundleShortVersionString
+# and the DMG name, and the Release workflow reads it for the tag and the release title. This script
+# is the only thing that knows where it lives, so those three cannot drift, and a bump is a command
+# anyone can run rather than a `sed` typed into a YAML file that nobody can test.
 #
 #   ./scripts/version.sh                  # print the current version
 #   ./scripts/version.sh --resolve minor  # print what a minor bump would produce, changing nothing
@@ -18,7 +19,7 @@
 # two hours before the build ends rather than after. It also needs no cargo, so it can run before
 # the toolchain is set up.
 #
-# Writing updates `Cargo.lock` as well. It records the member's own version and the release build
+# Writing updates `Cargo.lock` as well. It records every member's version and the release build
 # passes `--locked`, so a manifest bumped on its own fails the build on a lockfile error.
 #
 # stdout is the version and nothing else, so `V="$(./scripts/version.sh --bump patch)"` works.
@@ -29,7 +30,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-MANIFEST="crates/strata-freya/Cargo.toml"
+MANIFEST="Cargo.toml"
 
 fail() {
   printf 'error: %s\n' "$1" >&2
@@ -37,9 +38,10 @@ fail() {
 }
 note() { printf '    %s\n' "$1" >&2; }
 
-# The first `version = ...` at the start of a line is the package's own. Dependency versions in
-# this manifest are all inside inline tables (`serde = { version = "1", ... }`), so they never
-# start a line, and `head -1` keeps this true even if a `[package]`-shaped section is added later.
+# The first `version = ...` at the start of a line is `[workspace.package]`'s. Nothing else in this
+# manifest can be one: `[workspace.dependencies]` entries are keyed by crate name, so a version
+# among them is either inside an inline table or the value rather than the key (`arrow = "58"`).
+# `head -1` keeps that true whatever is added later.
 current() {
   local v
   v="$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "$MANIFEST" | head -1)"
@@ -94,9 +96,9 @@ write() {
   note "$MANIFEST: $cur -> $new"
 
   # `--workspace` restricts the update to workspace members, so bumping a version cannot quietly
-  # move a dependency at the same time. Offline first: the only thing that changed is a member's
-  # own version, so the registry index has nothing to say about it, and a release runner should not
-  # need the network to renumber a build.
+  # move a dependency at the same time. Offline first: the only thing that changed is the
+  # workspace's own version, so the registry index has nothing to say about it, and a release
+  # runner should not need the network to renumber a build.
   if cargo update --workspace --offline >/dev/null 2>&1; then
     note "Cargo.lock updated (offline)"
   else

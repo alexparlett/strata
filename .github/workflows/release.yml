@@ -9,7 +9,7 @@ name: Release
 # or deleted, so tagging first would let a failed build leave a permanent tag behind.
 #
 # This workflow does not write to the repository, and that is the whole shape of it. The version it
-# builds is whatever `crates/strata-freya/Cargo.toml` already says, so the DMG's name, the Info.plist
+# builds is whatever the workspace's `Cargo.toml` already says, so the DMG's name, the Info.plist
 # and the tag are one number, and a release is cut from a commit that is already on main and has
 # already passed the required checks. Moving that number is an ordinary pull request -
 # `scripts/release-pr.sh` opens one - and merging it, not running this, is the deliberate act.
@@ -108,7 +108,7 @@ jobs:
             # at a commit that calls itself something else publishes v0.4.0 with
             # Strata-0.3.2-universal.dmg attached. One number or none.
             if [ "$VERSION" != "$MANIFEST" ]; then
-              echo "::error::Tag $TAG names $VERSION but crates/strata-freya/Cargo.toml reads $MANIFEST. Tag a commit whose manifest reads $VERSION - ./scripts/release-pr.sh opens the pull request that moves it."
+              echo "::error::Tag $TAG names $VERSION but the workspace Cargo.toml reads $MANIFEST. Tag a commit whose manifest reads $VERSION - ./scripts/release-pr.sh opens the pull request that moves it."
               exit 1
             fi
           else

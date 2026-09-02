@@ -1,6 +1,6 @@
 [package]
 name = "strata-freya"
-version = "0.3.2"
+version.workspace = true
 edition = "2021"
 description = "Strata's Freya (Skia/native) frontend — the app. Rides the shared core crates: `strata-core` for app services and `strata-engine` for the DataFusion boundary."
 license = "MIT"

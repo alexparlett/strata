@@ -24,7 +24,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-MANIFEST="crates/strata-freya/Cargo.toml"
+MANIFEST="Cargo.toml"
 
 fail() {
   printf 'error: %s\n' "$1" >&2
@@ -88,7 +88,7 @@ BASE="$(git rev-parse --abbrev-ref HEAD)"
 note "branching $BRANCH off $BASE"
 git switch -c "$BRANCH" >/dev/null
 
-# The lockfile records the member's own version and the release build passes `--locked`, so the two
+# The lockfile records every member's version and the release build passes `--locked`, so the two
 # move together or the build fails on the lockfile. `version.sh` writes both.
 ./scripts/version.sh --bump "$VERSION" >/dev/null
 git commit -q -m "Release $VERSION" -- "$MANIFEST" Cargo.lock

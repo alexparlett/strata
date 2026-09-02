@@ -44,8 +44,8 @@ included.
 ./scripts/release-pr.sh minor
 ```
 
-That branches off wherever you are, writes the new version into `crates/strata-freya/Cargo.toml`
-and `Cargo.lock` through `scripts/version.sh`, commits those two files and nothing else, pushes the
+That branches off wherever you are, writes the new version into the workspace `Cargo.toml` and
+`Cargo.lock` through `scripts/version.sh`, commits those two files and nothing else, pushes the
 branch and opens a **Release 0.4.0** pull request. It takes an exact version as well as a bump, and
 `--no-pr` stops after the push. Everything it can refuse, it refuses before it has done anything: a
 number that is already tagged, a branch that already exists, an uncommitted edit to either of the
@@ -76,11 +76,12 @@ already released, and the run's first step refuses it by name. The opposite outc
 with no release behind it, because the build failed — needs no recovery at all. Fix what broke and
 run Release again; it will build the same number, which nothing has claimed yet.
 
-`crates/strata-freya/Cargo.toml` is the only place a version number is written, and
-[`scripts/version.sh`](../scripts/version.sh) is the only thing that knows that. The bundle script,
-the release script above and the workflow all read the version through it, so the DMG, the plist and
-the tag cannot disagree, and a bump is a command rather than an edit plus a `sed` buried in a YAML
-file:
+The root `Cargo.toml`'s `[workspace.package] version` is the only place a version number is
+written, and [`scripts/version.sh`](../scripts/version.sh) is the only thing that knows that. Every
+crate inherits it with `version.workspace = true`, so one command moves all eight — they ship as one
+application, and a number per crate would be eight chances for the DMG, the plist and the tag to
+disagree. The bundle script, the release script above and the workflow all read the version through
+that one script, and a bump is a command rather than an edit plus a `sed` buried in a YAML file:
 
 ```bash
 ./scripts/version.sh                  # what a build here would call itself
@@ -88,7 +89,7 @@ file:
 ./scripts/version.sh --bump minor     # write it, Cargo.lock included
 ```
 
-The lockfile matters: it records the member's own version and the release build passes `--locked`,
+The lockfile matters: it records every member's version and the release build passes `--locked`,
 so a manifest bumped on its own fails the build.
 
 `CFBundleVersion` — the build number macOS compares to decide what is newer — is
