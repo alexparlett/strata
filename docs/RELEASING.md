@@ -11,21 +11,20 @@ in what is done.
 
 ## From GitHub, on demand
 
-**Actions → Release → Run workflow.** Six inputs:
+**Actions → Release → Run workflow.** Four inputs:
 
 | Input | Default | What it does |
 |---|---|---|
 | **Architectures** | `universal` | `universal` runs on both Apple Silicon and Intel. `arm64` is roughly half the build time when every tester is on Apple Silicon. |
 | **Tag this commit and publish a release page** | off | Off: the build's artifacts appear on the run page and nothing about the repo changes. On: the run also creates the tag and a release page with them attached. |
-| **Bump the crate version first** | `none` | `patch` / `minor` / `major` rewrites the version in `crates/strata-freya/Cargo.toml`, commits it, and pushes it once the build has produced a DMG. Needs the release box ticked. |
-| **Exact version instead of a bump** | *(blank)* | Blank uses the version already in the manifest. Set it to release a specific number instead of bumping to the next one. Rejected if a bump is also chosen — they are two answers to one question. |
 | **How the release notes are written** | `claude` | `claude` summarises the commits since the last release into a *What's new* section. `generated` uses GitHub's changelog on its own. |
 | **Mark as prerelease** | on | Keeps tester builds out of the "Latest release" slot. |
 
+There is no version input, and no bump. The run builds whatever version the manifest already says,
+which is what [cutting a version](#cutting-a-version) put there.
+
 With the release box **off**, nothing about the repository changes: download the artifact from the
-run page and hand the DMG over however you like. That holds even with the bump input in front of
-you — a bump is refused without the release box rather than performed and thrown away, so the "just
-build me a DMG" case can never move the version. Artifacts expire after 30 days. Note this is not
+run page and hand the DMG over however you like. Artifacts expire after 30 days. Note this is not
 a privacy mechanism — the repo is public, so any signed-in GitHub user can reach the artifact. It
 just keeps unfinished builds off the releases page.
 
@@ -38,35 +37,50 @@ after a two-hour build is a bad trade.
 
 ### Cutting a version
 
-Pick a **Bump**, tick **Tag this commit and publish a release page**, run it. That is the whole
-thing: the run resolves the next version, writes it into `crates/strata-freya/Cargo.toml` and
-`Cargo.lock`, builds, and then — once a DMG exists — pushes that commit and creates the tag on it.
+Two steps, because `main` takes changes only through a reviewed pull request — the version bump
+included.
+
+```bash
+./scripts/release-pr.sh minor
+```
+
+That branches off wherever you are, writes the new version into `crates/strata-freya/Cargo.toml`
+and `Cargo.lock` through `scripts/version.sh`, commits those two files and nothing else, pushes the
+branch and opens a **Release 0.4.0** pull request. It takes an exact version as well as a bump, and
+`--no-pr` stops after the push. Everything it can refuse, it refuses before it has done anything: a
+number that is already tagged, a branch that already exists, an uncommitted edit to either of the
+files it is about to commit.
+
+Merge it once CI is green. Then **Actions → Release**, tick **Tag this commit and publish a release
+page**, and run it. There is no version to type in: the run reads the manifest, so what it builds is
+what was merged.
 
 The order is the part worth knowing, because each half of it fixes something:
 
-- The version is **written before the build**, so the DMG's filename, `CFBundleShortVersionString`
-  and the tag are one number. Before this, an exact version passed by hand tagged `v0.4.0` and
-  attached a DMG called `Strata-0.2.0-universal.dmg` — the bundle script reads the manifest, and
-  the manifest had not moved.
-- The commit is **pushed after the build**, next to the tag it belongs with. A bump pushed first is
-  a bump left behind by a build that failed.
-- A bump **needs the release box**, so the repo only moves for a build that becomes a release.
+- The version reaches `main` **before the build**, in a commit that has passed the required checks —
+  and the release run then writes nothing at all. It used to bump and push that commit itself, at
+  the end of the build. The ruleset on `main` refuses such a push, and no amount of retrying would
+  help: a commit pushed with `GITHUB_TOKEN` starts no workflow run, so the checks the rule requires
+  could never report on it. A version bump is a change to the repository and goes through a pull
+  request like every other one.
+- The DMG's filename, `CFBundleShortVersionString` and the tag are one number, because all three are
+  the manifest's. When the workflow took a version as an input instead, `v0.4.0` shipped a DMG
+  called `Strata-0.2.0-universal.dmg` — the bundle script reads the manifest, and the manifest had
+  not moved.
+- The tag is created **after the build**, so a build that fails leaves no permanent tag behind, and
+  it names the commit that was actually built rather than the branch. If `main` moved while the
+  build ran, the release still describes the tree the DMG came from.
 
-If the branch moved during the build, the push is refused rather than rebased — a rebase would put
-the tag on a tree this run never built. The DMG is still on the run page and nothing was tagged, so
-bumping locally and re-running is the whole recovery. The bump commit is pushed with `GITHUB_TOKEN`,
-which means it gets no CI run of its own; it moves one version string, and the release run just
-built it.
-
-The one asymmetric outcome is a push that lands and a publish that then fails: the version has moved
-with no release behind it. Give that number to the **Exact version** input on the next run rather
-than bumping past it.
+Forgetting the bump costs seconds rather than a build: the manifest still reads a version that is
+already released, and the run's first step refuses it by name. The opposite outcome — a merged bump
+with no release behind it, because the build failed — needs no recovery at all. Fix what broke and
+run Release again; it will build the same number, which nothing has claimed yet.
 
 `crates/strata-freya/Cargo.toml` is the only place a version number is written, and
-[`scripts/version.sh`](../scripts/version.sh) is the only thing that knows that. The bundle script
-reads the version through it and the workflow resolves and writes through it, so the DMG, the plist
-and the tag cannot disagree, and a bump is a command rather than an edit plus a `sed` buried in a
-YAML file:
+[`scripts/version.sh`](../scripts/version.sh) is the only thing that knows that. The bundle script,
+the release script above and the workflow all read the version through it, so the DMG, the plist and
+the tag cannot disagree, and a bump is a command rather than an edit plus a `sed` buried in a YAML
+file:
 
 ```bash
 ./scripts/version.sh                  # what a build here would call itself
@@ -105,10 +119,10 @@ Pushing a `v*` tag by hand triggers the same workflow and publishes the same rel
 double-fire when the workflow creates a tag itself: GitHub does not trigger workflows from pushes
 made with `GITHUB_TOKEN`.
 
-A tag push carries its own version, so nothing is bumped and nothing is committed — the tag is
-already there, and `HEAD` is detached, so there is no branch for the run to guess at. It still
-writes the version into the manifest for the length of the build, so a tag pushed at a commit whose
-manifest disagrees with it produces a DMG named after the tag rather than after the stale number.
+A tag push carries its own version, and the run checks it against the manifest at the commit the
+tag points at. They have to agree: the DMG's filename and its `Info.plist` are read out of the
+manifest, so a tag on a commit that calls itself something else would publish `v0.4.0` with
+`Strata-0.3.2-universal.dmg` attached. Tag the commit the release PR merged, not the one before it.
 
 ---
 

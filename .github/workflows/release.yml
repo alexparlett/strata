@@ -1,18 +1,24 @@
 name: Release
 
-# One button: build Strata into a DMG and, if asked, bump the version, tag the commit and publish a
-# release page for it. Run it from the Actions tab (Release -> Run workflow).
+# Build Strata into a DMG and, if asked, tag the commit and publish a release page for it. Run it
+# from the Actions tab (Release -> Run workflow).
 #
 # Leaving "Tag and publish a release" off is the everyday case: a DMG appears as an artifact on
 # the run page and nothing about the repository changes. Turning it on is what makes a build
 # public, and it happens *after* the build succeeds - a published release's tag cannot be moved
 # or deleted, so tagging first would let a failed build leave a permanent tag behind.
 #
-# The version follows that same rule twice over. Whatever version a run resolves is *written* into
-# `crates/strata-freya/Cargo.toml` before the build (via `scripts/version.sh`), so the DMG's name,
-# the Info.plist and the tag are one number instead of three chances to disagree. But the commit
-# carrying it is pushed only once a DMG exists, and only by a run that publishes: a bump left behind
-# by a failed build, or by a build nobody released, is a version claiming to exist that does not.
+# This workflow does not write to the repository, and that is the whole shape of it. The version it
+# builds is whatever `crates/strata-freya/Cargo.toml` already says, so the DMG's name, the Info.plist
+# and the tag are one number, and a release is cut from a commit that is already on main and has
+# already passed the required checks. Moving that number is an ordinary pull request -
+# `scripts/release-pr.sh` opens one - and merging it, not running this, is the deliberate act.
+#
+# It used to bump the version itself and push the commit, which stopped working the day main
+# required status checks: a commit invented by this run has none, and a push made with GITHUB_TOKEN
+# triggers no workflow that could give it any, so that commit could never satisfy the rule. The fix
+# is not a ruleset bypass - a version bump is a change to the repository and belongs in a pull
+# request like every other one.
 #
 # The `v*` tag trigger stays for the "I tagged locally" path. It does not double-fire on releases
 # this workflow publishes: GitHub does not trigger workflows from pushes made with GITHUB_TOKEN.
@@ -30,15 +36,6 @@ on:
         description: "Tag this commit and publish a release page"
         type: boolean
         default: false
-      bump:
-        description: "Bump the crate version first (needs the release box ticked)"
-        type: choice
-        default: none
-        options: [none, patch, minor, major]
-      version:
-        description: "Exact version instead of a bump (defaults to the crate version)"
-        type: string
-        default: ""
       notes:
         description: "How the release notes are written"
         type: choice
@@ -65,8 +62,8 @@ jobs:
     # the lockfile and this job runs rarely enough to miss it often, so size for cold.
     timeout-minutes: 150
     permissions:
-      # Creating the tag and the release page, and pushing the version-bump commit. Nothing else
-      # needs writing.
+      # Creating the tag and the release page. Nothing else needs writing - the version bump this
+      # job used to push is a pull request now.
       contents: write
       # For the release-notes step: claude-code-action authenticates over OIDC. Same grant the
       # review workflow makes.
@@ -79,86 +76,61 @@ jobs:
           # stop seeing newer ones as newer. Full depth also brings the tags, which the version
           # preflight and the release-notes range both read.
           fetch-depth: 0
-          # Stated rather than left to the default, because the version-bump push below depends on
-          # it: this is what leaves the token in the local git config for `git push` to use.
-          persist-credentials: true
 
       # Everything about *what this build calls itself*, decided before the two hours of compiling
-      # rather than after. A tag that already exists is the failure worth catching early: the
-      # build would otherwise finish and then refuse to publish.
-      #
-      # Resolving is deliberately separate from writing. `version.sh --resolve` changes nothing and
-      # needs no cargo, so the preflight below runs before the toolchain is even installed - a
-      # rejected version costs seconds rather than a runner.
+      # rather than after. The number is read and never written: it is whatever the checked-out
+      # manifest says, which on main is whatever the last release pull request merged. Reading needs
+      # no cargo, so this runs before the toolchain is even installed - a version that is already
+      # released costs seconds rather than a runner.
       - name: Resolve the version
         id: version
         env:
           GH_TOKEN: ${{ github.token }}
           # Through `env`, never interpolated into the script below. A `${{ }}` expansion is a
-          # textual paste into the shell *before* it runs, so a ref or an input carrying `;` or a
-          # backtick would execute here - in a job that holds the signing secrets. Git refnames
-          # forbid spaces and a few metacharacters but not those, and `inputs.version` is free
-          # text. The choice-typed inputs below are safe by their own definition and still ride
-          # here, so the rule is one rule rather than a judgement per line.
+          # textual paste into the shell *before* it runs, so a ref carrying `;` or a backtick
+          # would execute here - in a job that holds the signing secrets. Git refnames forbid
+          # spaces and a few metacharacters but not those. The choice-typed inputs are safe by
+          # their own definition and still ride here, so the rule is one rule rather than a
+          # judgement per line.
           REF_NAME: ${{ github.ref_name }}
           EVENT_NAME: ${{ github.event_name }}
-          INPUT_BUMP: ${{ inputs.bump }}
-          INPUT_VERSION: ${{ inputs.version }}
           INPUT_RELEASE: ${{ inputs.release }}
         run: |
           set -euo pipefail
-          COMMIT=false
+          MANIFEST="$(./scripts/version.sh)"
+
           if [ "$EVENT_NAME" = "push" ]; then
-            # A tag push names its own version, and the tag already exists by definition. Nothing is
-            # committed either: HEAD is a detached tag, so there is no branch for this run to guess.
+            # A tag push names its own version, and the tag already exists by definition.
             TAG="$REF_NAME"
             VERSION="${TAG#v}"
             PUBLISH=true
+            # The DMG's filename and its Info.plist are read out of the manifest, so a tag pointing
+            # at a commit that calls itself something else publishes v0.4.0 with
+            # Strata-0.3.2-universal.dmg attached. One number or none.
+            if [ "$VERSION" != "$MANIFEST" ]; then
+              echo "::error::Tag $TAG names $VERSION but crates/strata-freya/Cargo.toml reads $MANIFEST. Tag a commit whose manifest reads $VERSION - ./scripts/release-pr.sh opens the pull request that moves it."
+              exit 1
+            fi
           else
-            BUMP="$INPUT_BUMP"
-            VERSION="$INPUT_VERSION"
-            PUBLISH="$INPUT_RELEASE"
-
-            if [ -n "$VERSION" ] && [ "$BUMP" != "none" ]; then
-              echo "::error::Give either a bump or an exact version, not both - they are two answers to one question."
-              exit 1
-            fi
-            # A bump rewrites the repository, and this workflow's contract is that a run with the
-            # release box unticked changes nothing about it. So a bump rides the publish rather than
-            # being quietly discarded at the end of a run that was never going to push it.
-            if [ "$BUMP" != "none" ] && [ "$PUBLISH" != "true" ]; then
-              echo "::error::A version bump is only committed by a run that publishes. Tick 'Tag this commit and publish a release page', or bump the version in a commit of your own."
-              exit 1
-            fi
-
-            if [ "$BUMP" != "none" ]; then
-              VERSION="$(./scripts/version.sh --resolve "$BUMP")"
-            elif [ -n "$VERSION" ]; then
-              # Validated, not taken as given: --resolve rejects anything that is not a version, so
-              # a typed-in typo fails here instead of becoming a permanent tag.
-              VERSION="$(./scripts/version.sh --resolve "$VERSION")"
-            else
-              VERSION="$(./scripts/version.sh)"
-            fi
+            VERSION="$MANIFEST"
             TAG="v$VERSION"
-            # Whichever way the number was arrived at, a publishing run owns it: the tag it creates
-            # has to point at a commit whose manifest reads the version on the release page.
-            COMMIT="$PUBLISH"
+            PUBLISH="$INPUT_RELEASE"
           fi
 
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "publish=$PUBLISH" >> "$GITHUB_OUTPUT"
-          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
-          echo "Building $VERSION (tag $TAG, publish $PUBLISH, commit $COMMIT)"
+          echo "Building $VERSION (tag $TAG, publish $PUBLISH)"
 
-          if [ "$PUBLISH" = "true" ] && [ "${{ github.event_name }}" != "push" ]; then
+          # The check worth making before two hours of compiling rather than after - and the one
+          # that catches a forgotten bump, the manifest still reading the version already out.
+          if [ "$PUBLISH" = "true" ] && [ "$EVENT_NAME" != "push" ]; then
             if gh release view "$TAG" >/dev/null 2>&1; then
-              echo "::error::Release $TAG already exists. Pick a bump, or pass a different version."
+              echo "::error::Release $TAG already exists - this branch has not been bumped since it was published. Run ./scripts/release-pr.sh, merge the pull request it opens, and run this again."
               exit 1
             fi
             if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
-              echo "::error::Tag $TAG already exists. Pick a bump, or pass a different version."
+              echo "::error::Tag $TAG already exists - this branch has not been bumped since it was tagged. Run ./scripts/release-pr.sh, merge the pull request it opens, and run this again."
               exit 1
             fi
           fi
@@ -174,40 +146,6 @@ jobs:
           # warnings the test workflow tolerates. Denying warnings is a real policy but it belongs
           # in one place, applied deliberately.
           rustflags: ""
-
-      # Where the version reaches the build - by being written, not only read. Before this, a run
-      # given `version: 0.4.0` tagged v0.4.0 and attached a DMG called Strata-0.2.0-universal.dmg,
-      # because the bundle script reads the manifest and the manifest had not moved.
-      #
-      # Committed, not pushed. A bump pushed before the build is a bump left behind by a build that
-      # fails; the push happens further down, once there is a DMG, next to the tag it belongs with.
-      #
-      # After the toolchain step because writing the version updates `Cargo.lock` too, and the
-      # release build passes `--locked`. The cache restored above is keyed on the pre-bump lockfile,
-      # which is the one that matches the dependency graph anyway - only a member's own version moved.
-      - name: Set the crate version
-        id: bump
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          ./scripts/version.sh --bump "$VERSION"
-          if git diff --quiet -- crates/strata-freya/Cargo.toml Cargo.lock; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "The crate version is already $VERSION."
-            exit 0
-          fi
-          echo "changed=true" >> "$GITHUB_OUTPUT"
-          git --no-pager diff --stat -- crates/strata-freya/Cargo.toml Cargo.lock
-          if [ "${{ steps.version.outputs.commit }}" != "true" ]; then
-            echo "::notice::Building $VERSION without committing it - this run does not publish."
-            exit 0
-          fi
-          # Nobody typed this commit, so it is not attributed to anybody who did.
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -q -m "Release $VERSION" -- crates/strata-freya/Cargo.toml Cargo.lock
-          git --no-pager log -1 --oneline
 
       # Signing is opt-in and degrades honestly: with no secrets set the script ad-hoc signs and
       # says so, which is still a usable tester build. Adding these secrets is the only change
@@ -307,25 +245,6 @@ jobs:
             target/dist/*.zip
           if-no-files-found: error
           retention-days: 30
-
-      # Now that a DMG exists. Deliberately no rebase and no force: the tag below points at this
-      # commit, and rebasing would move it onto a tree this run never built. If the branch moved
-      # during the build, the DMG is still on this run page and nothing was tagged - bump locally,
-      # push, re-run.
-      #
-      # Pushed with GITHUB_TOKEN, which actions/checkout has already written into the local git
-      # config. That also means the commit gets no CI run of its own (GitHub does not trigger
-      # workflows from GITHUB_TOKEN pushes): it moves one version string, and this run just built it.
-      - name: Push the version bump
-        if: steps.version.outputs.commit == 'true' && steps.bump.outputs.changed == 'true'
-        env:
-          REF_NAME: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          git push origin "HEAD:refs/heads/$REF_NAME" || {
-            echo "::error::Could not push the version bump to $REF_NAME - the branch has probably moved since the build started. The DMG is attached to this run and nothing was tagged."
-            exit 1
-          }
 
       # How the notes get written, and what they cover. Its own step because the `secrets` context
       # is not reachable from a step-level `if` - only `steps` is - the same reason the signing
@@ -435,8 +354,8 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          # `git rev-parse HEAD`, not `$GITHUB_SHA`: with a version bump those are different commits,
-          # and the tag has to name the one whose manifest reads the version on the release page.
+          # `--target` is the commit that was checked out and built, not the branch, so a branch
+          # that moved during the build cannot land the tag on a tree this run never compiled.
           ARGS=(--title "Strata $VERSION" --generate-notes --target "$(git rev-parse HEAD)")
           if [ "${{ inputs.prerelease }}" != "false" ]; then
             ARGS+=(--prerelease)
