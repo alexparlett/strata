@@ -13,6 +13,11 @@
 #   ./scripts/version.sh --resolve minor  # print what a minor bump would produce, changing nothing
 #   ./scripts/version.sh --bump minor     # resolve a minor bump and write it
 #   ./scripts/version.sh --bump 0.4.0     # write an explicit version
+#   ./scripts/version.sh --at HEAD~1      # print the version as of a git revision
+#
+# `--at` is what lets a caller ask whether the version *moved* without a second copy of the one
+# thing this script knows. The Release workflow asks it of the commit main pointed at before a
+# push: a different answer means the release pull request just merged.
 #
 # `--resolve` is separate so a caller can decide what a build will call itself *before* committing
 # to it: the Release workflow checks the tag does not already exist up front, which is worth knowing
@@ -31,6 +36,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 MANIFEST="Cargo.toml"
+REV=""
 
 fail() {
   printf 'error: %s\n' "$1" >&2
@@ -43,9 +49,14 @@ note() { printf '    %s\n' "$1" >&2; }
 # among them is either inside an inline table or the value rather than the key (`arrow = "58"`).
 # `head -1` keeps that true whatever is added later.
 current() {
-  local v
-  v="$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "$MANIFEST" | head -1)"
-  [[ -n "$v" ]] || fail "could not read the version out of $MANIFEST"
+  local v text
+  if [[ -n "$REV" ]]; then
+    text="$(git show "$REV:$MANIFEST" 2>/dev/null)" || fail "could not read $MANIFEST at '$REV'"
+  else
+    text="$(cat "$MANIFEST")"
+  fi
+  v="$(printf '%s\n' "$text" | sed -n 's/^version[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' | head -1)"
+  [[ -n "$v" ]] || fail "could not read the version out of $MANIFEST${REV:+ at $REV}"
   printf '%s\n' "$v"
 }
 
@@ -128,6 +139,11 @@ while [[ $# -gt 0 ]]; do
       SPEC="$2"
       shift 2
       ;;
+    --at)
+      [[ -n "${2:-}" ]] || fail "--at needs a git revision"
+      REV="$2"
+      shift 2
+      ;;
     -h | --help)
       # The header comment is the help text, read to the first non-comment line so editing the
       # header cannot silently make --help print the shebang and the first twenty lines of code.
@@ -139,6 +155,9 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# History is not writable, so the one combination with no meaning is refused rather than half-done.
+[[ "$MODE" != "write" || -z "$REV" ]] || fail "--at reads a revision; it cannot be written to"
 
 case "$MODE" in
   print) current ;;

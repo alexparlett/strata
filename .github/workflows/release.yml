@@ -1,12 +1,14 @@
 name: Release
 
-# Build Strata into a DMG and, if asked, tag the commit and publish a release page for it. Run it
-# from the Actions tab (Release -> Run workflow).
+# Build Strata into a DMG, and publish it as a release when there is one to publish.
 #
-# Leaving "Tag and publish a release" off is the everyday case: a DMG appears as an artifact on
-# the run page and nothing about the repository changes. Turning it on is what makes a build
-# public, and it happens *after* the build succeeds - a published release's tag cannot be moved
-# or deleted, so tagging first would let a failed build leave a permanent tag behind.
+# The everyday path is a merge rather than a press: `scripts/release-pr.sh` opens the pull request
+# that moves the version, and merging it is what makes the release. Either way the publishing
+# happens *after* the build succeeds - a published release's tag cannot be moved or deleted, so
+# tagging first would let a failed build leave a permanent tag behind.
+#
+# Run by hand from the Actions tab (Release -> Run workflow), the release box is off by default: a
+# DMG appears as an artifact on the run page and nothing about the repository changes.
 #
 # This workflow does not write to the repository, and that is the whole shape of it. The version it
 # builds is whatever the workspace's `Cargo.toml` already says, so the DMG's name, the Info.plist
@@ -20,10 +22,17 @@ name: Release
 # is not a ruleset bypass - a version bump is a change to the repository and belongs in a pull
 # request like every other one.
 #
-# The `v*` tag trigger stays for the "I tagged locally" path. It does not double-fire on releases
-# this workflow publishes: GitHub does not trigger workflows from pushes made with GITHUB_TOKEN.
+# Which is also what makes the release automatic: merging that pull request is a push to main that
+# moves the version, and nothing else is. The `gate` job below is what notices, so the everyday
+# release is one merge and no press at all. Running this by hand stays for the two cases a merge
+# cannot cover - a build with nothing published, and a re-run after a release build failed.
+#
+# The `v*` tag trigger stays for the "I tagged locally" path. Neither push trigger double-fires on
+# releases this workflow publishes: GitHub does not trigger workflows from pushes made with
+# GITHUB_TOKEN.
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
     inputs:
@@ -56,7 +65,78 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Cutting a release is merging the release pull request, and this is what notices it. Every push
+  # to main runs this job; it reads one file at two commits and answers one question - did this push
+  # move the workspace version. Only then does the two-hour build below start.
+  #
+  # A gate *job* rather than a workflow-level `paths` filter, the same shape and for the same reason
+  # as ci.yml's: a path-skipped workflow creates no check runs at all. "Cargo.toml changed" is not
+  # the question anyway - a dependency edit touches that file too.
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # It reads one file at two commits and writes nothing.
+      contents: read
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # This commit and whatever main pointed at before the push, which a push of ten commits
+          # puts ten commits back.
+          fetch-depth: 0
+
+      - id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != "push" ] || [ "$REF_TYPE" = "tag" ]; then
+            # A run started by hand asked for a build, and a tag names one. Neither is this job's
+            # question, and neither can be answered by looking at what a push moved.
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # `event.before` is what main pointed at, which is the right baseline whether the push
+          # carried one commit or ten. It is all-zeros for a branch's first push, where HEAD^ is
+          # the honest answer.
+          BASE="$BEFORE"
+          case "$BASE" in
+            *[!0]*) ;;
+            *) BASE="$(git rev-parse -q --verify 'HEAD^' || true)" ;;
+          esac
+
+          # Asked of the script that owns the number, so this job holds no second copy of where the
+          # version lives. A base commit that records no workspace version at all is not a fault:
+          # it is a commit from before there was one, and there is nothing to have moved.
+          PREV=""
+          if [ -n "$BASE" ]; then
+            # stderr silenced: the script is right to complain about a manifest with no version,
+            # and this job is the one caller for which that is an answer rather than a fault.
+            PREV="$(./scripts/version.sh --at "$BASE" 2>/dev/null || true)"
+          fi
+          if [ -z "$PREV" ]; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "No workspace version to compare against at ${BASE:-the start of history} - nothing to release."
+            exit 0
+          fi
+
+          NOW="$(./scripts/version.sh)"
+          if [ "$PREV" = "$NOW" ]; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "The workspace version is still $NOW - nothing to release."
+            exit 0
+          fi
+          echo "build=true" >> "$GITHUB_OUTPUT"
+          echo "::notice::Version moved $PREV -> $NOW. Building and publishing it."
+
   bundle:
+    needs: gate
+    if: needs.gate.outputs.build == 'true'
     runs-on: macos-latest
     # A cold universal build compiles DataFusion and links Skia twice over. The cache is keyed on
     # the lockfile and this job runs rarely enough to miss it often, so size for cold.
@@ -94,12 +174,18 @@ jobs:
           # judgement per line.
           REF_NAME: ${{ github.ref_name }}
           EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
           INPUT_RELEASE: ${{ inputs.release }}
         run: |
           set -euo pipefail
           MANIFEST="$(./scripts/version.sh)"
 
-          if [ "$EVENT_NAME" = "push" ]; then
+          TAG_PUSH=false
+          if [ "$EVENT_NAME" = "push" ] && [ "$REF_TYPE" = "tag" ]; then
+            TAG_PUSH=true
+          fi
+
+          if [ "$TAG_PUSH" = "true" ]; then
             # A tag push names its own version, and the tag already exists by definition.
             TAG="$REF_NAME"
             VERSION="${TAG#v}"
@@ -111,6 +197,12 @@ jobs:
               echo "::error::Tag $TAG names $VERSION but the workspace Cargo.toml reads $MANIFEST. Tag a commit whose manifest reads $VERSION - ./scripts/release-pr.sh opens the pull request that moves it."
               exit 1
             fi
+          elif [ "$EVENT_NAME" = "push" ]; then
+            # A push to main that moved the version is the release pull request merging - the gate
+            # only starts this job for one, so publishing is the whole point of the run.
+            VERSION="$MANIFEST"
+            TAG="v$VERSION"
+            PUBLISH=true
           else
             VERSION="$MANIFEST"
             TAG="v$VERSION"
@@ -124,7 +216,7 @@ jobs:
 
           # The check worth making before two hours of compiling rather than after - and the one
           # that catches a forgotten bump, the manifest still reading the version already out.
-          if [ "$PUBLISH" = "true" ] && [ "$EVENT_NAME" != "push" ]; then
+          if [ "$PUBLISH" = "true" ] && [ "$TAG_PUSH" != "true" ]; then
             if gh release view "$TAG" >/dev/null 2>&1; then
               echo "::error::Release $TAG already exists - this branch has not been bumped since it was published. Run ./scripts/release-pr.sh, merge the pull request it opens, and run this again."
               exit 1
