@@ -9530,7 +9530,7 @@ checksum = "d08889ec5408683408db66ad89e0e1f93dff55c73a4ccc71c427d5b277ee47e6"
 
 [[package]]
 name = "strata-agent"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "bytes",
  "futures",
@@ -9558,7 +9558,7 @@ dependencies = [
 
 [[package]]
 name = "strata-arrow"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "arrow",
  "object_store",
@@ -9569,7 +9569,7 @@ dependencies = [
 
 [[package]]
 name = "strata-code-editor"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "freya-components",
  "freya-core",
@@ -9584,7 +9584,7 @@ dependencies = [
 
 [[package]]
 name = "strata-command-macro"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -9593,7 +9593,7 @@ dependencies = [
 
 [[package]]
 name = "strata-core"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "app_dirs2",
  "apple-native-keyring-store",
@@ -9615,7 +9615,7 @@ dependencies = [
 
 [[package]]
 name = "strata-engine"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "aws-config",
@@ -9651,7 +9651,7 @@ dependencies = [
 
 [[package]]
 name = "strata-freya"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "async-io",
  "async-trait",
@@ -9680,7 +9680,7 @@ dependencies = [
 
 [[package]]
 name = "strata-model"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
