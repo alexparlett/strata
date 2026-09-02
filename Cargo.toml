@@ -23,7 +23,7 @@ resolver = "2"
 # eight chances for the DMG, the Info.plist and the tag to disagree. `scripts/version.sh` is the
 # only thing that writes this line.
 [workspace.package]
-version = "0.3.2"
+version = "0.4.0"
 
 # Freya (Skia/native GUI) — our fork. One git source for the umbrella crate and every sibling the
 # vendored editor pulls, so the graph shares a single `freya-core`/`torin` (no duplicates).
