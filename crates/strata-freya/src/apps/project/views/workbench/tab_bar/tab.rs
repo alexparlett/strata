@@ -242,7 +242,8 @@ impl Component for Tab {
                 }
             });
 
-        DragZone::new(id, content)
+        DragZone::new(id)
+            .child(content)
             .drag_element(rect().height(Size::px(TAB_HEIGHT)).child(TabChrome::new(
                 self.name.clone(),
                 self.active,

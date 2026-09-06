@@ -16,4 +16,4 @@ The table editor's location choices are Files, Data source, and Managed table. S
 
 Export places a compact format selector and preview before its options. Short character and numeric options share a row with their labels. Chart mark selection uses compact text tiles; axes use the caption typography role. Activity rails share their dimensions from the spacing constants.
 
-The local `vendor/freya-core` override supplies the framework's modal boundary. Its provenance and the intended upstream replacement are recorded in `vendor/freya-core/STRATA.md`. Native title-bar decoration is applied only on macOS so the same components can be tested headlessly on Linux.
+The Freya fork supplies the framework's modal boundary. Workspace dependencies pin its commit directly; Strata does not vendor Freya core. Native title-bar decoration is applied only on macOS so the same components can be tested headlessly on Linux.

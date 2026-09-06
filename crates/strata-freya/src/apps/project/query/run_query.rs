@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use freya::query::{Captured, Query, QueryCapability};
 use strata_arrow::config::DisplayStamp;
-use strata_arrow::plan::{as_explain, QueryPlan};
+use strata_arrow::plan::{QueryPlan, as_explain};
 use strata_engine::{EngineError, RunOutcome, RunRows, RunTag, SnapshotPage, StatementReport};
 use strata_model::{PageQuery, SnapshotId};
 use uuid::Uuid;
@@ -150,9 +150,11 @@ impl PageSpec {
     /// fork the entry into a duplicate fetch. `enabled` is the one legitimate per-site
     /// variable (a read stays disabled until its Run settles rows).
     pub fn query(&self, engine: &EngineCtx, enabled: bool) -> Query<FetchSnapshotPage> {
-        Query::new(self.clone(), FetchSnapshotPage(engine.captured()))
-            .stale_time(Duration::MAX)
-            .enable(enabled)
+        Query::new(
+            enabled.then(|| self.clone()),
+            FetchSnapshotPage(engine.captured()),
+        )
+        .stale_time(Duration::MAX)
     }
 }
 

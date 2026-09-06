@@ -167,7 +167,8 @@ pub(super) fn register_component_themes(th: &mut Theme, typo: &Typography) {
         p.background = role(Role::GhostElementBackground);
         p.hover_background = role(Role::ElevatedElementHover);
         p.select_background = role(Role::ElementSelected);
-        p.select_border_fill = clear();
+        p.focus_border_fill = role(Role::BorderFocused);
+        p.select_color = role(Role::Text);
     });
     builtin::<PopupThemePreference>(th, "popup", |p| {
         p.background = role(Role::ElevatedSurface);

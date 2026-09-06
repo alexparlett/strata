@@ -34,13 +34,13 @@
 use freya::components::get_theme;
 use freya::components::{MenuItem, ScrollView, Select, SelectThemePartial};
 use freya::prelude::*;
-use freya::radio::{use_radio, Radio};
+use freya::radio::{Radio, use_radio};
 use strata_arrow::MAX_BINS;
 use strata_model::{ChartConfig, ChartMark, ChartSort, ChartX, TabId};
 
 use super::config::{
-    allows_row_index, log_axis, reads_bounds, reads_quartiles, series_options, series_required,
-    sortable, takes_many_ys, trendable, x_options, y_options, Encoding, Roles,
+    Encoding, Roles, allows_row_index, log_axis, reads_bounds, reads_quartiles, series_options,
+    series_required, sortable, takes_many_ys, trendable, x_options, y_options,
 };
 use super::{ChartTheme, ChartThemePartial, ChartThemePreference};
 use crate::apps::project::state::{Chan, SessionState};
@@ -1023,8 +1023,8 @@ fn tile_dress(theme: &ChartTheme, selected: bool, hovered: bool) -> (Color, Colo
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field};
     use freya::radio::RadioStation;
-    use freya_testing::prelude::{KeyboardEventName, PlatformEvent};
     use freya_testing::TestingRunner;
+    use freya_testing::prelude::{KeyboardEventName, PlatformEvent};
     use strata_arrow::column_info;
     use strata_core::theme::load;
     use strata_model::{Axis, ChartData, ChartSeries, ColumnInfo, Origin};
@@ -1101,9 +1101,8 @@ mod tests {
     /// Settle the tree and the effects those renders scheduled — several passes, because
     /// Freya only polls tasks once nothing is dirty (the catalog tests' note).
     fn settle(runner: &mut TestingRunner) {
-        for _ in 0..4 {
-            runner.sync_and_update();
-        }
+        runner.animation_clock().disable();
+        runner.poll_n(std::time::Duration::from_millis(10), 4);
     }
 
     fn texts(runner: &TestingRunner) -> Vec<String> {

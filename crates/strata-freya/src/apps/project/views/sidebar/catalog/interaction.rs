@@ -11,13 +11,13 @@ use std::time::Duration;
 
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use freya::radio::RadioStation;
-use freya_testing::prelude::{MouseEventName, PlatformEvent};
 use freya_testing::TestingRunner;
+use freya_testing::prelude::{MouseEventName, PlatformEvent};
 use strata_arrow::column_info;
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
-use strata_engine::sources::postgres::Pg;
 use strata_engine::SourceKind;
+use strata_engine::sources::postgres::Pg;
 use strata_engine::{SourceMode, TableMeta, ViewMeta};
 use strata_model::{
     CatalogKind, ColOwner, ColRef, ColumnInfo, Origin, RemoteRef, RightPane, SavedQuery, SourceDef,
@@ -29,7 +29,7 @@ use crate::apps::configure::ConfigureTarget;
 use crate::apps::project::state::{CatalogState, Chats, Log, PersistFaults, Pick};
 
 use super::entry::watched_scan;
-use super::row::{fold_plan, Folds, ICON_SLOT, INDENT};
+use super::row::{Folds, ICON_SLOT, INDENT, fold_plan};
 use super::*;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{ProfileTarget, ScanId};
@@ -307,8 +307,28 @@ fn runner_sized(fixture: Fixture, width: f32) -> (TestingRunner, Handles) {
 /// [`runner_sized`] at a chosen pane **height** too — what the virtualization is measured against,
 /// since the whole claim is that a row off the bottom of the viewport is never built.
 fn runner_shaped(fixture: Fixture, width: f32, height: f32) -> (TestingRunner, Handles) {
+    runner_with_profile_state(fixture, width, height, false)
+}
+
+fn runner_with_profile_state(
+    fixture: Fixture,
+    width: f32,
+    height: f32,
+    pending: bool,
+) -> (TestingRunner, Handles) {
     TestingRunner::new(
-        app,
+        move || {
+            use_hook(move || {
+                if pending {
+                    GlobalContexts::get().insert_context(freya::query::QueriesStorage::<
+                        crate::apps::project::query::ProfileEntry,
+                    >::mocked_async(
+                        |_| std::future::pending()
+                    ));
+                }
+            });
+            app()
+        },
         (width, height).into(),
         |r| {
             let filter = r.provide_root_context(|| State::create(String::new()));
@@ -1545,12 +1565,11 @@ fn a_refused_row_is_not_offered_a_scan() {
 /// Once a row carries a request it **spins**, and the spinner is its own — the registration
 /// spinner beside it means something else entirely, and the two must be tellable apart.
 ///
-/// A scan of a table that was never registered fails almost at once, which is exactly what makes
-/// this assertable: the glyph is up while the scan is in flight and gone the moment it settles,
-/// with no delay hold of its own.
+/// The fixture holds the scan in flight so the assertion does not race an engine response.
 #[test]
 fn a_row_being_profiled_says_so_in_its_own_words() {
-    let (mut runner, h) = settled();
+    let (mut runner, h) = runner_with_profile_state(project, 300., 1400., true);
+    settle(&mut runner);
     let mut store = h.store;
     let profiling = |runner: &TestingRunner| {
         status_labels(runner)
@@ -1587,7 +1606,8 @@ fn a_row_being_profiled_says_so_in_its_own_words() {
 /// returns the moment it settles.
 #[test]
 fn a_row_wearing_every_status_glyph_still_opens_its_own_menu() {
-    let (mut runner, h) = settled();
+    let (mut runner, h) = runner_with_profile_state(project, 300., 1400., true);
+    settle(&mut runner);
     let mut store = h.store;
     wait_out_the_spinner_delay(&mut runner);
     store

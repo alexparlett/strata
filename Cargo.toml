@@ -29,13 +29,13 @@ version = "0.4.0"
 # vendored editor pulls, so the graph shares a single `freya-core`/`torin` (no duplicates).
 # Cargo.lock pins the commit; `cargo update` moves it to the fork's current `main`.
 [workspace.dependencies]
-freya = { git = "https://github.com/alexparlett/freya", branch = "main" }
-freya-core = { git = "https://github.com/alexparlett/freya", branch = "main" }
-freya-testing = { git = "https://github.com/alexparlett/freya", branch = "main" }
-freya-engine = { git = "https://github.com/alexparlett/freya", branch = "main" }
-freya-edit = { git = "https://github.com/alexparlett/freya", branch = "main" }
-freya-components = { git = "https://github.com/alexparlett/freya", branch = "main" }
-torin = { git = "https://github.com/alexparlett/freya", branch = "main" }
+freya = { git = "https://github.com/alexparlett/freya", rev = "f046650a5b9ca547bf646f85a53010de33efc8a8" }
+freya-core = { git = "https://github.com/alexparlett/freya", rev = "f046650a5b9ca547bf646f85a53010de33efc8a8" }
+freya-testing = { git = "https://github.com/alexparlett/freya", rev = "f046650a5b9ca547bf646f85a53010de33efc8a8" }
+freya-engine = { git = "https://github.com/alexparlett/freya", rev = "f046650a5b9ca547bf646f85a53010de33efc8a8" }
+freya-edit = { git = "https://github.com/alexparlett/freya", rev = "f046650a5b9ca547bf646f85a53010de33efc8a8" }
+freya-components = { git = "https://github.com/alexparlett/freya", rev = "f046650a5b9ca547bf646f85a53010de33efc8a8" }
+torin = { git = "https://github.com/alexparlett/freya", rev = "f046650a5b9ca547bf646f85a53010de33efc8a8" }
 
 # Arrow, pinned once for the whole workspace. `strata-arrow` names it directly while
 # `strata-engine` reaches the same crate through `datafusion::arrow`, and the two must be the
@@ -115,6 +115,3 @@ debug = "line-tables-only"
 opt-level = 3
 lto = "thin"
 codegen-units = 1
-
-[patch."https://github.com/alexparlett/freya"]
-freya-core = { path = "vendor/freya-core" }

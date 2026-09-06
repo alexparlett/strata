@@ -3,19 +3,18 @@ use strata_model::TabId;
 use crate::apps::project::state::{Chan, SessionState};
 use crate::apps::project::views::workbench::tab_bar::controls::TabControls;
 use crate::apps::project::views::workbench::tab_bar::drag;
-use crate::apps::project::views::workbench::tab_bar::tab::{Tab, TAB_HEIGHT};
+use crate::apps::project::views::workbench::tab_bar::tab::{TAB_HEIGHT, Tab};
 use crate::components::divider::Divider;
 use crate::components::metrics::SP_4;
 use crate::components::typography::Body;
-use crate::theme::{use_roles, Role};
+use crate::theme::{Role, use_roles};
 use freya::components::{
-    define_theme, get_theme, use_drag, use_scroll_controller, DropZone, ScrollConfig, ScrollView,
+    DropZone, ScrollConfig, ScrollView, define_theme, get_theme, use_drag, use_scroll_controller,
 };
 use freya::prelude::{
-    rect, use_state, Alignment, Area, ChildrenExt, Color, Component, ContainerExt,
-    ContainerSizeExt, ContainerWithContentExt, Content, Direction, Element, Event,
-    EventHandlersExt, Gaps, IntoElement, PointerEventData, Size, SizedEventData, StyleExt,
-    WritableUtils,
+    Alignment, Area, ChildrenExt, Color, Component, ContainerExt, ContainerSizeExt,
+    ContainerWithContentExt, Content, Direction, Element, Event, EventHandlersExt, Gaps,
+    IntoElement, PointerEventData, Size, SizedEventData, StyleExt, WritableUtils, rect, use_state,
 };
 use freya::radio::use_radio;
 use std::collections::HashMap;
@@ -138,12 +137,13 @@ impl Component for TabBar {
             .drag_scrolling(false)
             .children(children);
 
-        let drop_zone = DropZone::new(track, move |dragged: TabId| {
+        let drop_zone = DropZone::new(move |dragged: TabId| {
             if let Some(ins) = *insert.peek() {
                 radio.write().move_tab(dragged, ins);
             }
             insert.set(None);
-        });
+        })
+        .child(track);
 
         let tabs_area = rect()
             .width(Size::flex(1.))

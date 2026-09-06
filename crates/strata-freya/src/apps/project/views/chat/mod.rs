@@ -35,10 +35,10 @@ mod mention;
 mod transcript;
 
 use freya::components::{
-    define_theme, get_theme, use_scroll_controller, ScrollConfig, ScrollPosition, ScrollView,
+    ScrollConfig, ScrollPosition, ScrollView, define_theme, get_theme, use_scroll_controller,
 };
 use freya::prelude::*;
-use freya::radio::{use_radio, RadioStation};
+use freya::radio::{RadioStation, use_radio};
 
 use self::composer::Composer;
 use self::header::ChatHeader;
@@ -46,7 +46,7 @@ use self::transcript::Transcript;
 use crate::apps::project::state::{Anchor, Chan, ChatsCtx, SessionState};
 use crate::components::divider::Divider;
 use crate::components::metrics::{PANE_BODY_MIN_W, SP_4, SP_5};
-use crate::theme::{use_roles, Role};
+use crate::theme::{Role, use_roles};
 use strata_core::util::plural;
 use strata_model::RightPane;
 
@@ -232,13 +232,13 @@ mod tests {
     use std::rc::Rc;
     use std::sync::Arc;
 
-    use freya::radio::{use_radio_station, RadioStation};
+    use freya::radio::{RadioStation, use_radio_station};
+    use freya_testing::TestingRunner;
     use freya_testing::prelude::{
         Code, Key, KeyboardEventName, Modifiers, NamedKey, PlatformEvent,
     };
-    use freya_testing::TestingRunner;
-    use strata_agent::assistant::{Assistant, Scope, Settle, TurnEvent};
     use strata_agent::StrataTools;
+    use strata_agent::assistant::{Assistant, Scope, Settle, TurnEvent};
     use strata_core::ai::{Ai, ProviderKind, ProviderSetup};
     use strata_core::config::AppConfig;
     use strata_core::models::Listings;
@@ -248,20 +248,20 @@ mod tests {
     use super::composer::ceiling;
     use super::transcript::ACTIONS_H;
     use super::*;
-    use crate::agent::{create_global_agent, AgentDirectory};
+    use crate::agent::{AgentDirectory, create_global_agent};
     use crate::apps::project::contexts::EngineCtx;
     use crate::apps::project::state::{
-        seed_pick, AssistantCtx, Chats, Log, PersistFaults, ProjChan, ProjectState, SessionState,
+        AssistantCtx, Chats, Log, PersistFaults, ProjChan, ProjectState, SessionState, seed_pick,
     };
     use crate::apps::project::views::ChatDrop;
     use crate::components::metrics::TOOL_SIZE;
     use crate::menu::create_global_menu;
     use crate::platform::{create_global_open, create_global_windows};
     use crate::state::{
-        create_global_theme_preview, create_global_updates, AppCtx, ConfigStation, ModelListings,
-        Probes,
+        AppCtx, ConfigStation, ModelListings, Probes, create_global_theme_preview,
+        create_global_updates,
     };
-    use crate::theme::{strata_theme, ThemesCtx};
+    use crate::theme::{ThemesCtx, strata_theme};
     use crate::updater::create_global_update_request;
 
     /// A config whose AI half is `ai` — everything the composer branches on.
@@ -374,7 +374,7 @@ mod tests {
     fn field_area(runner: &TestingRunner) -> Area {
         runner
             .find(|node, element| {
-                (element.accessibility().builder.role() == AccessibilityRole::TextInput)
+                (element.accessibility().builder.role() == AccessibilityRole::MultilineTextInput)
                     .then(|| node.layout().area)
             })
             .expect("the composer's field is on screen")
