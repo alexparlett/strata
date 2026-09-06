@@ -15,7 +15,7 @@ use tokio::task::AbortHandle;
 use strata_model::SnapshotId;
 
 use crate::snapshots::SnapshotStats;
-use crate::{Engine, RunTag, WsId};
+use crate::{Engine, EngineError, RunTag, StopReason, WsId};
 
 /// An in-flight **profile scan**: which dispatch it is, and the handle that cancels it.
 ///
@@ -58,10 +58,6 @@ pub(crate) struct InFlight {
 /// service, and without this the whole of its round trip is a stretch in which a tab looks idle
 /// and Cancel does nothing.
 pub(crate) struct Classifying {
-    /// Engine-unique, monotonic — the same "am I still the latest?" identity [`InFlight`] uses.
-    /// A second `run` on the same workspace replaces the entry rather than aborting it, so the
-    /// first one's settle path has to know the entry is no longer its own.
-    pub(crate) dispatch: u64,
     pub(crate) tag: RunTag,
     pub(crate) abort: AbortHandle,
     pub(crate) start: Instant,
@@ -144,9 +140,21 @@ impl<'a> ClassifyGuard<'a> {
         }
     }
 
-    /// The classification settled on its own terms; leave the entry to `classify_bracket`.
-    pub(crate) fn disarm(&mut self) {
+    /// Transfers this admission to dispatch under the lifecycle lock.
+    pub(crate) fn dispatch(&mut self, lc: &mut Lifecycle) -> Result<(), EngineError> {
         self.armed = false;
+        if lc.classifying.remove(&(self.ws, self.dispatch)).is_none() {
+            return Err(EngineError::Stopped(StopReason::Cancelled));
+        }
+        lc.classifying.retain(|(ws, dispatch), pending| {
+            if *ws == self.ws && *dispatch < self.dispatch {
+                pending.abort.abort();
+                false
+            } else {
+                true
+            }
+        });
+        Ok(())
     }
 }
 
@@ -158,10 +166,7 @@ impl Drop for ClassifyGuard<'_> {
         let Ok(mut lc) = self.engine.lifecycle.lock() else {
             return;
         };
-        if lc.classifying.get(&self.ws).map(|c| c.dispatch) != Some(self.dispatch) {
-            return;
-        }
-        if let Some(c) = lc.classifying.remove(&self.ws) {
+        if let Some(c) = lc.classifying.remove(&(self.ws, self.dispatch)) {
             c.abort.abort();
         }
         self.engine.publish_inflight(&lc);
@@ -174,9 +179,8 @@ impl Drop for ClassifyGuard<'_> {
 #[derive(Default)]
 pub(crate) struct Lifecycle {
     pub(crate) inflight: HashMap<WsId, InFlight>,
-    /// Statements being classified — see [`Classifying`]. Read by `cancel`, `is_running` and
-    /// `publish_inflight` beside `inflight`, and by supersede by nobody.
-    pub(crate) classifying: HashMap<WsId, Classifying>,
+    /// Pending admissions, retained until dispatch consumes them or cancellation removes them.
+    pub(crate) classifying: HashMap<(WsId, u64), Classifying>,
     pub(crate) current: HashMap<WsId, SnapshotId>,
     /// In-flight profile scans by entry identity ([`fold_ident`] of the name — tables and
     /// views share one namespace).

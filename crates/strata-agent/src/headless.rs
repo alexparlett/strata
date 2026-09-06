@@ -62,6 +62,18 @@ struct Session {
     closing: bool,
 }
 
+/// Releases a headless dispatch even when its request future is dropped.
+struct Dispatch<'a> {
+    host: &'a HeadlessHost,
+    session: QuerySessionId,
+}
+
+impl Drop for Dispatch<'_> {
+    fn drop(&mut self) {
+        self.host.dispatched_back(self.session);
+    }
+}
+
 /// A [`Host`] over one project folder, its engine, and the pass that registered it.
 pub struct HeadlessHost {
     project: Project,
@@ -330,6 +342,10 @@ impl Host for HeadlessHost {
             open.dispatched += 1;
         }
 
+        let _dispatch = Dispatch {
+            host: self,
+            session,
+        };
         let ws = WsId::from(session);
         let tag = RunTag(self.runs.fetch_add(1, Ordering::Relaxed) as u128);
         let settled = match mode {
@@ -346,7 +362,6 @@ impl Host for HeadlessHost {
                 .await
                 .map(Settled::Plan),
         };
-        self.dispatched_back(session);
         Ok(settled)
     }
 
@@ -806,6 +821,31 @@ mod tests {
             Err(AgentError::NotFound(_))
         ));
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn dropping_a_run_releases_the_session_dispatch() {
+        let (root, host) = project("cancel-dispatch").await;
+        let who = agent();
+        let session = host.open_query_session(&root, &who).await.unwrap();
+        let mut running = Box::pin(host.run(
+            &root,
+            who.id,
+            session,
+            "SELECT count(*) FROM generate_series(1, 50000000)".into(),
+            RunMode::Run,
+            10,
+        ));
+        assert!(futures::poll!(running.as_mut()).is_pending());
+        assert_eq!(host.sessions.lock().unwrap()[0].dispatched, 1);
+        drop(running);
+        assert_eq!(host.sessions.lock().unwrap()[0].dispatched, 0);
+        host.close_query_session(&root, who.id, session)
+            .await
+            .unwrap();
+        assert!(host.sessions.lock().unwrap().is_empty());
+        assert!(!host.engine.ws(session.into()).is_running());
+        fs::remove_dir_all(root).unwrap();
     }
 
     /// **A close racing a dispatch is a tombstone.** The handle stops answering at once and

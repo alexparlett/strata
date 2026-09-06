@@ -25,6 +25,19 @@ pub struct EngineCtx {
 }
 
 impl EngineCtx {
+    /// Builds a project engine whose statement definitions persist before completion.
+    pub fn for_project(
+        overrides: BTreeMap<String, String>,
+        project: strata_core::project::ProjectStore,
+    ) -> Self {
+        Self {
+            eng: Engine::builder()
+                .with_config(overrides)
+                .with_project_store(project)
+                .build(),
+        }
+    }
+
     /// Spawn this window's engine (its private runtime + context) with the app's
     /// `datafusion.*` overrides (Settings ▸ Engine ▸ Properties, W2), and wrap it for context.
     ///

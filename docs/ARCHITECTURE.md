@@ -349,3 +349,22 @@ Connecting a client is [MCP_CLIENTS.md](MCP_CLIENTS.md).
 | Themes | [FREYA_THEME_SPEC.md](FREYA_THEME_SPEC.md) |
 | Shipping a build | [RELEASING.md](RELEASING.md) |
 | **Embedding the engine in something else** | `strata_engine::guide` — rustdoc, so its examples compile ([docs/README.md](README.md#embedding-the-engine)) |
+
+### Statement completion and project durability
+
+The app supplies one `strata_core::project::ProjectStore` to its engine and project state.
+`Workspace::run` commits durable definition effects inside the engine task before returning a
+`StatementReport`; `Persistence` distinguishes a saved definition, a failed write retained for
+retry, and an embedder-owned write when no store was configured. The UI projects the report and
+merges its own definition edits against its last saved projection. Request keepers retain query
+cache entries and observe history; they do not own statement durability.
+
+Every workspace SQL entry passes through engine admission. Read-only `query` and `explain`
+combine their principal with the engine policy. Pending admissions stay tracked until dispatch;
+cleanup cancels all of them, and dispatch consumes its admission while holding the lifecycle lock.
+Headless dispatch accounting uses a drop guard so cancellation releases closed sessions.
+
+The local internal-table store publishes replacements with an atomic directory exchange on
+macOS and Linux, retaining the original destination if publication fails. Other platforms refuse
+replacement when that primitive is unavailable. Table creation serializes storage-name ownership
+checks and refuses colliding names before writing, preserving existing project paths.

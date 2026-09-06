@@ -23,11 +23,14 @@ use std::time::Duration;
 use freya::query::{Captured, Query, QueryCapability};
 use strata_arrow::config::DisplayStamp;
 use strata_arrow::plan::{as_explain, QueryPlan};
-use strata_engine::{EngineError, RunOutcome, RunRows, RunTag, SnapshotPage, StatementReport};
+use strata_engine::{
+    EngineError, Persistence, RunOutcome, RunRows, RunTag, SnapshotPage, StatementReport,
+};
 use strata_model::{PageQuery, SnapshotId};
 use uuid::Uuid;
 
 use crate::apps::project::contexts::EngineCtx;
+use crate::apps::project::state::{settle, Settle};
 use strata_model::TabId;
 
 /// Rows per page for a Run's snapshot (page 1 rides in the Run's own `QueryOutput`; later
@@ -79,8 +82,9 @@ impl QuerySpec {
     /// would dispatch the same press a second time. `stale_time(MAX)` so a settled press
     /// never re-executes by itself (`SNAPSHOT_SPEC` §6); `clean_time` stays at the default
     /// so a superseded press's entry is garbage-collected once nothing subscribes it.
-    pub fn query(&self, engine: &EngineCtx) -> Query<RunQuery> {
-        Query::new(self.clone(), RunQuery(engine.captured())).stale_time(Duration::MAX)
+    pub fn query(&self, engine: &EngineCtx, to: Settle) -> Query<RunQuery> {
+        Query::new(self.clone(), RunQuery(engine.captured(), Captured(to)))
+            .stale_time(Duration::MAX)
     }
 }
 
@@ -93,15 +97,14 @@ pub enum QueryOutcome {
     Rows(RunRows),
     Plan(QueryPlan),
     /// An intercepted statement's report — no rows and no snapshot handle, so the tab's
-    /// previous result stays readable. The keeper folds its `StoreEffect` into the project
-    /// (`state::statement`); the results pane renders the sentence.
+    /// previous result stays readable; the capability projects its effect before returning it.
     Statement(StatementReport),
 }
 
 /// The Run capability. The engine handle rides as [`Captured`] — invisible to cache
 /// identity (`PartialEq` always-true, `Hash` no-op).
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub struct RunQuery(pub Captured<EngineCtx>);
+pub struct RunQuery(pub Captured<EngineCtx>, pub Captured<Settle>);
 
 impl QueryCapability for RunQuery {
     type Ok = QueryOutcome;
@@ -115,9 +118,17 @@ impl QueryCapability for RunQuery {
                 .ws(spec.tab.into())
                 .run(spec.run.into(), spec.sql.clone(), spec.page_size)
                 .await
-                .map(|outcome| match outcome {
-                    RunOutcome::Rows(rows) => QueryOutcome::Rows(rows),
-                    RunOutcome::Statement(report) => QueryOutcome::Statement(report),
+                .and_then(|outcome| match outcome {
+                    RunOutcome::Rows(rows) => Ok(QueryOutcome::Rows(rows)),
+                    RunOutcome::Statement(report) => {
+                        settle(*self.1, engine, &report);
+                        match &report.persistence {
+                            Persistence::Failed(why) => Err(EngineError::Failed(format!(
+                                "Statement completed but its definition could not be saved: {why}"
+                            ))),
+                            _ => Ok(QueryOutcome::Statement(report)),
+                        }
+                    }
                 }),
             QueryMode::Explain { analyze } => engine
                 .ws(spec.tab.into())
@@ -177,7 +188,7 @@ impl QueryCapability for FetchSnapshotPage {
 /// for the UI executor (the engine's `JoinHandle`s are executor-agnostic — the same
 /// await `use_query` performs).
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use futures::executor::block_on;
     use strata_engine::Fault;
 
@@ -185,25 +196,60 @@ mod tests {
 
     const SQL: &str = "SELECT * FROM (VALUES (2, 'b'), (1, 'a'), (3, 'c')) AS t";
 
-    fn spec(engine: &EngineCtx, mode: QueryMode) -> (RunQuery, QuerySpec) {
-        (
-            RunQuery(engine.captured()),
-            QuerySpec {
-                tab: TabId::new(),
-                run: RunId::new(),
-                sql: SQL.into(),
-                mode,
-                page_size: 2,
+    pub(crate) fn with_run<T>(engine: &EngineCtx, test: impl FnOnce(RunQuery) -> T) -> T {
+        use crate::apps::project::state::{
+            CatalogState, Log, PersistFaults, ProjectState, ReportCtx, ScanRequest,
+        };
+        use freya::prelude::*;
+        use freya::radio::RadioStation;
+        use freya_testing::TestingRunner;
+        use strata_core::project::ProjectDefs;
+
+        let engine = engine.clone();
+        let (_runner, run) = TestingRunner::new(
+            || rect().into_element(),
+            (400., 300.).into(),
+            move |runtime| {
+                runtime.provide_root_context(|| {
+                    let to = Settle {
+                        project: RadioStation::create(ProjectState::from_defs(
+                            ProjectDefs::default(),
+                            std::env::temp_dir(),
+                        )),
+                        catalog: State::create(CatalogState::Cold),
+                        registrations: State::create(strata_engine::Registrations::default()),
+                        rescan: State::create(ScanRequest::default()),
+                        report: ReportCtx {
+                            log: State::create(Log::default()),
+                            faults: State::create(PersistFaults::default()),
+                        },
+                    };
+                    RunQuery(engine.captured(), Captured(to))
+                })
             },
-        )
+            1.,
+        );
+        test(run)
+    }
+
+    fn spec(mode: QueryMode) -> QuerySpec {
+        QuerySpec {
+            tab: TabId::new(),
+            run: RunId::new(),
+            sql: SQL.into(),
+            mode,
+            page_size: 2,
+        }
     }
 
     #[test]
     fn run_then_page_through_the_capabilities() {
         let engine = EngineCtx::default();
-        let (run, spec) = spec(&engine, QueryMode::Run);
+        let spec = spec(QueryMode::Run);
 
-        let QueryOutcome::Rows(page) = block_on(run.run(&spec)).expect("run") else {
+        let QueryOutcome::Rows(page) =
+            with_run(&engine, |run| block_on(run.run(&spec))).expect("run")
+        else {
             panic!("mode Run settles to rows");
         };
         assert_eq!(page.output.total, 3);
@@ -242,18 +288,22 @@ mod tests {
     #[test]
     fn a_refused_statement_settles_err_through_the_capability() {
         let engine = EngineCtx::default();
-        let (run, mut spec) = spec(&engine, QueryMode::Run);
+        let mut spec = spec(QueryMode::Run);
         spec.sql = "CREATE DATABASE d".into();
 
-        let err = block_on(run.run(&spec)).err().expect("refused");
+        let err = with_run(&engine, |run| block_on(run.run(&spec)))
+            .err()
+            .expect("refused");
         assert_eq!(err.to_string(), Fault::CreateDatabase.message());
     }
 
     #[test]
     fn explain_settles_to_a_plan() {
         let engine = EngineCtx::default();
-        let (run, spec) = spec(&engine, QueryMode::Explain { analyze: false });
-        let QueryOutcome::Plan(plan) = block_on(run.run(&spec)).expect("explain") else {
+        let spec = spec(QueryMode::Explain { analyze: false });
+        let QueryOutcome::Plan(plan) =
+            with_run(&engine, |run| block_on(run.run(&spec))).expect("explain")
+        else {
             panic!("mode Explain settles to a plan");
         };
         assert!(!plan.physical.is_empty());

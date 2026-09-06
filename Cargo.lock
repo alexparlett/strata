@@ -9632,6 +9632,7 @@ dependencies = [
  "flate2",
  "futures",
  "keyring-core",
+ "libc",
  "mysql_async",
  "object_store",
  "regex",

@@ -4,16 +4,30 @@
 //! and the clock onto it and hands back a [`StatementReport`], so a report can never disagree
 //! with the statement that produced it. The catalog mutation rides along as a [`StoreEffect`].
 
+use strata_core::project::ProjectDefs;
+
 use strata_model::{TableDef, ViewDef};
 
 use crate::catalog::{TableMeta, ViewMeta};
 use crate::statements::StmtKind;
 use crate::CatalogGen;
 
-/// What one intercepted statement did — the `RunOutcome::Statement` the results pane renders
-/// as a status row and the app folds into its stores.
+/// Whether execution saved a statement's durable definitions.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Persistence {
+    /// The caller owns saving this effect.
+    Caller,
+    /// Execution saved the definitions, or the statement changed no definitions.
+    Saved,
+    /// Execution changed the live state but could not save its definitions.
+    Failed(String),
+}
+
+/// A statement's outcome, catalog generation, and persistence status.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StatementReport {
+    /// The result of saving this statement through the configured project store.
+    pub persistence: Persistence,
     /// Which statement ran. The results pane's label and the log's subject come off
     /// [`StmtKind::label`], so the kind travels rather than a second spelling of it.
     pub kind: StmtKind,
@@ -62,6 +76,7 @@ impl Unsettled {
     /// This statement's report, stamped with the generation `at` its effect left the catalog at.
     pub(crate) fn at(self, at: CatalogGen) -> StatementReport {
         StatementReport {
+            persistence: Persistence::Caller,
             kind: self.kind,
             message: self.message,
             count: self.count,
@@ -145,4 +160,43 @@ pub enum StoreEffect {
     /// completion and every tab's diagnostics already key on. The `FunctionsChanged` shape, for
     /// the same reason.
     RemoteRelationsChanged,
+}
+
+impl StoreEffect {
+    /// Whether this effect changes durable project definitions.
+    pub fn changes_defs(&self) -> bool {
+        matches!(
+            self,
+            Self::TableUpserted { .. }
+                | Self::TableRemoved { .. }
+                | Self::ViewUpserted { .. }
+                | Self::ViewRemoved { .. }
+        )
+    }
+
+    /// Applies only durable definitions, leaving registration metadata in the engine.
+    pub fn apply_defs(&self, defs: &mut ProjectDefs) {
+        match self {
+            Self::TableUpserted { def, .. } => {
+                defs.tables
+                    .retain(|row| row.name.to_lowercase() != def.name.to_lowercase());
+                defs.tables.push(def.clone());
+            }
+            Self::TableRemoved { name, .. } => defs
+                .tables
+                .retain(|row| row.name.to_lowercase() != name.to_lowercase()),
+            Self::ViewUpserted { def, .. } => {
+                defs.views
+                    .retain(|row| row.name.to_lowercase() != def.name.to_lowercase());
+                defs.views.push(def.clone());
+            }
+            Self::ViewRemoved { name } => defs
+                .views
+                .retain(|row| row.name.to_lowercase() != name.to_lowercase()),
+            Self::RescanTable { .. }
+            | Self::FunctionsChanged
+            | Self::PreparedChanged
+            | Self::RemoteRelationsChanged => {}
+        }
+    }
 }

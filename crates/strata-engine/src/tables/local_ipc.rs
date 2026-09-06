@@ -95,19 +95,7 @@ impl LocalIpcTableStore {
 
 #[async_trait]
 impl InternalTableStore for LocalIpcTableStore {
-    /// Write `rows` under a `.tmp-…` sibling and move the whole directory into place in one
-    /// step — **published by rename**, the discipline the snapshot writer keeps, so a crash
-    /// mid-spool leaves nothing but a temp directory the next `.strata` write sweeps
-    /// (`project::tidy_strata_dir`) rather than a half-written table under a real slug.
-    ///
-    /// The staging directory is a **sibling** of the destination, which is what makes the
-    /// publish a rename at all: the move is within one filesystem and atomic. A caller free to
-    /// name any destination could ask for one across a mount point and lose the whole spool to
-    /// `EXDEV` at the last step.
-    ///
-    /// One file, written with the stream's own schema — so a stream with no batches still
-    /// publishes a schema-carrying, zero-row file. IPC self-describes, and that file is where a
-    /// replay's schema comes back from; nothing is copied into the def.
+    /// Stages complete IPC data and atomically publishes or exchanges the destination directory.
     async fn create(&self, slug: &str, rows: SendableRecordBatchStream) -> Result<u64, String> {
         let tables = self.tables()?;
         fs::create_dir_all(&tables).map_err(|e| format!("{}: {e}", tables.display()))?;
@@ -117,10 +105,11 @@ impl InternalTableStore for LocalIpcTableStore {
 
         let dest = tables.join(slug);
         if dest.exists() {
-            fs::remove_dir_all(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+            exchange(&staging.dir, &dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+        } else {
+            fs::rename(&staging.dir, &dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+            staging.published();
         }
-        fs::rename(&staging.dir, &dest).map_err(|e| format!("{}: {e}", dest.display()))?;
-        staging.published();
         Ok(count)
     }
 
@@ -223,6 +212,41 @@ impl InternalTableStore for LocalIpcTableStore {
     fn owned_storage(&self) -> Vec<PathBuf> {
         self.dir().into_iter().collect()
     }
+}
+
+/// Both C paths remain alive for the syscall, which swaps directories without deleting either.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn exchange(left: &Path, right: &Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let left = CString::new(left.as_os_str().as_bytes())?;
+    let right = CString::new(right.as_os_str().as_bytes())?;
+    #[cfg(target_os = "linux")]
+    let result = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            left.as_ptr(),
+            libc::AT_FDCWD,
+            right.as_ptr(),
+            libc::RENAME_EXCHANGE,
+        )
+    };
+    #[cfg(target_os = "macos")]
+    let result = unsafe { libc::renamex_np(left.as_ptr(), right.as_ptr(), libc::RENAME_SWAP) };
+    match result {
+        0 => Ok(()),
+        _ => Err(std::io::Error::last_os_error()),
+    }
+}
+
+/// Refuses replacement on platforms without a directory exchange primitive.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn exchange(_left: &Path, _right: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "Atomic table replacement is unavailable on this platform",
+    ))
 }
 
 /// Write every batch of `rows` into one new IPC file at `path`, in `crate::ipc`'s codec, and
@@ -331,6 +355,43 @@ mod tests {
             schema,
             stream::iter(vec![Ok(batch)]),
         ))
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_failed_replacement_keeps_every_original_byte() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tables = scratch("replace-denied");
+        let store = LocalIpcTableStore::new_in(&tables);
+        store.create("t", rows(vec![1, 2])).await.unwrap();
+        let old = fs::read(tables.join("t/part-0.arrow")).unwrap();
+        let root = tables.clone();
+        let schema = schema();
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![3]))])
+            .unwrap();
+        let replacement = Box::pin(RecordBatchStreamAdapter::new(
+            schema,
+            stream::once(async move {
+                fs::set_permissions(root, fs::Permissions::from_mode(0o500)).unwrap();
+                Ok(batch)
+            }),
+        ));
+        let result = store.create("t", replacement).await;
+        fs::set_permissions(&tables, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(result.is_err());
+        assert_eq!(fs::read(tables.join("t/part-0.arrow")).unwrap(), old);
+        fs::remove_dir_all(tables).unwrap();
+    }
+
+    #[test]
+    fn a_failed_exchange_does_not_remove_the_destination() {
+        let tables = scratch("exchange-failed");
+        fs::create_dir(tables.join("t")).unwrap();
+        fs::write(tables.join("t/original"), b"kept").unwrap();
+        assert!(exchange(&tables.join("absent"), &tables.join("t")).is_err());
+        assert_eq!(fs::read(tables.join("t/original")).unwrap(), b"kept");
+        fs::remove_dir_all(tables).unwrap();
     }
 
     /// A directory's entries, sorted.

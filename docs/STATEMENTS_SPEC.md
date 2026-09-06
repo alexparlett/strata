@@ -17,8 +17,9 @@ flowchart TD
     CLS -- "Admitted::Statement(kind)" --> DDL["arms::execute — resolve_target,\nrequire_target, then the kind's arm,\nunder the bookkeep bracket explain shares\n(cancel / is_running / close confirm)"]
     CLS -- "Refusal" --> ERR2["Err(refusal.message)\nbefore DataFusion can plan"]
     Q --> ROWS["RunOutcome::Rows\nresults grid, snapshot, pages"]
-    DDL --> REP["RunOutcome::Statement(report)"]
-    REP --> SETTLE["the settle: StoreEffect fold →\npersist funnel → catalog generation →\nhistory + event log"]
+    DDL --> SAVE["engine commits durable StoreEffect\nthrough the configured ProjectStore"]
+    SAVE --> REP["RunOutcome::Statement(report)\nwith persistence status"]
+    REP --> SETTLE["window projection → catalog generation →\nhistory + event log"]
 ```
 
 ## 1. The shape of a Run
@@ -139,16 +140,19 @@ both come back as a `StatementReport` through `arms::stamped` — `execute`'s ow
 and the clock are put on in one place. `StatementOutcome` is the arm-facing half and is not part of
 the crate's public surface: a surface that folds one gesture's answer folds the other's.
 
-**The settle** (`apps/project/state/statement.rs`) is one fold for every effect, driven from the
-tab's request keeper so a statement run in a background tab still lands: `catalog_settled` adopts
-the report's own `at` stamp (every catalog row and every tab's diagnostics re-derive) → store
-upsert on the matching `ProjChan` → `persisted_defs` writes `project.json` through the persist
-funnel → the event log. The adoption is once, up front, off the report rather than spelled out per
-arm: a report carries the generation its effect left the catalog at, so an arm added later cannot
-forget it. The log
-entry is recorded by the fold, not by the run-logging hook, because only the fold knows whether
-the def actually reached disk — a success row logged over a failed write would promise a table the
-next open loses.
+**Durability and presentation.** With `EngineBuilder::with_project_store`, `Workspace::run`
+applies durable effects to the shared `ProjectStore` inside its execution task, before returning
+its report. Closing or superseding the UI request cannot discard a completed statement's
+project-definition write. The report carries `Persistence::Saved` or `Persistence::Failed`;
+failed writes retain the intended definitions for retry. Without a configured store, the report
+carries `Persistence::Caller` and the embedder owns saving its effect.
+
+The window's `state::settle` projects the report into the matching `ProjChan`, adopts its catalog
+generation and reports persistence failures. `RunQuery` invokes it before returning, independently
+of the request keeper. Direct catalog gestures use the same fold, which saves caller-owned reports.
+UI edits merge against their last saved projection under the shared store's lock, preserving
+engine changes that the window has not observed yet. Success is logged only when persistence
+succeeded.
 
 The **results pane** renders a statement as a status row — icon, the kind's label, the engine's
 sentence — without disturbing the tab's last result grid. **History** records a successful
@@ -223,14 +227,12 @@ refusal and never grant one. A provider that cannot answer at all is a **fault**
 the statement is refused, and the agent gate reports it as input it could not judge rather than as
 a policy answer.
 
-**Which entries ask.** `Workspace::run`, `Lang::analyze` and `Lang::policy_verdicts` — the three
-that classify a statement. `Workspace::query` and `Workspace::explain` are handed a statement to
-read and
-are limited to reading by the read path's own `SQLOptions`; they do not consult the provider, and
-neither do `export`, `chart` or `profile`, which read a settled snapshot. Both agent hosts read
-through `Workspace::query`, so a read-only ceiling binds their `policy_verdicts` gate rather than
-their dispatch. `Workspace::run` still states its caller inline as `Capability::full()`; carrying a
-caller on the call is a later task's.
+**Which entries ask.** `Workspace::run`, `Workspace::query`, `Workspace::explain`,
+`Lang::analyze` and `Lang::policy_verdicts` all classify through the same admission pipeline.
+`query` and `explain` use a read-only principal that can only narrow the engine policy, and retain
+`SQLOptions` as a planning backstop. The agent hosts use these entries directly; their tool layer
+translates engine refusals instead of performing a separate policy preflight. Snapshot reads
+(`export`, `chart`, `profile`) do not reclassify the SQL that produced the snapshot.
 
 **Deny codes, never prose.** The provider says *why* in a `DenyCode`; the engine mints every
 sentence from one table keyed on the `Form`, which is what keeps the agent surface's wording pinned
@@ -1103,10 +1105,10 @@ what `Definition::check` refuses.
 **A second gesture into the funnel Table Config already uses** (`engine/statements/arms/external.rs`). The
 parsed statement becomes a `TableDef { origin: External }` and goes through `register_external`, so
 the store fold, the persist funnel, replay and the headless host need no code of their own and the
-settle is CTAS's exactly: `StoreEffect::TableUpserted { def, meta }` → `ProjChan::Tables` →
-`catalog_settled` → `ProjChan::Tables` → `persisted_defs`. Either gesture edits the row the other
-made, and Configure
-opens on a typed def like any other.
+settle is CTAS's exactly: execution saves `StoreEffect::TableUpserted { def, meta }` through
+`ProjectStore`, then the window adopts the catalog stamp and projects the row on `ProjChan::Tables`.
+Caller-owned reports are saved by the fold. Either gesture edits the row the other made, and
+Configure opens on a typed def like any other.
 
 DataFusion *does* implement this statement, through `ListingTableFactory`, and that path stays
 unused for the reason §3 gives once more: it registers a provider behind the store's back, where
@@ -1331,8 +1333,8 @@ table store (`.strata/tables/<slug>/` under the default) → registers via `regi
 At settle: `catalog_settled` adopts the report's own catalog-generation stamp (the window's view
 of the ledger re-derives, so the row reads `Ready`; diagnostics revalidate; other tabs resolve the
 new name) → store upsert on `ProjChan::Tables` (the sidebar shows the row immediately, carrying
-what the registration inferred) → `persisted_defs` rewrites `.strata/project.json` atomically
-through the persist funnel → history + event log → the results pane renders a statement row ("Table 't' created, 1,204
+what the registration inferred) → the engine has already saved `.strata/project.json` through the shared `ProjectStore`
+(or the fold saves it for a caller-owned report) → history + event log → the results pane renders a statement row ("Table 't' created, 1,204
 rows") — no grid, no snapshot.
 
 At next open — zero new code: `load_defs` → the scan driver → `catalog().sync` → `table_spec`
