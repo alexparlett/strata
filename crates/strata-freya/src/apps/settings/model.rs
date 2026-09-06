@@ -67,7 +67,7 @@ pub const CATEGORIES: &[Category] = &[
     Category {
         route: Route::Keymap,
         label: "Keymap",
-        group: None,
+        group: Some(NavGroup::Appearance),
     },
     Category {
         route: Route::Providers,
@@ -147,7 +147,7 @@ mod tests {
         );
         assert_eq!(
             category(&Route::Keymap).unwrap().breadcrumb(),
-            (None, "Keymap")
+            (Some("Appearance & behaviour"), "Keymap")
         );
     }
 }

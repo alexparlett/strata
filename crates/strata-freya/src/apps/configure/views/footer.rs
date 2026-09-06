@@ -23,11 +23,11 @@ use uuid::Uuid;
 use crate::apps::configure::{ConfigureCtx, ConfigureTarget, Status};
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::{
-    log_event, settle, use_report, use_settle, LogLevel, ReportCtx, Settle,
-};
-use crate::apps::project::{
     catalog_settled, persisted_defs, refresh_catalog, refresh_table, Catalog, CatalogRescan,
     ProjChan, ProjectState,
+};
+use crate::apps::project::{
+    log_event, settle, use_report, use_settle, LogLevel, ReportCtx, Settle,
 };
 use crate::components::divider::Divider;
 use crate::components::metrics::ACTION_HEIGHT;

@@ -9,7 +9,7 @@ use freya::prelude::*;
 
 use super::cell::Cell;
 use super::{
-    ColWindow, DataGridTheme, GridData, EDGE_MARGIN, EDGE_STEP, GRIP_W, GUTTER_W, HEADER_H,
+    ColWindow, DataGridTheme, EDGE_MARGIN, EDGE_STEP, GRIP_W, GUTTER_W, GridData, HEADER_H,
     MAX_COL_W, MIN_COL_W, TRAIL_W,
 };
 use crate::apps::project::views::workbench::results::selection::{CellRole, SelCtl};
@@ -320,24 +320,15 @@ impl Component for ColGrip {
 
         let mut clicking = use_state(|| false);
         let mut hovering = use_state(|| false);
-        use_drop(move || {
-            if *hovering.peek() || *clicking.peek() {
-                Cursor::set(CursorIcon::default());
-            }
-        });
         let mut origin_x = use_state(|| 0.0f32);
         let mut start_w = use_state(|| 0.0f32);
         let mut scroll_accum = use_state(|| 0.0f32);
 
         let on_pointer_enter = move |_| {
             hovering.set(true);
-            Cursor::set(CursorIcon::ColResize);
         };
         let on_pointer_leave = move |_| {
             hovering.set(false);
-            if !clicking() {
-                Cursor::set(CursorIcon::default());
-            }
         };
         let on_pointer_down = move |e: Event<PointerEventData>| {
             if !e.data().is_primary() {
@@ -391,13 +382,11 @@ impl Component for ColGrip {
             if clicking() {
                 clicking.set(false);
                 hold_w.set(0.0);
-                if !hovering() {
-                    Cursor::set(CursorIcon::default());
-                }
             }
         };
         let lit = hovering() || clicking();
         rect()
+            .cursor(CursorIcon::ColResize)
             .position(Position::new_absolute().top(0.).right(0.))
             .width(Size::px(GRIP_W))
             .height(Size::px(HEADER_H))

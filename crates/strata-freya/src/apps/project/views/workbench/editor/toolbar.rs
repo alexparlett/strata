@@ -4,8 +4,7 @@ use crate::apps::project::state::{use_settle, Chan, SessionState};
 use crate::apps::project::views::workbench::editor::actions;
 use crate::components::divider::Divider;
 use crate::components::icon::IconName;
-use crate::components::metrics::TOOL_SIZE;
-use crate::components::run_button::{RunButton, RunState};
+use crate::components::run_button::{RunButton, RunState, RUN_WIDTH};
 use crate::components::toolbar::{Toolbar, ToolbarAction};
 use crate::theme::{use_roles, Role};
 use freya::prelude::*;
@@ -81,7 +80,7 @@ impl Component for EditorToolbar {
 
         let row = Toolbar::new()
             .background(bg)
-            .leading(RunButton::new(run_state).on_press(run_press), TOOL_SIZE)
+            .leading(RunButton::new(run_state).on_press(run_press), RUN_WIDTH)
             .item(
                 action(IconName::Explain, "Explain plan")
                     .on_press(move |_| press(QueryMode::Explain { analyze: false })),

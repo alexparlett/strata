@@ -280,18 +280,18 @@ fn a_parquet_column_shows_its_footer_facts_and_its_source() {
         "Float64",
         "PARQUET",
         "from events",
-        "TYPE",
-        "ROWS",
+        "Type",
+        "Rows",
         "2,413,118",
-        "MIN",
+        "Min",
         "-240.0",
-        "MAX",
+        "Max",
         "4990.0",
     ] {
         assert!(shows(&runner, run), "{run:?} should be in the panel");
     }
     assert!(
-        !shows(&runner, "DISTINCT") && !shows(&runner, "MEAN") && !shows(&runner, "MEDIAN"),
+        !shows(&runner, "Distinct") && !shows(&runner, "Mean") && !shows(&runner, "Median"),
         "a footer carries none of those — P3-09's scan is what computes them: {:?}",
         texts(&runner)
     );
@@ -313,7 +313,7 @@ fn the_null_count_is_the_completeness_bar_and_never_a_row() {
     assert!(shows(&runner, "Completeness"));
     assert!(shows(&runner, "94%"), "{:?}", texts(&runner));
     assert!(
-        !shows(&runner, "NULLS") && !shows(&runner, "147,200"),
+        !shows(&runner, "Nulls") && !shows(&runner, "147,200"),
         "the count belongs to the bar alone: {:?}",
         texts(&runner)
     );
@@ -333,8 +333,8 @@ fn a_csv_column_shows_no_facts_and_no_completeness_bar() {
     );
 
     assert!(shows(&runner, "note") && shows(&runner, "CSV"));
-    assert!(shows(&runner, "TYPE") && shows(&runner, "Utf8"));
-    for absent in ["ROWS", "MIN", "MAX", "Completeness"] {
+    assert!(shows(&runner, "Type") && shows(&runner, "Utf8"));
+    for absent in ["Rows", "Min", "Max", "Completeness"] {
         assert!(
             !shows(&runner, absent),
             "{absent:?} was never reported: {:?}",
@@ -382,7 +382,7 @@ fn nested_columns_state_their_shape_and_nested_fields_resolve_by_path() {
         &mut sel,
         column(CatalogKind::Table, "events", &["address"]),
     );
-    assert!(shows(&runner, "NESTED FIELDS"));
+    assert!(shows(&runner, "Nested fields"));
     for field in ["city", "geo", "lat"] {
         assert!(shows(&runner, field), "the whole shape, at every depth");
     }
@@ -394,7 +394,7 @@ fn nested_columns_state_their_shape_and_nested_fields_resolve_by_path() {
     );
     assert!(shows(&runner, "city"));
     assert!(
-        !shows(&runner, "NESTED FIELDS"),
+        !shows(&runner, "Nested fields"),
         "a leaf has no shape to state"
     );
     assert!(
@@ -411,9 +411,9 @@ fn an_empty_selection_prompts_for_one() {
     let (mut runner, ..) = runner();
     settle(&mut runner);
 
-    assert!(shows(&runner, "COLUMN INSPECTOR"), "the panel is mounted");
+    assert!(shows(&runner, "Column inspector"), "the panel is mounted");
     assert!(shows(&runner, "Select a column to inspect."));
-    assert!(!shows(&runner, "STATISTICS"));
+    assert!(!shows(&runner, "Statistics"));
 }
 
 /// The catalog moves under a live selection: dropping the table the panel is describing has to
@@ -475,7 +475,7 @@ fn a_landing_registration_refreshes_the_open_panel() {
     );
     settle(&mut runner);
 
-    assert!(shows(&runner, "MIN") && shows(&runner, "0.0"));
+    assert!(shows(&runner, "Min") && shows(&runner, "0.0"));
     assert!(
         shows(&runner, "12"),
         "the new row count: {:?}",
@@ -545,12 +545,12 @@ fn a_settled_scan_shows_what_it_computed_and_when() {
     runner.poll(Duration::from_millis(10), Duration::from_millis(2_000));
 
     assert!(
-        shows(&runner, "DISTINCT") && shows(&runner, "2"),
+        shows(&runner, "Distinct") && shows(&runner, "2"),
         "the fact a CSV can never report for free: {:?}",
         texts(&runner)
     );
     assert!(
-        shows(&runner, "ROWS") && shows(&runner, "5"),
+        shows(&runner, "Rows") && shows(&runner, "5"),
         "…and the row count it never gave either"
     );
     assert!(
@@ -662,7 +662,7 @@ fn past_the_edge_at(runner: &TestingRunner, width: f32) -> Vec<(f32, f32)> {
 ///
 /// Two separate faults this pins. The header was `main_align(SpaceBetween)` over `Content::Normal`
 /// with no clip, and `Overflow` defaults to painting *outside* the bounds, so a narrow panel drew
-/// "COLUMN INSPECTOR" straight through the collapse ×. And the body had no floor at all, so a run
+/// "Column inspector" straight through the collapse ×. And the body had no floor at all, so a run
 /// with no break opportunity (`customer_shipping_address_line_one`) was wider than the panel
 /// whatever the layout did — and centred rows around it started at a **negative x**, painting off
 /// the left edge into the workbench.

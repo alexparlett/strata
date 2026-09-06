@@ -78,10 +78,10 @@ impl Group {
     pub fn title(self) -> &'static str {
         match self {
             Group::Actions => "ACTIONS",
-            Group::Tables => "TABLES",
-            Group::Views => "VIEWS",
-            Group::SavedQueries => "SAVED QUERIES",
-            Group::Columns => "COLUMNS",
+            Group::Tables => "Tables",
+            Group::Views => "Views",
+            Group::SavedQueries => "Saved queries",
+            Group::Columns => "Columns",
         }
     }
 }

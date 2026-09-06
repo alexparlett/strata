@@ -49,9 +49,8 @@ impl ChartSpec {
     /// duplicate read. `enabled` is the one legitimate per-site variable (the read stays
     /// disabled until a Run has settled a snapshot to read).
     pub fn query(&self, engine: &EngineCtx, enabled: bool) -> Query<FetchChart> {
-        Query::new(self.clone(), FetchChart(engine.captured()))
+        Query::new(enabled.then(|| self.clone()), FetchChart(engine.captured()))
             .stale_time(Duration::MAX)
-            .enable(enabled)
     }
 }
 
@@ -92,9 +91,8 @@ impl TrendSpec {
     /// because a fixed snapshot and two fixed columns never answer differently, and `enabled`
     /// is the per-site variable (a scatter with the toggle on, over a settled result).
     pub fn query(&self, engine: &EngineCtx, enabled: bool) -> Query<FetchTrend> {
-        Query::new(self.clone(), FetchTrend(engine.captured()))
+        Query::new(enabled.then(|| self.clone()), FetchTrend(engine.captured()))
             .stale_time(Duration::MAX)
-            .enable(enabled)
     }
 }
 

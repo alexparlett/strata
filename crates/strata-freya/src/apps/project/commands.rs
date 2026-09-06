@@ -144,7 +144,7 @@ impl PaletteCommands {
     }
 
     /// Persist current SQL to the catalog
-    #[command(label = "Save query as view", icon = IconName::Eye,
+    #[command(label = "Save as view", icon = IconName::Eye,
               keywords = "create persist")]
     fn save_as_view(ctx: &PaletteCtx) {
         let Some(id) = ctx.active_tab() else { return };
@@ -152,14 +152,14 @@ impl PaletteCommands {
     }
 
     /// Register files, folders or globs
-    #[command(label = "New table / source…", icon = IconName::Database,
+    #[command(label = "New table", icon = IconName::Database,
               keywords = "add register import parquet csv json")]
     fn new_table(ctx: &PaletteCtx) {
         ctx.catalog.configure(ConfigureTarget::New);
     }
 
     /// Read tables from S3, GCS or an HTTP(S) endpoint
-    #[command(label = "New data source…", icon = IconName::Sources,
+    #[command(label = "New data source", icon = IconName::Sources,
               keywords = "add object store bucket s3 gcs http remote")]
     fn new_source(ctx: &PaletteCtx) {
         let mut slot = ctx.source;

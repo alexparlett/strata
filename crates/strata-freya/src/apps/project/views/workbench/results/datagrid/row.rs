@@ -182,12 +182,16 @@ impl Component for Row {
                     width: Size::px(w),
                     text: cell.text.clone(),
                     color: if cell.null {
-                        theme.gutter_color
+                        theme.null_color
                     } else {
                         col.kind.cell_color(theme, &palette)
                     },
                     mono: true,
-                    cross: Alignment::Start,
+                    cross: if col.kind == Kind::Num {
+                        Alignment::End
+                    } else {
+                        Alignment::Start
+                    },
                     pad: Gaps::new(0., self.cell_pad.right(), 0., self.cell_pad.left()),
                     hover_bg: theme.cell_hover_background,
                     divider: theme.column_divider_fill,

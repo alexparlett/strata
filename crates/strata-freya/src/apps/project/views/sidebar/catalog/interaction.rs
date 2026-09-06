@@ -11,13 +11,13 @@ use std::time::Duration;
 
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use freya::radio::RadioStation;
-use freya_testing::prelude::{MouseEventName, PlatformEvent};
 use freya_testing::TestingRunner;
+use freya_testing::prelude::{MouseEventName, PlatformEvent};
 use strata_arrow::column_info;
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
-use strata_engine::sources::postgres::Pg;
 use strata_engine::SourceKind;
+use strata_engine::sources::postgres::Pg;
 use strata_engine::{SourceMode, TableMeta, ViewMeta};
 use strata_model::{
     CatalogKind, ColOwner, ColRef, ColumnInfo, Origin, RemoteRef, RightPane, SavedQuery, SourceDef,
@@ -29,7 +29,7 @@ use crate::apps::configure::ConfigureTarget;
 use crate::apps::project::state::{CatalogState, Chats, Log, PersistFaults, Pick};
 
 use super::entry::watched_scan;
-use super::row::{fold_plan, Folds, ICON_SLOT, INDENT};
+use super::row::{Folds, ICON_SLOT, INDENT, fold_plan};
 use super::*;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{ProfileTarget, ScanId};
@@ -307,8 +307,28 @@ fn runner_sized(fixture: Fixture, width: f32) -> (TestingRunner, Handles) {
 /// [`runner_sized`] at a chosen pane **height** too — what the virtualization is measured against,
 /// since the whole claim is that a row off the bottom of the viewport is never built.
 fn runner_shaped(fixture: Fixture, width: f32, height: f32) -> (TestingRunner, Handles) {
+    runner_with_profile_state(fixture, width, height, false)
+}
+
+fn runner_with_profile_state(
+    fixture: Fixture,
+    width: f32,
+    height: f32,
+    pending: bool,
+) -> (TestingRunner, Handles) {
     TestingRunner::new(
-        app,
+        move || {
+            use_hook(move || {
+                if pending {
+                    GlobalContexts::get().insert_context(freya::query::QueriesStorage::<
+                        crate::apps::project::query::ProfileEntry,
+                    >::mocked_async(
+                        |_| std::future::pending()
+                    ));
+                }
+            });
+            app()
+        },
         (width, height).into(),
         |r| {
             let filter = r.provide_root_context(|| State::create(String::new()));
@@ -569,19 +589,21 @@ fn section_counts_follow_the_filter() {
     let mut filter = h.filter;
     settle(&mut runner);
 
-    assert!(shows(&runner, "TABLES · 3"));
-    assert!(shows(&runner, "VIEWS · 3"));
-    assert!(shows(&runner, "QUERIES · 2"));
+    assert!(shows(&runner, "Tables · 3"));
+    assert!(shows(&runner, "Views · 3"));
+    assert!(shows(&runner, "Queries · 2"));
 
     type_filter(&mut runner, &mut filter, "order");
-    assert!(shows(&runner, "TABLES · 1"));
-    assert!(shows(&runner, "VIEWS · 1"));
-    assert!(shows(&runner, "QUERIES · 1"));
+    assert!(shows(&runner, "Tables · 1"));
+    assert!(shows(&runner, "Views · 1"));
+    assert!(shows(&runner, "Queries · 1"));
 
     type_filter(&mut runner, &mut filter, "zzz");
-    assert!(shows(&runner, "TABLES · 0"));
-    assert!(shows(&runner, "VIEWS · 0"));
-    assert!(shows(&runner, "QUERIES · 0"));
+    assert!(shows(&runner, "No matches"));
+    click_text(&mut runner, "Clear filter");
+    settle(&mut runner);
+    assert!(filter.peek().is_empty());
+    assert!(shows(&runner, "Tables · 3"));
 }
 
 /// The filter matches **def names**, not column names — a deliberate scope (the Dioxus sidebar's
@@ -597,10 +619,10 @@ fn filter_matches_def_names_not_columns() {
         !shows(&runner, "orders"),
         "a column name must not surface its table"
     );
-    assert!(shows(&runner, "TABLES · 0"));
+    assert!(shows(&runner, "No matches"));
 }
 
-/// "No saved queries yet" is about the *section*, not the filter: with a filter typed, an empty
+/// "No saved queries" is about the *section*, not the filter: with a filter typed, an empty
 /// result is a non-match, and the empty-state copy would be a lie.
 #[test]
 fn saved_query_empty_note_is_suppressed_while_filtering() {
@@ -608,11 +630,11 @@ fn saved_query_empty_note_is_suppressed_while_filtering() {
     let mut filter = h.filter;
     settle(&mut runner);
 
-    assert!(!shows(&runner, "No saved queries yet"));
+    assert!(!shows(&runner, "No saved queries"));
 
     type_filter(&mut runner, &mut filter, "zzz");
     assert!(
-        !shows(&runner, "No saved queries yet"),
+        !shows(&runner, "No saved queries"),
         "an empty filter result is a non-match, not an empty section"
     );
 }
@@ -710,11 +732,11 @@ fn collapsing_a_section_hides_only_its_own_rows() {
     let (mut runner, ..) = runner();
     settle(&mut runner);
 
-    click_text(&mut runner, "TABLES · 3");
+    click_text(&mut runner, "Tables · 3");
     assert!(!shows(&runner, "orders"), "the table rows are put away");
     assert!(!shows(&runner, "users"));
     assert!(
-        shows(&runner, "TABLES · 3"),
+        shows(&runner, "Tables · 3"),
         "the header (and its count) stays"
     );
     assert!(
@@ -722,7 +744,7 @@ fn collapsing_a_section_hides_only_its_own_rows() {
         "the other sections are untouched"
     );
 
-    click_text(&mut runner, "TABLES · 3");
+    click_text(&mut runner, "Tables · 3");
     assert!(shows(&runner, "orders"), "pressing again restores them");
 }
 
@@ -1296,7 +1318,7 @@ fn each_row_kind_offers_its_own_menu() {
             "Ask about this table",
             "Refresh table",
             "Configure",
-            "Drop table"
+            "Remove table"
         ],
         "the table menu"
     );
@@ -1336,7 +1358,7 @@ fn each_row_kind_offers_its_own_menu() {
             "Profile table",
             "Ask about this table",
             "Refresh table",
-            "Drop table"
+            "Delete table and data"
         ],
         "Configure edits the sources, format and partitions of a def that points at the user's \
          own files, and an internal table has none of those to edit — ever, which is why the \
@@ -1460,7 +1482,7 @@ fn drop_asks_the_confirm_and_leaves_the_catalog_alone() {
     let drop_target = h.drop_target;
     right_click_row(&mut runner, "orders");
 
-    click_text(&mut runner, "Drop table");
+    click_text(&mut runner, "Remove table");
 
     assert!(
         matches!(drop_target.peek().as_ref(), Some(DropTarget::Table { name, .. }) if name == "orders"),
@@ -1543,12 +1565,11 @@ fn a_refused_row_is_not_offered_a_scan() {
 /// Once a row carries a request it **spins**, and the spinner is its own — the registration
 /// spinner beside it means something else entirely, and the two must be tellable apart.
 ///
-/// A scan of a table that was never registered fails almost at once, which is exactly what makes
-/// this assertable: the glyph is up while the scan is in flight and gone the moment it settles,
-/// with no delay hold of its own.
+/// The fixture holds the scan in flight so the assertion does not race an engine response.
 #[test]
 fn a_row_being_profiled_says_so_in_its_own_words() {
-    let (mut runner, h) = settled();
+    let (mut runner, h) = runner_with_profile_state(project, 300., 1400., true);
+    settle(&mut runner);
     let mut store = h.store;
     let profiling = |runner: &TestingRunner| {
         status_labels(runner)
@@ -1585,7 +1606,8 @@ fn a_row_being_profiled_says_so_in_its_own_words() {
 /// returns the moment it settles.
 #[test]
 fn a_row_wearing_every_status_glyph_still_opens_its_own_menu() {
-    let (mut runner, h) = settled();
+    let (mut runner, h) = runner_with_profile_state(project, 300., 1400., true);
+    settle(&mut runner);
     let mut store = h.store;
     wait_out_the_spinner_delay(&mut runner);
     store
@@ -1615,7 +1637,7 @@ fn a_row_wearing_every_status_glyph_still_opens_its_own_menu() {
             "Ask about this table",
             "Refresh table",
             "Configure",
-            "Drop table"
+            "Remove table"
         ],
         "the ⋮ still belongs to `events`"
     );
@@ -2056,7 +2078,7 @@ mod data_sources {
     fn an_object_stores_child_links_to_the_workspace_row() {
         let (mut runner, _) = tree();
 
-        click_text(&mut runner, "TABLES · 1");
+        click_text(&mut runner, "Tables · 1");
         assert!(!shows(&runner, "events"), "the def's own row is put away");
 
         click_text(&mut runner, "lake");
@@ -2155,11 +2177,11 @@ mod data_sources {
         let mut filter = h.filter;
 
         click_text(&mut runner, "test");
-        assert!(!shows(&runner, "TABLES · 1"), "the workspace is put away");
+        assert!(!shows(&runner, "Tables · 1"), "the workspace is put away");
 
         type_filter(&mut runner, &mut filter, "events");
         assert!(
-            shows(&runner, "TABLES · 1"),
+            shows(&runner, "Tables · 1"),
             "the groups are drawn for the match: {:?}",
             texts(&runner)
         );
@@ -2203,7 +2225,7 @@ mod data_sources {
         let (mut runner, h) = tree();
         let mut filter = h.filter;
 
-        click_text(&mut runner, "TABLES · 1");
+        click_text(&mut runner, "Tables · 1");
         assert!(!shows(&runner, "events"), "the group is put away");
 
         type_filter(&mut runner, &mut filter, "events");
@@ -2224,7 +2246,7 @@ mod data_sources {
         assert!(shows(&runner, "db.internal:5432/analytics"));
         assert!(!shows(&runner, "lake"), "the bucket matched nothing");
         assert!(
-            shows(&runner, "TABLES · 0"),
+            shows(&runner, "Tables · 0"),
             "the workspace groups stay, and their counts say what the filter found"
         );
 
@@ -2236,7 +2258,7 @@ mod data_sources {
     }
 
     /// A project with no data sources says what one is for and offers to add one. The header's `+`
-    /// is the same gesture and the palette's *New data source…* is the third, which is what lets
+    /// is the same gesture and the palette's *New data source* is the third, which is what lets
     /// the header control fold under pressure.
     #[test]
     fn an_empty_project_offers_to_add_a_source() {
@@ -2307,7 +2329,7 @@ mod virtualization {
         settle(&mut runner);
 
         assert!(
-            shows(&runner, &format!("TABLES · {MANY}")),
+            shows(&runner, &format!("Tables · {MANY}")),
             "the group counts every row the filter left: {:?}",
             texts(&runner)
         );
@@ -2355,7 +2377,7 @@ mod virtualization {
             "the def's own row sorts last, six hundred rows below the fold"
         );
 
-        click_text(&mut runner, &format!("TABLES · {}", MANY + 1));
+        click_text(&mut runner, &format!("Tables · {}", MANY + 1));
         click_text(&mut runner, "lake");
         assert_eq!(
             texts(&runner).iter().filter(|t| *t == "zz_last").count(),
@@ -2443,5 +2465,27 @@ mod gestures {
             select_sql(&address, 10),
             "SELECT *\nFROM pg.\"sales eu\".\"order\"\nLIMIT 10;"
         );
+    }
+}
+
+#[test]
+fn all_empty_groups_show_consistent_notes_only_while_expanded() {
+    let (mut runner, mut h) = runner();
+    h.store.write_channel(ProjChan::Tables).tables.clear();
+    h.store.write_channel(ProjChan::Views).views.clear();
+    h.store
+        .write_channel(ProjChan::Queries)
+        .saved_queries
+        .clear();
+    settle(&mut runner);
+    for (heading, note) in [
+        ("Tables · 0", "No tables"),
+        ("Views · 0", "No views"),
+        ("Queries · 0", "No saved queries"),
+    ] {
+        assert!(shows(&runner, note));
+        click_text(&mut runner, heading);
+        settle(&mut runner);
+        assert!(!shows(&runner, note));
     }
 }

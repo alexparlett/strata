@@ -26,8 +26,7 @@ use crate::components::icon::{Icon, IconName};
 use crate::components::metrics::{EMPTY_TABLE_HEIGHT, SP_3, SP_4};
 use crate::components::tones::tones;
 use crate::components::tool_button::ToolButton;
-use crate::components::typography::Prose;
-use crate::components::window::window_theme;
+use crate::components::typography::{Control, Prose};
 
 /// The gap between the toolbar's buttons (their size is the shared control's).
 const TOOL_GAP: f32 = SP_3;
@@ -70,8 +69,8 @@ impl Component for SourcePaths {
         }
 
         Row::new(match remote {
-            true => "SOURCE PATH",
-            false => "SOURCE PATHS",
+            true => "Source path",
+            false => "Source paths",
         })
         .required()
         .hint(match remote {
@@ -96,7 +95,6 @@ struct Toolbar;
 
 impl Component for Toolbar {
     fn render(&self) -> impl IntoElement {
-        let win = window_theme();
         let error = tones().error;
         let ctx = use_consume::<ConfigureCtx>();
         let has_rows = ctx.draft.read().path_count() > 0;
@@ -106,9 +104,9 @@ impl Component for Toolbar {
             .cross_align(Alignment::Center)
             .spacing(TOOL_GAP)
             .child(
-                ToolButton::new(IconName::Plus, "Add path")
-                    .outlined()
-                    .color(win.icon_color)
+                Button::new()
+                    .outline()
+                    .child(Control::new("Add path"))
                     .on_press(move |_| {
                         let mut selected = ctx.selected_path;
                         let mut at = *selected.peek();
@@ -139,7 +137,6 @@ struct BrowseButton;
 
 impl Component for BrowseButton {
     fn render(&self) -> impl IntoElement {
-        let form = form_theme();
         let ctx = use_consume::<ConfigureCtx>();
         let mut open = use_state(|| false);
         let mut request = use_state(|| None::<Pick>);
@@ -172,9 +169,9 @@ impl Component for BrowseButton {
             );
 
         Attached::new(
-            ToolButton::new(IconName::Folder, "Browse for a source")
-                .outlined()
-                .color(form.label_color)
+            Button::new()
+                .outline()
+                .child(Control::new("Add files or folder"))
                 .on_press(move |_| open.toggle()),
         )
         .bottom()
@@ -327,7 +324,6 @@ impl KeyExt for PathRow {
 
 impl Component for PathRow {
     fn render(&self) -> impl IntoElement {
-        let win = window_theme();
         let ctx = use_consume::<ConfigureCtx>();
         let index = self.index;
 
@@ -366,7 +362,7 @@ impl Component for PathRow {
         });
 
         let fill = match self.selected {
-            true => win.row_selected_background,
+            true => crate::components::window::window_theme().row_selected_background,
             false => Color::TRANSPARENT,
         };
 

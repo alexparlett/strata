@@ -5,9 +5,9 @@
 //! resolved once into a [`Typography`] and provided at the window root (see `project.rs`).
 //!
 //! Roles (family · weight · size): **Title** (ui 600 14.5) · **Strong** (ui 600 13) ·
-//! **Body** (ui 500 13, default UI text) · **Control** (ui 600 12.5, button/control label) ·
-//! **Prose** (ui 400 12.5) · **Caption** (ui 400 11) · **`MonoValue`** (mono 500 12.5) ·
-//! **Readout** (mono 400 12) · **Eyebrow** (mono 600 10, tracked) · **Meta** (mono 500 10) ·
+//! **Body** (ui 500 13, default UI text) · **Control** (ui 500 12.5, button/control label) ·
+//! **Prose** (ui 400 12.5) · **Caption** (ui 400 12) · **`MonoValue`** (mono 500 12.5) ·
+//! **Readout** (mono 400 12) · **Eyebrow** (ui 600 12) · **Meta** (mono 500 11) ·
 //! **Path** (mono 400 11).
 //!
 //! Deliberately **not** an enum-variant API — every role is its own component so call sites read
@@ -181,19 +181,19 @@ roles! {
     Strong => strong_body,
     /// Body — the default UI text role (ui · 500 · 13).
     Body => body_medium,
-    /// Control — a button / control label (ui · 600 · 12.5).
+    /// Control — a button / control label (ui · 500 · 12.5).
     Control => control,
     /// Prose — descriptions & secondary text (ui · 400 · 12.5).
     Prose => body,
-    /// Caption — small supporting text (ui · 400 · 11).
+    /// Caption — small supporting text (ui · 400 · 12).
     Caption => caption,
     /// Mono value — inline data / figures (mono · 500 · 12.5).
     MonoValue => data_value,
     /// Readout — a flowing code / data block (mono · 400 · 12).
     Readout => code_block,
-    /// Eyebrow — an uppercase field label (mono · 600 · 10, tracked).
+    /// Eyebrow — a sentence-case field label (ui · 600 · 12).
     Eyebrow => field_label,
-    /// Meta — a recessive mono label / timestamp (mono · 500 · 10).
+    /// Meta — a recessive mono label / timestamp (mono · 500 · 11).
     Meta => meta,
     /// Path — a recessive mono path / footer (mono · 400 · 11).
     Path => mono_path,

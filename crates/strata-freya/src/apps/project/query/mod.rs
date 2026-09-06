@@ -12,8 +12,10 @@ mod relation;
 mod run_query;
 
 pub use chart::{ChartSpec, TrendSpec};
-pub use profile::{use_profile, ProfileTarget, ScanId};
-pub use relation::{use_remote_schemas, RemoteSchemas};
+#[cfg(test)]
+pub use profile::ProfileEntry;
+pub use profile::{ProfileTarget, ScanId, use_profile};
+pub use relation::{RemoteSchemas, use_remote_schemas};
 pub use run_query::{
-    PageSpec, QueryMode, QueryOutcome, QuerySpec, RunId, RunQuery, DEFAULT_PAGE_SIZE,
+    DEFAULT_PAGE_SIZE, PageSpec, QueryMode, QueryOutcome, QuerySpec, RunId, RunQuery,
 };

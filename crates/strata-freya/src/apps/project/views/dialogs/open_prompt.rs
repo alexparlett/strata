@@ -1,6 +1,6 @@
 //! The **open-target prompt** (B10), built to the Strata canvas's open-target comp: the
-//! accent folder chip over "Open Project" and the folder being opened, the question, a
-//! "Remember, don't ask again" checkbox, and the three actions — Cancel · New Window · This
+//! accent folder chip over "Open project" and the folder being opened, the question, a
+//! "Don't ask again" checkbox, and the three actions — Cancel · New Window · This
 //! Window, with This Window as the primary (and so Enter's).
 //!
 //! It is raised only when the "Opening a project" preference is *Ask* and the open came from
@@ -73,7 +73,7 @@ impl Component for OpenPromptCard {
             roles.get(Role::Accent),
             rect()
                 .vertical()
-                .child(Title::new("Open Project").color(roles.get(Role::Text)))
+                .child(Title::new("Open project").color(roles.get(Role::Text)))
                 .child(
                     Prose::new(self.path.display().to_string())
                         .color(roles.get(Role::TextPlaceholder))
@@ -81,11 +81,12 @@ impl Component for OpenPromptCard {
                 ),
         );
 
-        let checkbox_row = CheckboxRow::new("Remember, don't ask again", *remember.read())
-            .on_toggle(move |_: Event<PressEventData>| {
+        let checkbox_row = CheckboxRow::new("Don't ask again", *remember.read()).on_toggle(
+            move |_: Event<PressEventData>| {
                 let mut remember = remember;
                 remember.toggle();
-            });
+            },
+        );
 
         Dialog::new()
             .on_dismiss(move |()| open.dismiss())
@@ -127,7 +128,7 @@ impl Component for OpenPromptCard {
                             *remember.peek(),
                         );
                     })
-                    .child(Control::new("New Window")),
+                    .child(Control::new("New window")),
             )
             .action(
                 Button::new()
@@ -140,7 +141,7 @@ impl Component for OpenPromptCard {
                             *remember.peek(),
                         );
                     })
-                    .child(Control::new("This Window")),
+                    .child(Control::new("This window")),
             )
             .into_element()
     }
@@ -168,7 +169,7 @@ impl Component for OpenPromptCard {
 ///   production, and widening its signature to suit a test is the thing §1 forbids), so the
 ///   button's routing rests on `platform::open::tests` instead, which proves the same
 ///   `OpenTarget::NewWindow` decision without a window to open.
-/// * **"Remember, don't ask again" persisting the preference.** `write_config` is the sole
+/// * **"Don't ask again" persisting the preference.** `write_config` is the sole
 ///   write path *and* it funnels to the real user config file — a test that ticked the box
 ///   would overwrite the developer's own settings and recents. Every press below therefore
 ///   leaves the box unticked, which is also its default. Covering it properly needs a config
@@ -269,13 +270,13 @@ mod interaction {
     fn the_card_is_up_only_while_a_folder_is_pending() {
         let (mut runner, open) = armed();
         runner.sync_and_update();
-        assert!(is_on_screen(&runner, "Open Project"));
+        assert!(is_on_screen(&runner, "Open project"));
         assert!(is_on_screen(&runner, THERE), "the card names the folder");
 
         let mut prompt = open.prompt;
         prompt.set(None);
         runner.sync_and_update();
-        assert!(!is_on_screen(&runner, "Open Project"));
+        assert!(!is_on_screen(&runner, "Open project"));
     }
 
     /// **This Window re-roots the window.** The whole point of the primary action: the root
@@ -286,7 +287,7 @@ mod interaction {
         let (mut runner, open) = armed();
         runner.sync_and_update();
 
-        runner.click_cursor(label_center(&runner, "This Window"));
+        runner.click_cursor(label_center(&runner, "This window"));
         runner.sync_and_update();
 
         assert_eq!(*open.root.peek(), PathBuf::from(THERE));
@@ -304,7 +305,7 @@ mod interaction {
         open.guard.peek().watch(Arc::new(AtomicBool::new(true)));
         runner.sync_and_update();
 
-        runner.click_cursor(label_center(&runner, "This Window"));
+        runner.click_cursor(label_center(&runner, "This window"));
         runner.sync_and_update();
 
         assert_eq!(
@@ -346,7 +347,7 @@ mod interaction {
         for dismiss in ["cancel", "escape", "backdrop"] {
             prompt.set(Some(PathBuf::from(THERE)));
             runner.sync_and_update();
-            assert!(is_on_screen(&runner, "Open Project"), "{dismiss}: armed");
+            assert!(is_on_screen(&runner, "Open project"), "{dismiss}: armed");
 
             match dismiss {
                 "cancel" => {

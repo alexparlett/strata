@@ -34,13 +34,13 @@
 use freya::components::get_theme;
 use freya::components::{MenuItem, ScrollView, Select, SelectThemePartial};
 use freya::prelude::*;
-use freya::radio::{use_radio, Radio};
+use freya::radio::{Radio, use_radio};
 use strata_arrow::MAX_BINS;
 use strata_model::{ChartConfig, ChartMark, ChartSort, ChartX, TabId};
 
 use super::config::{
-    allows_row_index, log_axis, reads_bounds, reads_quartiles, series_options, series_required,
-    sortable, takes_many_ys, trendable, x_options, y_options, Encoding, Roles,
+    Encoding, Roles, allows_row_index, log_axis, reads_bounds, reads_quartiles, series_options,
+    series_required, sortable, takes_many_ys, trendable, x_options, y_options,
 };
 use super::{ChartTheme, ChartThemePartial, ChartThemePreference};
 use crate::apps::project::state::{Chan, SessionState};
@@ -54,7 +54,7 @@ use crate::components::typography::{Caption, Eyebrow, Meta, MonoValue};
 pub const STRIP_WIDTH: f32 = 232.;
 const STRIP_PADDING: f32 = SP_4;
 /// The gap between the tiles, and between one section and the next.
-const TILE_GAP: f32 = SP_3;
+const TILE_GAP: f32 = SP_2;
 const SECTION_GAP: f32 = SP_5;
 /// Tiles to a row (canvas: `grid-template-columns: 1fr 1fr 1fr`).
 const TILES_PER_ROW: usize = 3;
@@ -77,22 +77,6 @@ fn strip_rule() -> BorderWidth {
         right: 1.,
         bottom: 0.,
         left: 0.,
-    }
-}
-
-/// The glyph for a mark. The mapping only, never the colour — the tile paints it, at rest or
-/// selected.
-fn glyph(mark: ChartMark) -> IconName {
-    match mark {
-        ChartMark::Bar => IconName::MarkBar,
-        ChartMark::Line => IconName::MarkLine,
-        ChartMark::Area => IconName::MarkArea,
-        ChartMark::Scatter => IconName::MarkScatter,
-        ChartMark::Histogram => IconName::MarkHistogram,
-        ChartMark::Pie => IconName::MarkPie,
-        ChartMark::Heatmap => IconName::MarkHeatmap,
-        ChartMark::Band => IconName::MarkBand,
-        ChartMark::Box => IconName::MarkBox,
     }
 }
 
@@ -398,7 +382,7 @@ impl Component for ControlStrip {
             .width(Size::fill())
             .vertical()
             .spacing(TILE_GAP)
-            .child(Eyebrow::new("CHART TYPE").color(theme.label_color));
+            .child(Eyebrow::new("Chart type").color(theme.label_color));
         for row in ChartMark::ALL.chunks(TILES_PER_ROW) {
             let mut line = rect()
                 .width(Size::fill())
@@ -424,7 +408,7 @@ impl Component for ControlStrip {
         let x = (!x_choices.is_empty()).then(|| {
             Encoder {
                 tab: self.tab,
-                label: "X AXIS",
+                label: "X axis",
                 current: self
                     .encoding
                     .x
@@ -513,7 +497,7 @@ impl Component for ControlStrip {
                 .width(Size::fill())
                 .vertical()
                 .spacing(TILE_GAP)
-                .child(Eyebrow::new("LEGEND").color(theme.label_color));
+                .child(Eyebrow::new("Legend").color(theme.label_color));
             for (nth, entry) in self.legend.iter().enumerate() {
                 let next = entry
                     .series
@@ -690,7 +674,7 @@ impl Component for SortToggle {
             .width(Size::fill())
             .vertical()
             .spacing(LABEL_GAP)
-            .child(Eyebrow::new("SORT").color(theme.label_color))
+            .child(Eyebrow::new("Sort").color(theme.label_color))
             .child(pill)
     }
 }
@@ -734,7 +718,7 @@ impl Component for ScaleToggle {
             .width(Size::fill())
             .vertical()
             .spacing(LABEL_GAP)
-            .child(Eyebrow::new("SCALE").color(theme.label_color))
+            .child(Eyebrow::new("Scale").color(theme.label_color))
             .child(pill)
     }
 }
@@ -780,7 +764,7 @@ impl Component for TrendToggle {
             .width(Size::fill())
             .vertical()
             .spacing(LABEL_GAP)
-            .child(Eyebrow::new("TRENDLINE").color(theme.label_color))
+            .child(Eyebrow::new("Trendline").color(theme.label_color))
             .child(pill)
     }
 }
@@ -856,7 +840,7 @@ impl Component for BinsField {
             .width(Size::fill())
             .vertical()
             .spacing(LABEL_GAP)
-            .child(Eyebrow::new("BINS").color(theme.label_color))
+            .child(Eyebrow::new("Bins").color(theme.label_color))
             .child(
                 ValueField::new(text)
                     .placeholder("Auto")
@@ -1003,7 +987,6 @@ impl Component for MarkTile {
             .on_pointer_enter(move |_| hovered.set(true))
             .on_pointer_leave(move |_| hovered.set(false))
             .on_press(move |_| commit(session, tab, next.clone()))
-            .child(Icon::new(glyph(self.mark)).size(17.))
             .child(Caption::new(self.mark.label()))
     }
 
@@ -1040,8 +1023,8 @@ fn tile_dress(theme: &ChartTheme, selected: bool, hovered: bool) -> (Color, Colo
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field};
     use freya::radio::RadioStation;
-    use freya_testing::prelude::{KeyboardEventName, PlatformEvent};
     use freya_testing::TestingRunner;
+    use freya_testing::prelude::{KeyboardEventName, PlatformEvent};
     use strata_arrow::column_info;
     use strata_core::theme::load;
     use strata_model::{Axis, ChartData, ChartSeries, ColumnInfo, Origin};
@@ -1118,9 +1101,8 @@ mod tests {
     /// Settle the tree and the effects those renders scheduled — several passes, because
     /// Freya only polls tasks once nothing is dirty (the catalog tests' note).
     fn settle(runner: &mut TestingRunner) {
-        for _ in 0..4 {
-            runner.sync_and_update();
-        }
+        runner.animation_clock().disable();
+        runner.poll_n(std::time::Duration::from_millis(10), 4);
     }
 
     fn texts(runner: &TestingRunner) -> Vec<String> {
@@ -1164,7 +1146,7 @@ mod tests {
         settle(&mut runner);
 
         let seen = texts(&runner);
-        for expected in ["CHART TYPE", "X AXIS", "Y AXIS", "SERIES (COLOR)", "SORT"] {
+        for expected in ["Chart type", "X axis", "Y AXIS", "SERIES (COLOR)", "Sort"] {
             assert!(
                 seen.contains(&expected.to_string()),
                 "no {expected}: {seen:?}"
@@ -1239,10 +1221,10 @@ mod tests {
         assert_eq!(stored.ys, None);
 
         let seen = texts(&runner);
-        assert!(!seen.contains(&"X AXIS".to_string()), "{seen:?}");
+        assert!(!seen.contains(&"X axis".to_string()), "{seen:?}");
         assert!(!seen.contains(&"SERIES (COLOR)".to_string()), "{seen:?}");
         assert!(
-            !seen.contains(&"SORT".to_string()),
+            !seen.contains(&"Sort".to_string()),
             "bins are ordered already: {seen:?}"
         );
         assert!(
@@ -1267,10 +1249,10 @@ mod tests {
     fn the_bin_count_is_offered_for_a_histogram_and_an_empty_box_is_auto() {
         let (mut runner, session) = runner();
         settle(&mut runner);
-        assert!(!shows(&runner, "BINS"), "no other mark bins anything");
+        assert!(!shows(&runner, "Bins"), "no other mark bins anything");
 
         click_text(&mut runner, "Histogram");
-        assert!(shows(&runner, "BINS"), "{:?}", texts(&runner));
+        assert!(shows(&runner, "Bins"), "{:?}", texts(&runner));
         assert_eq!(config(&session).bins, None, "unset until it is typed");
 
         type_into_bins(&mut runner, "40");
@@ -1319,7 +1301,7 @@ mod tests {
         let label = runner
             .find(|node, element| {
                 Label::try_downcast(element)
-                    .filter(|l| l.text == "BINS")
+                    .filter(|l| l.text == "Bins")
                     .map(|_| node.layout().area)
             })
             .unwrap_or_else(|| panic!("no BINS section: {:?}", texts(runner)));
@@ -1345,7 +1327,7 @@ mod tests {
     fn the_scale_toggle_follows_the_mark_and_writes_a_repaint() {
         let (mut runner, session) = runner();
         settle(&mut runner);
-        assert!(shows(&runner, "SCALE"), "{:?}", texts(&runner));
+        assert!(shows(&runner, "Scale"), "{:?}", texts(&runner));
         click_text(&mut runner, "Log");
         assert!(config(&session).log_y);
         click_text(&mut runner, "Linear");
@@ -1353,10 +1335,10 @@ mod tests {
 
         click_text(&mut runner, "Log");
         click_text(&mut runner, "Bar");
-        assert!(!shows(&runner, "SCALE"), "{:?}", texts(&runner));
+        assert!(!shows(&runner, "Scale"), "{:?}", texts(&runner));
         assert!(config(&session).log_y, "the config still holds it");
         click_text(&mut runner, "Line");
-        assert!(shows(&runner, "SCALE"));
+        assert!(shows(&runner, "Scale"));
     }
 
     /// **A heatmap's strip names its channels for what they mean on a matrix** — the second
@@ -1370,7 +1352,7 @@ mod tests {
         click_text(&mut runner, "Heatmap");
         assert_eq!(config(&session).mark, Some(ChartMark::Heatmap));
         let seen = texts(&runner);
-        for expected in ["X AXIS", "Y AXIS", "VALUE (COLOR)"] {
+        for expected in ["X axis", "Y AXIS", "VALUE (COLOR)"] {
             assert!(seen.contains(&expected.to_string()), "{seen:?}");
         }
         assert!(
@@ -1431,21 +1413,21 @@ mod tests {
         let (mut runner, session) = runner();
         settle(&mut runner);
         assert!(
-            !shows(&runner, "TRENDLINE"),
+            !shows(&runner, "Trendline"),
             "a line has no fit to offer: {:?}",
             texts(&runner)
         );
 
         click_text(&mut runner, "Scatter");
-        assert!(shows(&runner, "TRENDLINE"), "{:?}", texts(&runner));
+        assert!(shows(&runner, "Trendline"), "{:?}", texts(&runner));
         click_text(&mut runner, "On");
         assert!(config(&session).trend);
 
         click_text(&mut runner, "Bar");
-        assert!(!shows(&runner, "TRENDLINE"), "{:?}", texts(&runner));
+        assert!(!shows(&runner, "Trendline"), "{:?}", texts(&runner));
         assert!(config(&session).trend, "the config still holds it");
         click_text(&mut runner, "Scatter");
-        assert!(shows(&runner, "TRENDLINE"));
+        assert!(shows(&runner, "Trendline"));
         click_text(&mut runner, "Off");
         assert!(!config(&session).trend);
     }
@@ -1456,7 +1438,7 @@ mod tests {
     fn a_legend_press_hides_a_series_and_alt_press_isolates_it() {
         let (mut runner, session) = runner();
         settle(&mut runner);
-        assert!(shows(&runner, "LEGEND"), "{:?}", texts(&runner));
+        assert!(shows(&runner, "Legend"), "{:?}", texts(&runner));
 
         click_legend(&mut runner, "cost");
         assert_eq!(config(&session).hidden, ["cost"]);

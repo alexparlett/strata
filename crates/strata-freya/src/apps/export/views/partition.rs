@@ -69,7 +69,7 @@ impl Component for Partition {
             )
             .child(Prose::new(state_label));
 
-        Row::new("HIVE PARTITIONING")
+        Row::new("Hive partitioning")
             .child(toggle)
             .maybe_child(enabled.then_some(Panes))
             .maybe_child((enabled && has_selection).then_some(KeepColumns))
@@ -266,7 +266,7 @@ impl Component for Selected {
             .content(Content::Flex)
             .cross_align(Alignment::Center)
             .main_align(Alignment::SpaceBetween)
-            .child(Eyebrow::new("SELECTED").color(theme.label_color))
+            .child(Eyebrow::new("Selected").color(theme.label_color))
             .maybe_child(
                 (chosen.len() > 1).then(|| Meta::new("outermost first").color(theme.label_color)),
             );

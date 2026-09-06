@@ -91,8 +91,7 @@ impl ProfileWording for ProfileTarget {
             }
             ProfileTarget::Remote { .. } => {
                 "Runs one statement on the database that reads every row, to compute distinct \
-                 counts, minimums, maximums and means. Distinct counts cannot be merged, so \
-                 there is no cheaper form, and the server does the work. The result is cached \
+                 counts, minimums, maximums and means. This may take time on large tables. Results are cached \
                  until the source is refreshed."
             }
         }
@@ -340,7 +339,7 @@ impl Component for ProfileConfirm {
             .child(Title::new(target.verb()).color(roles.get(Role::Text)))
             .child(
                 MonoValue::new(target.label())
-                    .color(roles.get(Role::Accent))
+                    .color(roles.get(Role::TextMuted))
                     .text_overflow(TextOverflow::Ellipsis),
             );
 

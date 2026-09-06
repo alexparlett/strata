@@ -557,7 +557,7 @@ pub fn link_row(at: &Place, name: &str, cx: &RowCtx) -> RowBody {
 ///
 /// One row rather than an illustrated tile, because it sits *under* a workspace node full of rows
 /// rather than filling a pane of its own. It says what a data source is for and adds one; the
-/// header's `+` is the same gesture, and the command palette's *New data source…* is the third.
+/// header's `+` is the same gesture, and the command palette's *New data source* is the third.
 pub fn add_source_row(at: &Place, cx: &RowCtx) -> RowBody {
     let mut editor = cx.editor;
 

@@ -51,14 +51,14 @@ pub const SESSION_TOKEN: &str = "session_token";
 const SECRET_ENV: &[&str] = &["AWS_SECRET_ACCESS_KEY"];
 const TOKEN_ENV: &[&str] = &["AWS_SESSION_TOKEN"];
 
-const BUCKET: Option<&str> = Some("BUCKET");
-const AUTH_GROUP: Option<&str> = Some("AUTHENTICATION");
+const BUCKET: Option<&str> = Some("Bucket");
+const AUTH_GROUP: Option<&str> = Some("Authentication");
 
 /// What an S3 data source is described by, beyond the client options every store shares.
 const OWN: &[SourceSetting] = &[
     SourceSetting {
         key: "address",
-        label: "BUCKET",
+        label: "Bucket",
         field: Field::Text,
         group: BUCKET,
         required: true,
@@ -69,7 +69,7 @@ const OWN: &[SourceSetting] = &[
     },
     SourceSetting {
         key: "region",
-        label: "REGION",
+        label: "Region",
         field: Field::Text,
         group: BUCKET,
         required: true,
@@ -80,7 +80,7 @@ const OWN: &[SourceSetting] = &[
     },
     SourceSetting {
         key: "endpoint",
-        label: "ENDPOINT",
+        label: "Endpoint",
         field: Field::Text,
         group: BUCKET,
         required: false,
@@ -94,7 +94,7 @@ const OWN: &[SourceSetting] = &[
     },
     SourceSetting {
         key: "auth",
-        label: "AUTHENTICATION",
+        label: "Authentication",
         field: Field::Choice(AUTH),
         group: AUTH_GROUP,
         required: false,
@@ -108,7 +108,7 @@ const OWN: &[SourceSetting] = &[
     },
     SourceSetting {
         key: "profile",
-        label: "AWS PROFILE",
+        label: "AWS profile",
         field: Field::Text,
         group: AUTH_GROUP,
         required: true,
@@ -122,7 +122,7 @@ const OWN: &[SourceSetting] = &[
     },
     SourceSetting {
         key: "access_key_id",
-        label: "ACCESS KEY ID",
+        label: "Access key ID",
         field: Field::Text,
         group: AUTH_GROUP,
         required: true,
@@ -136,7 +136,7 @@ const OWN: &[SourceSetting] = &[
     },
     SourceSetting {
         key: SECRET_KEY,
-        label: "SECRET ACCESS KEY",
+        label: "Secret access key",
         field: Field::Secret,
         group: AUTH_GROUP,
         required: true,
@@ -150,7 +150,7 @@ const OWN: &[SourceSetting] = &[
     },
     SourceSetting {
         key: SESSION_TOKEN,
-        label: "SESSION TOKEN",
+        label: "Session token",
         field: Field::Secret,
         group: AUTH_GROUP,
         required: false,

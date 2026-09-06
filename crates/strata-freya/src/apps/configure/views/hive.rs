@@ -73,7 +73,7 @@ impl Component for Hive {
         rect()
             .width(Size::fill())
             .maybe_child(may_partition.then(|| {
-                Row::new("HIVE PARTITIONING")
+                Row::new("Hive partitioning")
                     .child(toggle)
                     .maybe_child(on.then(|| {
                         rect()

@@ -72,13 +72,12 @@ dashed slot) · `border.focused` · `border.selected` (opt → `border.focused`)
 checkbox/radio rest outlines, the switch track).
 
 **Text** — icons read these too; an `icon.*` family is the named escape if an icon ever needs
-to differ: `text` · `text.muted` · `text.control` · `text.dim` · `text.label` (uppercase
-eyebrows) · `text.placeholder` · `text.disabled` · `text.accent` (opt → `accent`) ·
+to differ: `text` · `text.muted` · `text.control` · `text.dim` · `text.label` (form and section labels) · `text.placeholder` · `text.disabled` · `text.accent` (opt → `accent`) ·
 `text.on_accent`.
 
 **Accent**: `accent` · `accent.hover` · `accent.ring` (opt → `accent`) · `accent.selection`
-(the ~12% wash — selected rows, nav pills, the palette's active row) · `accent.muted` (the
-~22% wash) · `accent.badge`.
+(the selection wash — selected rows, nav pills, the palette's active row) · `accent.muted` (the
+muted wash) · `accent.badge`.
 
 **Status** — one global triad per semantic, never per-surface:
 `error` + `error.background` + `error.background.hover` + `error.border` (error alone carries a

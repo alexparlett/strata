@@ -522,7 +522,7 @@ impl Report {
                 IconName::Check,
                 tones.ok,
                 "Strata is up to date",
-                format!("Strata {CURRENT} is the latest release."),
+                format!("Installed version: {CURRENT}"),
             ),
             Update::Available { .. } => (
                 IconName::Download,
@@ -952,7 +952,7 @@ mod tests {
         let shown = texts(&runner);
         assert_eq!(shown[0], "Strata is up to date");
         assert!(
-            shown.iter().any(|t| t.contains("is the latest release")),
+            shown.iter().any(|t| t.starts_with("Installed version:")),
             "{shown:?}"
         );
         assert!(
@@ -982,10 +982,7 @@ mod tests {
         let report = Report::of(&Update::UpToDate, &Affordance::Check, probe_tones());
         assert_eq!(report.title, "Strata is up to date");
         assert_eq!(report.subject, format!("Strata {CURRENT}"));
-        assert_eq!(
-            report.body,
-            format!("Strata {CURRENT} is the latest release.")
-        );
+        assert_eq!(report.body, format!("Installed version: {CURRENT}"));
         assert!(report.icon == IconName::Check);
         assert_eq!(report.tone, probe_tones().ok);
         assert!(report.page.is_none(), "a release page for no release");

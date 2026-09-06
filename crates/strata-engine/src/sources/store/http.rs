@@ -29,7 +29,7 @@ const OWN: &[SourceSetting] = &[SourceSetting {
     key: "address",
     label: "URL",
     field: Field::Text,
-    group: Some("ORIGIN"),
+    group: Some("Origin"),
     required: true,
     default: None,
     when: None,

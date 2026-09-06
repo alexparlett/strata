@@ -72,8 +72,8 @@ impl Dress {
             ],
             heat: (theme.heat_low, theme.heat_high),
             label: (
-                typography.meta.family.clone(),
-                f64::from(typography.meta.size),
+                typography.caption.family.clone(),
+                f64::from(typography.caption.size),
             ),
         }
     }

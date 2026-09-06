@@ -5,7 +5,7 @@ use freya::prelude::*;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::source::SourceCtx;
 use crate::components::form::Row;
-use crate::components::segmented_toggle::{SegmentedToggle, ToggleSegment};
+use crate::components::typography::Control;
 
 /// **PROVIDER** — explicit, never inferred from a typed URL scheme (spec §1). The one control
 /// that decides which rows exist below it.
@@ -35,16 +35,27 @@ impl Component for ProviderPicker {
         let engine = use_consume::<EngineCtx>();
         let kind = ctx.draft.read().kind.clone();
 
-        let mut pill = SegmentedToggle::new().form();
-        for source in engine.sources().registrants() {
+        let sources = engine.sources().registrants();
+        let label = sources
+            .iter()
+            .find(|source| source.kind == kind)
+            .map_or("Choose provider", |source| source.label);
+        let mut picker = Select::new()
+            .width(Size::Inner)
+            .selected_item(Control::new(label));
+        for source in sources {
             let picked = kind == source.kind;
-            pill = pill.child(ToggleSegment::text(source.badge).selected(picked).on_press(
-                move |_| {
-                    let source = source.clone();
-                    ctx.edit(move |draft| draft.adopt(&source));
-                },
-            ));
+            let label = source.label;
+            picker = picker.child(
+                MenuItem::new()
+                    .selected(picked)
+                    .on_press(move |_| {
+                        let source = source.clone();
+                        ctx.edit(move |draft| draft.adopt(&source));
+                    })
+                    .child(Control::new(label)),
+            );
         }
-        Row::new("PROVIDER").child(pill)
+        Row::new("Provider").child(picker)
     }
 }

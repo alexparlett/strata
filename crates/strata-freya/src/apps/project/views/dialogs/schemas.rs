@@ -186,7 +186,7 @@ impl Component for SchemasPicker {
             .child(Title::new("Schemas").color(roles.get(Role::Text)))
             .child(
                 MonoValue::new(url.clone())
-                    .color(accent)
+                    .color(roles.get(Role::TextMuted))
                     .text_overflow(TextOverflow::Ellipsis),
             );
 
@@ -195,10 +195,7 @@ impl Component for SchemasPicker {
                 "Which schemas this data source shows. Every schema stays queryable by name; \
                      this scopes what the tree and completion offer."
             }
-            false => {
-                "This data source is not connected, so it cannot say which schemas it has. \
-                      These are the ones it is set to show."
-            }
+            false => "Not connected. Showing configured schemas.",
         };
 
         let rows = offers.into_iter().map(|offer| {

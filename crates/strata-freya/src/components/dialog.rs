@@ -1,37 +1,4 @@
-//! The **modal dialog shell** — every centred confirm in the app is **header · body · footer** on
-//! this one card. Callers supply what differs: the header's icon, tone and title run; the body;
-//! the buttons.
-//!
-//! The chrome it owns is the part that must not drift between dialogs (it already had):
-//!
-//! - **Card** — a fixed width, 14px radius on `surface_tertiary`, hairline border, drop shadow,
-//!   clipped so the footer's fill meets the corners; the comps' `24 / 24 / 16 / 24` inset with 12
-//!   between header and body.
-//! - **Header** — a tinted icon chip beside a title over its subject ([`DialogHeader`]). One chip
-//!   for every dialog; only the icon and the tone vary.
-//! - **Body** — whatever the caller passes, full width *under* the header rather than indented
-//!   beside the chip.
-//! - **Action strip** — a `surface_secondary` band under a hairline, buttons end-aligned, **58px
-//!   tall**. The strip stamps [`ACTION_HEIGHT`] onto its own actions, so a dialog cannot ship a
-//!   squashed button — and that number belongs to the design system, because every committing
-//!   button in the app wears it.
-//! - **Modal semantics** — Esc dismisses, Enter confirms, every other key is consumed at the global
-//!   layer. The open/closed half is the shared [`Modal`] base, which this wraps its card in; Enter
-//!   is the *dialog's* semantic and lives on the card, in the slot the base leaves open. The
-//!   barrier is why dialogs mount early at the window root: same-name global listeners fire in
-//!   document order.
-//!
-//!   **It is not yet focus containment.** `KeyDown` outranks `GlobalKeyDown` and its cancel set
-//!   includes it, so a *focused* element sees the key first and can cancel the dialog's handler —
-//!   the SQL editor does exactly that on several branches, and nothing here moves focus into the
-//!   card. Fixing it properly means focusing the dialog on open and restoring focus on dismiss;
-//!   until then the barrier covers global listeners only.
-//!
-//! Dismiss and confirm are `EventHandler<()>` rather than `Event<T>` because they are *outcomes*:
-//! dismiss arrives from Esc **or** the backdrop, confirm from Enter **or** the caller's button.
-//! Freya types its own semantic actions the same way.
-//!
-//! Mount it only while the dialog is open — it renders no "closed" state of its own.
+//! Confirmation card with shared header, body, actions, and modal keyboard behaviour.
 
 use freya::components::Checkbox;
 use freya::prelude::*;
@@ -48,9 +15,9 @@ use crate::theme::{use_roles, Role};
 const DEFAULT_WIDTH: f32 = 420.;
 
 /// The header chip's box and its glyph. One size for every dialog — see the module doc.
-const CHIP: f32 = 38.;
+const CHIP: f32 = 28.;
 const CHIP_RADIUS: f32 = R_2;
-const CHIP_ICON: f32 = 19.;
+const CHIP_ICON: f32 = 16.;
 /// Alpha of the chip's fill, tinted from the dialog's tone (≈13%, the comps' figure).
 const CHIP_TINT: u8 = 33;
 
@@ -105,15 +72,7 @@ impl Component for DialogHeader {
     }
 }
 
-/// A dialog's **checkbox row** — the box, its label, and the whole row as the press target.
-///
-/// One component because three dialogs had spelled out the same six builder calls and the same
-/// 16px glyph, so retuning the inset or the box size was three edits in three files.
-///
-/// **Known hazard, shared by all three and not introduced here**: the row is pressable and the
-/// `Checkbox` inside it is a focus target, so Enter on a focused box fires this row's press
-/// *and* the dialog's confirm. Fixing that means moving the press onto the box (or onto the
-/// fork's `Tile`) and is a change to what every one of these dialogs does with the keyboard.
+/// A labelled checkbox with one keyboard activation target.
 #[derive(PartialEq)]
 pub struct CheckboxRow {
     label: String,
@@ -156,12 +115,16 @@ impl Component for CheckboxRow {
             .padding((SP_2, SP_3))
             .corner_radius(R_2)
             .map(self.on_toggle.clone(), |el, handler| {
-                el.on_press(move |e: Event<PressEventData>| handler.call(e))
+                el.on_press(move |e: Event<PressEventData>| {
+                    e.prevent_default();
+                    e.stop_propagation();
+                    handler.call(e);
+                })
             })
             .child(Checkbox::new().selected(self.selected).size(CHECKBOX))
             .child(
                 Prose::new(self.label.clone())
-                    .color(roles.get(Role::TextPlaceholder))
+                    .color(roles.get(Role::TextMuted))
                     .width(Size::flex(1.))
                     .text_overflow(TextOverflow::Ellipsis),
             )
@@ -324,5 +287,116 @@ impl Component for Dialog {
             modal = modal.on_close_request(dismiss);
         }
         modal
+    }
+}
+
+#[cfg(test)]
+mod focus_tests {
+    use super::*;
+    use freya_testing::TestingRunner;
+    use std::time::Duration;
+
+    type Handles = (
+        State<bool>,
+        State<String>,
+        State<String>,
+        State<bool>,
+        State<usize>,
+    );
+
+    fn app() -> impl IntoElement {
+        use_init_theme(|| crate::theme::strata_theme(&strata_core::theme::load("midnight")));
+        let (mut open, background, inside, mut checked, mut confirmed) = use_consume::<Handles>();
+        rect()
+            .expanded()
+            .vertical()
+            .maybe_child(open().then(|| {
+                Dialog::new()
+                    .body(
+                        rect().vertical().child(Input::new(inside)).child(
+                            CheckboxRow::new("Remember choice", checked())
+                                .on_toggle(move |_| checked.toggle()),
+                        ),
+                    )
+                    .on_dismiss(move |()| open.set(false))
+                    .on_confirm(move |()| confirmed.set(confirmed() + 1))
+                    .action(
+                        Button::new()
+                            .child("Cancel")
+                            .on_press(move |_| open.set(false)),
+                    )
+            }))
+            .child(Input::new(background).auto_focus(true))
+    }
+
+    fn runner() -> (TestingRunner, Handles) {
+        let (mut runner, handles) = TestingRunner::new(
+            app,
+            (800., 600.).into(),
+            |r| {
+                r.provide_root_context(|| {
+                    (
+                        State::create(false),
+                        State::create(String::new()),
+                        State::create(String::new()),
+                        State::create(false),
+                        State::create(0usize),
+                    )
+                })
+            },
+            1.,
+        );
+        settle(&mut runner);
+        (runner, handles)
+    }
+
+    fn settle(runner: &mut TestingRunner) {
+        runner.poll_n(Duration::from_millis(10), 5);
+    }
+
+    #[test]
+    fn dialog_moves_focus_and_restores_it_on_dismissal() {
+        let (mut runner, (mut open, background, _, _, _)) = runner();
+        runner.write_text("before");
+        assert_eq!(&*background.peek(), "before");
+        open.set(true);
+        settle(&mut runner);
+        runner.write_text("X");
+        assert_eq!(&*background.peek(), "before");
+        runner.press_key(Key::Named(NamedKey::Escape));
+        settle(&mut runner);
+        assert!(!open());
+        runner.write_text("after");
+        assert_eq!(&*background.peek(), "beforeafter");
+    }
+
+    #[test]
+    fn tab_and_shift_tab_stay_inside_the_dialog() {
+        let (mut runner, (mut open, background, inside, _, _)) = runner();
+        open.set(true);
+        settle(&mut runner);
+        for modifiers in [Modifiers::empty(), Modifiers::SHIFT] {
+            for _ in 0..8 {
+                runner.press_key_with_modifiers(Key::Named(NamedKey::Tab), modifiers);
+                settle(&mut runner);
+                runner.write_text("x");
+            }
+        }
+        assert!(background.peek().is_empty());
+        assert!(!inside.peek().is_empty(), "Tab must reach the dialog input");
+    }
+
+    #[test]
+    fn enter_on_checkbox_toggles_without_confirming() {
+        let (mut runner, (mut open, _, _, checked, confirmed)) = runner();
+        open.set(true);
+        settle(&mut runner);
+        runner.press_key(Key::Named(NamedKey::Tab));
+        runner.press_key(Key::Named(NamedKey::Tab));
+        settle(&mut runner);
+        runner.press_key(Key::Named(NamedKey::Enter));
+        settle(&mut runner);
+        assert!(checked());
+        assert_eq!(confirmed(), 0);
     }
 }

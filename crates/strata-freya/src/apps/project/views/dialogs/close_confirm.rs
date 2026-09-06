@@ -36,7 +36,7 @@ use crate::platform::{self, OpenCtx};
 pub struct CloseConfirm {
     pub confirm: State<Option<CloseTarget>>,
     /// What a confirmed *window* close needs: the shared close path puts the launcher up
-    /// when this window is the app's last, so "Stop & exit" lands where the red button
+    /// when this window is the app's last, so "Stop and close" lands where the red button
     /// would rather than quitting the app.
     pub app: AppCtx,
 }
@@ -107,30 +107,26 @@ impl Component for CloseConfirm {
 
         let (title, body, keep, action, action_icon) = match target {
             CloseTarget::Window => (
-                "Confirm exit",
+                "Close window?",
                 match whose {
                     Whose::Agent => "An agent is running a query. Stop it and exit?",
                     Whose::Assistant => "The assistant is running a query. Stop it and exit?",
-                    Whose::Background => {
-                        "Work is still finishing. Are you sure you want to stop it and exit?"
-                    }
-                    Whose::Queries => {
-                        "Queries are running. Are you sure you want to stop them and exit?"
-                    }
+                    Whose::Background => "Work is still finishing. Stop it and exit?",
+                    Whose::Queries => "Queries are running. Stop them and exit?",
                 },
                 "Cancel",
-                "Stop & exit",
+                "Stop and close",
                 IconName::LogOut,
             ),
             CloseTarget::Tab(_) => (
-                "Confirm close",
-                "A query is running. Are you sure you want to stop it and close this tab?",
+                "Close tab?",
+                "A query is running. Stop it and close this tab?",
                 "Keep tab open",
-                "Stop & close",
+                "Stop and close",
                 IconName::Stop,
             ),
             CloseTarget::Reroot(_) => (
-                "Confirm open",
+                "Open project?",
                 match whose {
                     Whose::Agent => {
                         "An agent is running a query. Stop it and open another project?"
@@ -139,20 +135,20 @@ impl Component for CloseConfirm {
                         "The assistant is running a query. Stop it and open another project?"
                     }
                     Whose::Background => {
-                        "Work is still finishing. Are you sure you want to stop it and open \
+                        "Work is still finishing. Stop it and open \
                          another project?"
                     }
                     Whose::Queries => {
-                        "Queries are running. Are you sure you want to stop them and open \
+                        "Queries are running. Stop them and open \
                          another project?"
                     }
                 },
                 "Cancel",
-                "Stop & open",
+                "Stop and open",
                 IconName::Stop,
             ),
             CloseTarget::Restart => (
-                "Confirm restart",
+                "Restart engine?",
                 "These properties change the engine runtime, which is fixed when the engine \
                  starts. Restarting stops any running query and registers your tables and views \
                  again.",

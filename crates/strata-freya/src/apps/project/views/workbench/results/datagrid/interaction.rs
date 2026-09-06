@@ -50,7 +50,7 @@ fn app() -> impl IntoElement {
     let page_no = use_state(|| 1usize);
     let sel = use_consume::<State<Selection>>();
     let sort = SortState::use_new(page_no, sel);
-    let data = page();
+    let data = use_try_consume::<Rc<GridData>>().unwrap_or_else(page);
     rect()
         .expanded()
         .child(ContextMenuViewer::new())
@@ -178,4 +178,44 @@ fn right_click_retargets_outside_the_selection_and_opens_the_menu() {
             fc: 1
         }
     );
+}
+
+#[test]
+fn numbers_align_at_the_right_edge_and_text_at_the_left() {
+    let (mut runner, ()) = TestingRunner::new(
+        app,
+        (900., 700.).into(),
+        |r| {
+            r.provide_root_context(|| ConfigStation::create(AppConfig::default()));
+            r.provide_root_context(|| State::create(Chats::new(Pick::default())));
+            r.provide_root_context(|| State::create(None::<ShapeTarget>));
+            r.provide_root_context(|| State::create(Selection::None));
+            r.provide_root_context(|| {
+                let initial = page();
+                let mut data = GridData {
+                    columns: initial.columns.clone(),
+                    rows: initial.rows.clone(),
+                    batch: initial.batch.clone(),
+                };
+                data.rows[0][0].text = "7".into();
+                data.rows[1][0].text = "1234".into();
+                data.rows[0][1].text = "short".into();
+                data.rows[1][1].text = "longer text".into();
+                Rc::new(data)
+            });
+        },
+        1.,
+    );
+    runner.poll_n(std::time::Duration::from_millis(10), 5);
+    let bounds = |text: &str| {
+        runner
+            .find(|node, element| {
+                Label::try_downcast(element)
+                    .filter(|label| label.text == text)
+                    .map(|_| node.layout().area)
+            })
+            .expect("visible cell")
+    };
+    assert!((bounds("7").max_x() - bounds("1234").max_x()).abs() < 1.);
+    assert!((bounds("short").min_x() - bounds("longer text").min_x()).abs() < 1.);
 }

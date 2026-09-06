@@ -195,7 +195,7 @@ impl Component for Inspector {
                     .padding((0., PANEL_PAD))
                     .child(
                         rect().width(Size::flex(1.)).child(
-                            Eyebrow::new("COLUMN INSPECTOR")
+                            Eyebrow::new("Column inspector")
                                 .color(theme.label_color)
                                 .text_overflow(TextOverflow::Ellipsis),
                         ),

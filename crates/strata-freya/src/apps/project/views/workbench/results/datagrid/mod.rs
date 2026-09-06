@@ -147,6 +147,7 @@ define_theme!(
         cell_hover_background: Color,
         selection_border_fill: Color,
         gutter_color: Color,
+        null_color: Color,
         gutter_active_background: Color,
         gutter_active_color: Color,
         header_color: Color,

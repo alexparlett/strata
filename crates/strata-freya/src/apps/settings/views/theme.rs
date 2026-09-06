@@ -216,7 +216,7 @@ impl Component for ThemeCard {
         };
         let source = match self.source {
             Source::Builtin => ("BUNDLED", theme.badge_builtin_color),
-            Source::User => ("USER", theme.badge_user_color),
+            Source::User => ("User", theme.badge_user_color),
         };
 
         rect()

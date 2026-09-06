@@ -21,7 +21,7 @@ use crate::apps::project::state::{
 };
 use crate::apps::project::views::drawer::project_error_count;
 use crate::components::icon::{Icon, IconName};
-use crate::components::metrics::{pill, SP_1, SP_2, SP_3};
+use crate::components::metrics::{pill, RAIL_ACTION, RAIL_WIDTH, SP_1, SP_2, SP_3};
 use crate::components::toggle_button::{ChangeEventData, ToggleButton};
 use crate::components::tones::tones;
 use crate::components::typography::Meta;
@@ -49,8 +49,8 @@ impl Component for ActivityRail {
         let button =
             move |icon: IconName, title: &str, active: bool, toggle: fn(&mut SessionState)| {
                 ToggleButton::new()
-                    .width(Size::px(40.))
-                    .height(Size::px(38.))
+                    .width(Size::px(RAIL_ACTION))
+                    .height(Size::px(RAIL_ACTION))
                     .toggle(active)
                     .title(title)
                     .on_change(move |_: Event<ChangeEventData>| {
@@ -61,7 +61,7 @@ impl Component for ActivityRail {
             };
 
         rect()
-            .width(Size::px(48.))
+            .width(Size::px(RAIL_WIDTH))
             .height(Size::fill())
             .background(background)
             .cross_align(Alignment::Center)
@@ -77,8 +77,8 @@ impl Component for ActivityRail {
             .child(rect().width(Size::px(1.)).height(Size::flex(1.)))
             .child(
                 rect()
-                    .width(Size::px(40.))
-                    .height(Size::px(38.))
+                    .width(Size::px(RAIL_ACTION))
+                    .height(Size::px(RAIL_ACTION))
                     .child(button(
                         IconName::Problems,
                         "Problems",

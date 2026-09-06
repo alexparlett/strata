@@ -110,8 +110,8 @@ impl Component for TurnRow {
             .on_pointer_over(move |_| hovered.set(true))
             .on_pointer_out(move |_| hovered.set(false))
             .child(match &self.turn {
-                Turn::User { .. } => Eyebrow::new("YOU").color(theme.role_color).into_element(),
-                Turn::Reply(_) => Eyebrow::new("STRATA")
+                Turn::User { .. } => Eyebrow::new("You").color(theme.role_color).into_element(),
+                Turn::Reply(_) => Eyebrow::new("Strata")
                     .color(theme.chip_color)
                     .into_element(),
             })

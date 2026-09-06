@@ -59,7 +59,7 @@ impl Component for ProjectsPane {
             list.pinned
                 .iter()
                 .fold(
-                    groups.child(group_label("PINNED", theme.label_color)),
+                    groups.child(group_label("Pinned", theme.label_color)),
                     |el, r| el.child(row(r)),
                 )
                 .child(rect().width(Size::fill()).height(Size::px(10.)))
@@ -68,7 +68,7 @@ impl Component for ProjectsPane {
             groups
         } else {
             list.recent.iter().fold(
-                groups.child(group_label("RECENT", theme.label_color)),
+                groups.child(group_label("Recent", theme.label_color)),
                 |el, r| el.child(row(r)),
             )
         };
@@ -76,18 +76,26 @@ impl Component for ProjectsPane {
         let empty = list.is_empty().then(|| {
             let q = query.read().trim().to_string();
             let copy = if q.is_empty() {
-                "No recent projects — choose one with OPEN.".to_string()
+                "Open a folder to start working with your data.".to_string()
             } else {
                 format!("No projects match \u{201c}{q}\u{201d}.")
             };
+            let empty_app = self.app.clone();
             rect()
                 .width(Size::fill())
+                .spacing(SP_5)
                 .padding(Gaps::new(SP_6, SP_4, SP_6, SP_4))
                 .child(
                     Prose::new(copy)
                         .color(roles.get(Role::TextPlaceholder))
                         .wrap(),
                 )
+                .maybe_child(q.is_empty().then(|| {
+                    Button::new()
+                        .filled()
+                        .on_press(move |_| pick_and_open(empty_app.clone()))
+                        .child(Control::new("Open project"))
+                }))
         });
 
         let open_app = self.app.clone();
@@ -132,7 +140,7 @@ impl Component for ProjectsPane {
                             .cross_align(Alignment::Center)
                             .spacing(SP_3)
                             .child(Icon::new(IconName::Folder).size(15.))
-                            .child(Control::new("OPEN")),
+                            .child(Control::new("Open project")),
                     ),
             );
 

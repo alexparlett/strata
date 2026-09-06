@@ -178,3 +178,8 @@ pub fn use_progress_hold(active: bool) -> bool {
     });
     active && waited()
 }
+
+/// Width of a persistent activity rail.
+pub const RAIL_WIDTH: f32 = 40.;
+/// Extent of an activity rail action.
+pub const RAIL_ACTION: f32 = 32.;

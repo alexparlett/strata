@@ -149,9 +149,9 @@ impl SourceKind for TestDoc {
 const DOC_SETTINGS: &[SourceSetting] = &[
     SourceSetting {
         key: "address",
-        label: "ADDRESS",
+        label: "Address",
         field: Field::Text,
-        group: Some("CONNECTION"),
+        group: Some("Connection"),
         required: true,
         default: None,
         when: None,
@@ -160,9 +160,9 @@ const DOC_SETTINGS: &[SourceSetting] = &[
     },
     SourceSetting {
         key: "collection_prefix",
-        label: "PREFIX",
+        label: "Prefix",
         field: Field::Text,
-        group: Some("CONNECTION"),
+        group: Some("Connection"),
         required: false,
         default: None,
         when: None,
@@ -171,9 +171,9 @@ const DOC_SETTINGS: &[SourceSetting] = &[
     },
     SourceSetting {
         key: "mode",
-        label: "MODE",
+        label: "Mode",
         field: Field::Choice(&["plain", "sharded"]),
-        group: Some("SHARDING"),
+        group: Some("Sharding"),
         required: false,
         default: Some("plain"),
         when: None,
@@ -182,9 +182,9 @@ const DOC_SETTINGS: &[SourceSetting] = &[
     },
     SourceSetting {
         key: "shard_key",
-        label: "SHARD KEY",
+        label: "Shard key",
         field: Field::Text,
-        group: Some("SHARDING"),
+        group: Some("Sharding"),
         required: true,
         default: None,
         when: Some(When {
@@ -199,7 +199,7 @@ const DOC_SETTINGS: &[SourceSetting] = &[
 /// The one key a source with nothing to configure still declares.
 const SQL_SETTINGS: &[SourceSetting] = &[SourceSetting {
     key: "address",
-    label: "ADDRESS",
+    label: "Address",
     field: Field::Text,
     group: None,
     required: true,

@@ -47,8 +47,8 @@ the shared toolbar in both modes (`results/toolbar.rs`).
 
 The chart body (`results/chart/`) is two panes under that toolbar:
 
-- **Left control strip** (232 logical px, its own scroll — `chart/strip.rs`): the mark tiles
-  (six, three to a row), the X / Y / Series encoders, a histogram's bin count, the sort and scale
+- **Left control strip** (232 logical px, its own scroll — `chart/strip.rs`): the compact text mark tiles
+  (nine, three to a row), the X / Y / Series encoders, a histogram's bin count, the sort and scale
   toggles, and the legend.
 - **Right canvas pane**: the plot, a non-blocking high-cardinality banner across the top when
   warranted, and a refusal notice in place of the canvas when there is nothing honest to draw.

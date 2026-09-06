@@ -32,7 +32,7 @@
 //! entry would outlive the data source that answered it.
 
 use freya::prelude::{use_side_effect, use_state};
-use freya::query::{use_query, Captured, Query, QueryCapability, QueryStateData, UseQuery};
+use freya::query::{Captured, Query, QueryCapability, QueryStateData, UseQuery, use_query};
 use std::collections::BTreeMap;
 use std::time::Duration;
 use strata_engine::sql::SessionName;
@@ -139,13 +139,12 @@ pub fn use_remote_columns(
     let enabled = !relations.is_empty() && generation.is_some();
     use_query(
         Query::new(
-            ColumnsSpec {
+            enabled.then_some(ColumnsSpec {
                 relations,
                 generation,
-            },
+            }),
             RemoteColumns(engine.captured()),
         )
-        .enable(enabled)
         .stale_time(Duration::MAX),
     )
 }

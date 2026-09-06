@@ -42,7 +42,7 @@ mod row;
 use freya::prelude::*;
 
 use crate::components::divider::Divider;
-use crate::components::metrics::{SP_1, SP_3, SP_4, SP_5, SP_6};
+use crate::components::metrics::{SP_1, SP_3, SP_4, SP_6};
 
 pub use field::{NumberField, PathField, ValueField, FIELD_HEIGHT};
 pub use options::{Choice, Control, Group, Make, OptionList, TextField};
@@ -102,7 +102,7 @@ pub(crate) const CONTROL_GAP: f32 = SP_4;
 /// it is one role: what separates a box from the thing that qualifies it.
 pub(crate) const FIELD_GAP: f32 = SP_3;
 /// The gap between two rows of a fields form.
-pub(crate) const ROW_GAP: f32 = SP_5;
+pub(crate) const ROW_GAP: f32 = SP_4;
 /// The gap either side of a preferences form's rule (canvas `var(--sp-6)`).
 pub(crate) const RULE_GAP: f32 = SP_6;
 
@@ -229,21 +229,21 @@ mod tests {
             };
             let spec: Vec<(&str, Control<Edit>)> = if csv {
                 vec![
-                    ("HEADER ROW", toggle()),
-                    ("DELIMITER", text()),
-                    ("QUOTE CHARACTER", text()),
-                    ("ESCAPE CHARACTER", text()),
-                    ("COMMENT CHARACTER", text()),
-                    ("NEWLINES IN VALUES", toggle()),
-                    ("RAGGED ROWS", toggle()),
+                    ("Header row", toggle()),
+                    ("Delimiter", text()),
+                    ("Quote character", text()),
+                    ("Escape character", text()),
+                    ("Comment character", text()),
+                    ("Newlines in values", toggle()),
+                    ("Ragged rows", toggle()),
                     ("SCHEMA-INFER ROWS", num()),
-                    ("COMPRESSION", select()),
+                    ("Compression", select()),
                 ]
             } else {
                 vec![
-                    ("SHAPE", select()),
+                    ("Shape", select()),
                     ("SCHEMA-INFER ROWS", num()),
-                    ("COMPRESSION", select()),
+                    ("Compression", select()),
                 ]
             };
             spec.into_iter()

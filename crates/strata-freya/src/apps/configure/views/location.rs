@@ -14,7 +14,7 @@
 //! instead of opening an empty dropdown — "no data sources" and "the list has not loaded" look
 //! identical in an empty menu, and only one of them is worth acting on.
 //!
-//! **New data source… sets the project window's own slot.** Opening the editor needs that window's
+//! **New data source sets the project window's own slot.** Opening the editor needs that window's
 //! handles, and there is deliberately no second open path — the pane's `+`, its empty-state CTA,
 //! a row's *Edit data source* and this item all set [`SourceRequest`] and stop
 //! (`project::views::source_launch`). The window that opens is a child of the *project*
@@ -44,7 +44,7 @@ use crate::components::typography::{Caption, MonoValue, Prose};
 const COLUMN_GAP: f32 = SP_4;
 /// The gap between the picker and the line that says its provider has no data sources.
 const EMPTY_GAP: f32 = SP_3;
-/// The glyph beside *New data source…*, and the gap to its label.
+/// The glyph beside *New data source*, and the gap to its label.
 const ITEM_ICON: f32 = 12.;
 const ITEM_GAP: f32 = SP_3;
 
@@ -89,12 +89,12 @@ impl Component for Location {
                 })
         };
 
-        Row::new("LOCATION").child(
+        Row::new("Location").child(
             SegmentedToggle::new()
                 .form()
-                .child(segment("Local", Where::Local))
-                .child(segment("Remote", Where::Remote))
-                .child(segment("Internal", Where::Internal)),
+                .child(segment("Files", Where::Local))
+                .child(segment("Data source", Where::Remote))
+                .child(segment("Managed table", Where::Internal)),
         )
     }
 }
@@ -181,7 +181,7 @@ impl Component for ProviderFilter {
                     }),
             );
         }
-        Row::new("TYPE").child(pill)
+        Row::new("Type").child(pill)
     }
 }
 
@@ -234,12 +234,12 @@ impl Component for SourcePicker {
                         .cross_align(Alignment::Center)
                         .spacing(ITEM_GAP)
                         .child(Icon::new(IconName::Plus).size(ITEM_ICON))
-                        .child(Prose::new("New data source…")),
+                        .child(Prose::new("New data source")),
                 )
                 .into(),
         );
 
-        Row::new("CONNECTION")
+        Row::new("Connection")
             .required()
             .child(
                 rect()

@@ -9,7 +9,11 @@ use freya::prelude::*;
 use strata_core::config::Command;
 
 use crate::components::icon::{Icon, IconName};
-use crate::components::metrics::R_1;
+use crate::components::metrics::{R_1, SP_3, TOOL_SIZE};
+use crate::components::typography::Control;
+
+/// Width reserved for the labelled query action.
+pub const RUN_WIDTH: f32 = 76.;
 use crate::keymap::use_hint_title;
 
 define_theme!(
@@ -125,11 +129,13 @@ impl Component for RunButton {
             .position(AttachedPosition::Bottom)
             .child(
                 rect()
-                    .width(Size::px(28.))
-                    .height(Size::px(28.))
+                    .width(Size::px(RUN_WIDTH))
+                    .height(Size::px(TOOL_SIZE))
                     .corner_radius(R_1)
                     .background(bg)
                     .border(focus_ring)
+                    .horizontal()
+                    .spacing(SP_3)
                     .center()
                     .a11y_id(a11y_id)
                     .a11y_focusable(!disabled)
@@ -145,7 +151,15 @@ impl Component for RunButton {
                             }
                         })
                     })
-                    .child(Icon::new(icon).color(fg).size(15.)),
+                    .child(Icon::new(icon).color(fg).size(15.))
+                    .child(
+                        Control::new(if self.state == RunState::Running {
+                            "Stop"
+                        } else {
+                            "Run"
+                        })
+                        .color(fg),
+                    ),
             )
     }
 }

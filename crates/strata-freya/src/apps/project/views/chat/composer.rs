@@ -109,6 +109,7 @@ impl Component for Composer {
             )
         };
         let refusal = blocked(&assistant, &ai, &pick);
+        let app = use_try_consume::<AppCtx>();
 
         let mut mentions = Mentions {
             id,
@@ -274,6 +275,7 @@ impl Component for Composer {
                     .width(Size::fill())
                     .wrap()
             }))
+            .maybe_child(refusal.as_ref().and(app).map(setup_action))
             .child(Footer {
                 id,
                 pick,
@@ -281,6 +283,15 @@ impl Component for Composer {
                 theme,
             })
     }
+}
+
+fn setup_action(app: AppCtx) -> impl IntoElement {
+    Button::new()
+        .outline()
+        .on_press(move |_| {
+            crate::platform::open_settings(Platform::get(), app.clone());
+        })
+        .child(Prose::new("Configure assistant"))
 }
 
 /// **What the next send carries**, each attachment removable where it is shown.
