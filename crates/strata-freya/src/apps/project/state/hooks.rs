@@ -14,7 +14,7 @@ use freya::prelude::{
     Platform, State, TaskHandle, WritableUtils,
 };
 use freya::radio::{use_init_radio_station, use_radio, use_radio_station, RadioStation};
-use strata_core::project::{self as project_io, ProjectDefs, SessionLoadError};
+use strata_core::project::{self as project_io, SessionLoadError};
 use strata_core::util::{fmt_int, plural};
 use strata_engine::register::{CatalogSpec, RegOutcome, Stamped};
 use strata_engine::{CatalogGen, Registrations, SourceDefs, TableSpec};
@@ -696,6 +696,7 @@ mod tests {
     use freya::radio::RadioStation;
     use freya_testing::TestingRunner;
     use futures::executor::block_on;
+    use strata_core::project::ProjectDefs;
     use strata_core::theme::load;
     use strata_engine::{RunTag, TableMeta, WsId};
     use strata_model::{SourceFormat, TableDef, TableOrigin};
