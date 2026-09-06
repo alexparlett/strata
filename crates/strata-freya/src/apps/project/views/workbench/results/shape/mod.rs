@@ -361,12 +361,12 @@ fn group_select(mut form: State<ShapeForm>, i: usize, group: &GroupPick) -> Sele
         &Stride::ALL
     };
     let current = match group.by {
-        GroupBy::Off => "Off".to_string(),
+        GroupBy::Off => "Exclude".to_string(),
         GroupBy::Exact => "Exact value".to_string(),
         GroupBy::Binned(stride) => stride.label().to_string(),
     };
     let mut options: Vec<(String, GroupBy)> = vec![
-        ("Off".into(), GroupBy::Off),
+        ("Exclude".into(), GroupBy::Off),
         ("Exact value".into(), GroupBy::Exact),
     ];
     options.extend(
@@ -396,9 +396,9 @@ fn group_select(mut form: State<ShapeForm>, i: usize, group: &GroupPick) -> Sele
 fn measure_select(mut form: State<ShapeForm>, i: usize, measure: &MeasurePick) -> Select {
     let current = measure
         .agg
-        .map_or("Skip".to_string(), |agg| agg.func().to_string());
+        .map_or("Exclude".to_string(), |agg| agg.func().to_string());
     let agg_now = measure.agg;
-    let mut options: Vec<(String, Option<SqlAgg>)> = vec![("Skip".into(), None)];
+    let mut options: Vec<(String, Option<SqlAgg>)> = vec![("Exclude".into(), None)];
     options.extend(
         SqlAgg::ALL
             .iter()

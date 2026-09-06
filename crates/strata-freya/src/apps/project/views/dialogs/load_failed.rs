@@ -94,13 +94,13 @@ impl Component for ProjectLoadFailed {
 
         let prompt_up = open.prompt.read().is_some();
 
-        let close_enter = close.clone();
+        let retry_enter = try_again;
         let error = self.error.clone();
         rect()
             .maybe_child((!prompt_up).then(move || {
                 Dialog::new()
                     .modal(false)
-                    .on_confirm(move |()| close_enter())
+                    .on_confirm(move |()| retry_enter())
                     .header(header)
                     .body(
                         rect()
@@ -110,14 +110,14 @@ impl Component for ProjectLoadFailed {
                     .action(
                         Button::new()
                             .flat()
-                            .on_press(move |_| try_again())
-                            .child(Control::new("Try again")),
+                            .on_press(move |_| close())
+                            .child(Control::new("Close window")),
                     )
                     .action(
                         Button::new()
                             .filled()
-                            .on_press(move |_| close())
-                            .child(Control::new("Close window")),
+                            .on_press(move |_| try_again())
+                            .child(Control::new("Try again")),
                     )
             }))
             .child(

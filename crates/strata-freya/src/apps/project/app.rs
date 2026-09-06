@@ -48,6 +48,7 @@ use crate::apps::project::views::{
 use crate::apps::source::SourceTarget;
 use crate::keymap::on_commands;
 use crate::menu::MenuScope;
+use crate::platform::window_attributes;
 use crate::platform::{
     close_this_window, open_settings, quit, use_register_window, OpenCtx, Subtree, WindowKind,
 };
@@ -62,7 +63,6 @@ use async_io::Timer;
 use freya::prelude::*;
 use freya::radio::use_radio;
 use freya::winit::dpi::LogicalPosition;
-use freya::winit::platform::macos::WindowAttributesExtMacOS;
 use futures::executor::block_on;
 use futures::future::{select, Either};
 use futures::StreamExt;
@@ -115,10 +115,7 @@ impl ProjectApp {
             .with_on_close(on_close)
             .with_traffic_light_inset(6., 10.)
             .with_window_attributes(move |attrs, _| {
-                let attrs = attrs
-                    .with_titlebar_transparent(true)
-                    .with_fullsize_content_view(true)
-                    .with_title_hidden(true);
+                let attrs = window_attributes(attrs);
                 match geometry {
                     Some(g) => attrs.with_position(LogicalPosition::new(g.x as f64, g.y as f64)),
                     None => attrs,

@@ -27,7 +27,7 @@ use super::source::{
     add_source_row, link_row, rel_group_row, relation_note_row, relation_row, schema_row,
     source_row,
 };
-use super::workspace::{group_row, no_queries_row, workspace_row};
+use super::workspace::{empty_group_row, group_row, workspace_row};
 use super::{CatalogTheme, TreeCtx};
 use crate::apps::project::state::{use_catalog_selection, CatalogSelection, Chan, SessionState};
 use crate::apps::project::views::SourceRequest;
@@ -102,7 +102,7 @@ impl Component for TreeRow {
         let body = match &self.node.kind {
             NodeKind::Workspace { name } => workspace_row(&at, name, &cx),
             NodeKind::Group { group, count } => group_row(&at, *group, *count, &cx),
-            NodeKind::NoQueries => no_queries_row(&at, &cx),
+            NodeKind::EmptyGroup(group) => empty_group_row(&at, *group, &cx),
             NodeKind::Entry(entry) => entry_row(&at, entry, &cx),
             NodeKind::Column(column) => column_row(&at, column, &cx),
             NodeKind::SavedQuery { id, name } => saved_query_row(&at, *id, name, &cx),

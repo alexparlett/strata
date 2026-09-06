@@ -41,9 +41,9 @@ mod views;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use crate::platform::window_attributes;
 use freya::prelude::*;
 use freya::radio::{use_share_radio, RadioStation};
-use freya::winit::platform::macos::WindowAttributesExtMacOS;
 use freya::winit::window::WindowId;
 use strata_core::config::Command;
 use strata_engine::CatalogGen;
@@ -109,7 +109,7 @@ pub struct ConfigureLaunch {
     /// missing, which is how the first version of this crashed the moment Configure opened.
     pub report: ReportCtx,
     /// The project window's **data-source editor request** (W7 · 04) — what the CONNECTION
-    /// picker's *New data source…* sets.
+    /// picker's *New data source* sets.
     ///
     /// The slot rather than a second `open_source` call: that window needs the project
     /// window's handles and belongs to *its* lifetime, and there is deliberately one open path
@@ -311,12 +311,7 @@ impl ConfigureApp {
         .with_min_size(480., 420.)
         .with_background(background)
         .with_traffic_light_inset(9., 11.)
-        .with_window_attributes(move |attrs, _| {
-            attrs
-                .with_titlebar_transparent(true)
-                .with_fullsize_content_view(true)
-                .with_title_hidden(true)
-        })
+        .with_window_attributes(move |attrs, _| window_attributes(attrs))
     }
 }
 

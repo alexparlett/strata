@@ -218,6 +218,10 @@ pub fn table_menu(actions: &CatalogActions, name: String) -> Menu {
             .unwrap_or_default()
     };
     let internal = origin.is_internal();
+    let target = DropTarget::Table {
+        name: name.clone(),
+        origin,
+    };
     let registered = actions.registered(CatalogKind::Table, &name);
 
     Menu::new()
@@ -275,12 +279,9 @@ pub fn table_menu(actions: &CatalogActions, name: String) -> Menu {
                 .into_element()
         }))
         .child(Divider::menu())
-        .child(actions.danger("Drop table", move |a| {
+        .child(actions.danger(target.verb(), move |a| {
             let mut slot = a.drop_target;
-            slot.set(Some(DropTarget::Table {
-                name: name.clone(),
-                origin,
-            }));
+            slot.set(Some(target.clone()));
         }))
 }
 
@@ -650,4 +651,28 @@ pub fn rename_saved_query(actions: &CatalogActions, id: Uuid, name: &str) {
     let mut p = project.write_channel(ProjChan::Queries);
     p.rename_saved_query(id, name);
     persisted_defs(&p, actions.report);
+}
+
+/// Open a view definition in the SQL editor without executing it.
+pub fn new_view(actions: &CatalogActions) {
+    let project = actions.project.peek();
+    let mut ordinal = 1;
+    let name = loop {
+        let candidate = format!("view_{ordinal}");
+        if !project.tables.iter().any(|row| row.def.name == candidate)
+            && !project.views.iter().any(|row| row.def.name == candidate)
+        {
+            break candidate;
+        }
+        ordinal += 1;
+    };
+    drop(project);
+    open_composed(
+        actions,
+        &name,
+        format!(
+            "CREATE VIEW {} AS\nSELECT 1 AS value;",
+            WorkspaceName::of(&name).as_str()
+        ),
+    );
 }

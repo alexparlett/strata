@@ -201,7 +201,7 @@ impl ColumnPanel {
             .vertical()
             .padding(Gaps::new(SP_5, PANEL_PAD, SP_3, PANEL_PAD))
             .spacing(SP_3)
-            .child(Eyebrow::new("NESTED FIELDS").color(t.label_color))
+            .child(Eyebrow::new("Nested fields").color(t.label_color))
             .child(
                 rect()
                     .width(Size::fill())
@@ -557,7 +557,7 @@ fn zone(
                 .horizontal()
                 .content(Content::Flex)
                 .cross_align(Alignment::Center)
-                .child(Eyebrow::new("STATISTICS").color(t.label_color))
+                .child(Eyebrow::new("Statistics").color(t.label_color))
                 .maybe_child(controls.map(|c| {
                     rect()
                         .width(Size::flex(1.))

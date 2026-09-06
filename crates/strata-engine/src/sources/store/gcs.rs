@@ -22,13 +22,13 @@ use crate::sources::source::{
 pub const AUTH: &[&str] = &["ambient", "service-account", "anonymous"];
 const KEY_FILE: &[&str] = &["service-account"];
 
-const BUCKET: Option<&str> = Some("BUCKET");
-const AUTH_GROUP: Option<&str> = Some("AUTHENTICATION");
+const BUCKET: Option<&str> = Some("Bucket");
+const AUTH_GROUP: Option<&str> = Some("Authentication");
 
 const OWN: &[SourceSetting] = &[
     SourceSetting {
         key: "address",
-        label: "BUCKET",
+        label: "Bucket",
         field: Field::Text,
         group: BUCKET,
         required: true,
@@ -39,7 +39,7 @@ const OWN: &[SourceSetting] = &[
     },
     SourceSetting {
         key: "auth",
-        label: "AUTHENTICATION",
+        label: "Authentication",
         field: Field::Choice(AUTH),
         group: AUTH_GROUP,
         required: false,

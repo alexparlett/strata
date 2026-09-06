@@ -417,7 +417,7 @@ mod tests {
     fn theme_files_parse_end_to_end() {
         use strata_core::theme::resolve_typography;
 
-        let accents = [("midnight", "#4cc6ff"), ("daylight", "#2b7fd0")];
+        let accents = [("midnight", "#82b5ff"), ("daylight", "#2464b5")];
         for (id, accent) in accents {
             let t = load(id);
             assert_eq!(t.roles["accent"], accent, "{id}: accent role");

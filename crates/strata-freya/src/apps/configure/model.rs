@@ -909,7 +909,7 @@ impl ConfigureDraft {
         match self.format {
             FormatId::Csv => vec![
                 Group {
-                    label: "HEADER ROW".into(),
+                    label: "Header row".into(),
                     hint: None,
                     control: Control::Toggle {
                         on: self.csv_header,
@@ -924,7 +924,7 @@ impl ConfigureDraft {
                     },
                 },
                 Group {
-                    label: "DELIMITER".into(),
+                    label: "Delimiter".into(),
                     hint: Some("Field separator (use \\t for tab)"),
                     control: Control::Text(TextField {
                         value: self.csv_delimiter.clone(),
@@ -935,7 +935,7 @@ impl ConfigureDraft {
                 },
             ],
             FormatId::Json => vec![Group {
-                label: "SHAPE".into(),
+                label: "Shape".into(),
                 hint: Some("How the records are laid out in the file"),
                 control: Control::Select {
                     options: [
@@ -961,7 +961,7 @@ impl ConfigureDraft {
         match self.format {
             FormatId::Csv => vec![
                 Group {
-                    label: "QUOTE CHARACTER".into(),
+                    label: "Quote character".into(),
                     hint: Some("Wraps fields containing the delimiter"),
                     control: Control::Char(TextField {
                         value: self.csv_quote.clone(),
@@ -971,7 +971,7 @@ impl ConfigureDraft {
                     }),
                 },
                 Group {
-                    label: "ESCAPE CHARACTER".into(),
+                    label: "Escape character".into(),
                     hint: Some("Escapes a quote inside a quoted field (blank = none)"),
                     control: Control::Char(TextField {
                         value: self.csv_escape.clone(),
@@ -981,7 +981,7 @@ impl ConfigureDraft {
                     }),
                 },
                 Group {
-                    label: "COMMENT CHARACTER".into(),
+                    label: "Comment character".into(),
                     hint: Some("Skip lines starting with this character (blank = none)"),
                     control: Control::Char(TextField {
                         value: self.csv_comment.clone(),
@@ -991,7 +991,7 @@ impl ConfigureDraft {
                     }),
                 },
                 Group {
-                    label: "NEWLINES IN VALUES".into(),
+                    label: "Newlines in values".into(),
                     hint: Some(
                         "Allow quoted fields to contain line breaks. Files are then read whole \
                          rather than split and read in parallel",
@@ -1003,7 +1003,7 @@ impl ConfigureDraft {
                     },
                 },
                 Group {
-                    label: "RAGGED ROWS".into(),
+                    label: "Ragged rows".into(),
                     hint: Some(
                         "Pad rows and files that are short of a column with nulls, instead of \
                          failing the read",
@@ -1075,7 +1075,7 @@ fn first_source(sources: &[SourceDef], kind: &str) -> Option<String> {
 /// reads well at, and the same question should not be asked two ways in two windows.
 fn compression_group(current: FileCompression, edit: fn(FileCompression) -> Edit) -> Group<Edit> {
     Group {
-        label: "COMPRESSION".into(),
+        label: "Compression".into(),
         hint: Some("Whole-file compression. The source files carry the matching suffix"),
         control: Control::Select {
             options: FileCompression::ALL
@@ -1157,15 +1157,15 @@ mod tests {
         assert_eq!(
             labels(&csv_draft().options()),
             vec![
-                "HEADER ROW",
-                "DELIMITER",
-                "QUOTE CHARACTER",
-                "ESCAPE CHARACTER",
-                "COMMENT CHARACTER",
-                "NEWLINES IN VALUES",
-                "RAGGED ROWS",
+                "Header row",
+                "Delimiter",
+                "Quote character",
+                "Escape character",
+                "Comment character",
+                "Newlines in values",
+                "Ragged rows",
                 "SCHEMA-INFER ROWS",
-                "COMPRESSION",
+                "Compression",
             ]
         );
     }
@@ -1178,7 +1178,7 @@ mod tests {
         };
         assert_eq!(
             labels(&draft.options()),
-            vec!["SHAPE", "SCHEMA-INFER ROWS", "COMPRESSION"]
+            vec!["Shape", "SCHEMA-INFER ROWS", "Compression"]
         );
     }
 
@@ -1197,7 +1197,7 @@ mod tests {
     fn the_delimiter_is_one_text_box_that_takes_the_escapes() {
         let mut draft = csv_draft();
         let groups = draft.options();
-        let g = groups.iter().find(|g| g.label == "DELIMITER").unwrap();
+        let g = groups.iter().find(|g| g.label == "Delimiter").unwrap();
         assert!(
             matches!(g.control, Control::Text(_)),
             "one box, as in export"
@@ -1239,7 +1239,7 @@ mod tests {
     fn every_control_carries_the_edit_it_performs() {
         let mut draft = csv_draft();
         let groups = draft.options();
-        let header = groups.iter().find(|g| g.label == "HEADER ROW").unwrap();
+        let header = groups.iter().find(|g| g.label == "Header row").unwrap();
         let Control::Toggle { on, edit, .. } = &header.control else {
             panic!("a toggle");
         };

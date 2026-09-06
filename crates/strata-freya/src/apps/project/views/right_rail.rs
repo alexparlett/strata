@@ -21,7 +21,7 @@ use strata_model::RightPane;
 
 use crate::apps::project::state::{Chan, SessionState};
 use crate::components::icon::{Icon, IconName};
-use crate::components::metrics::{SP_1, SP_3};
+use crate::components::metrics::{RAIL_ACTION, RAIL_WIDTH, SP_1, SP_3};
 use crate::components::toggle_button::{ChangeEventData, ToggleButton};
 use crate::theme::{use_roles, Role};
 
@@ -42,8 +42,8 @@ impl Component for RightRail {
 
         let button = move |icon: IconName, title: &str, pane: RightPane| {
             ToggleButton::new()
-                .width(Size::px(40.))
-                .height(Size::px(38.))
+                .width(Size::px(RAIL_ACTION))
+                .height(Size::px(RAIL_ACTION))
                 .toggle(right == Some(pane))
                 .title(title)
                 .on_change(move |_: Event<ChangeEventData>| {
@@ -54,7 +54,7 @@ impl Component for RightRail {
         };
 
         rect()
-            .width(Size::px(48.))
+            .width(Size::px(RAIL_WIDTH))
             .height(Size::fill())
             .background(background)
             .cross_align(Alignment::Center)

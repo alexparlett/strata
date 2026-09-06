@@ -180,7 +180,7 @@ pub fn missing(ai: &Ai, keys: &TypedKeys, kind: ProviderKind) -> Option<&'static
 /// with the boxes the row then draws.
 fn badge(key: KeyUse) -> &'static str {
     match key {
-        KeyUse::Env(_) => "API KEY",
+        KeyUse::Env(_) => "API key",
         KeyUse::Unused => "LOCAL",
         KeyUse::Anonymous => "CUSTOM",
     }

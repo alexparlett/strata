@@ -4076,7 +4076,6 @@ dependencies = [
 [[package]]
 name = "freya-core"
 version = "0.5.0-rc.2"
-source = "git+https://github.com/alexparlett/freya?branch=main#b717d10a6920c8f590d2395811e60dca34648cc6"
 dependencies = [
  "accesskit",
  "bitflags 2.13.1",

@@ -275,7 +275,11 @@ impl Component for PaletteOverlay {
             .child(Divider::horizontal().color(theme.border_fill))
             .child(Footer);
 
+        let previous = use_hook(|| *Platform::get().focused_accessibility_id.peek());
+        use_drop(move || previous.request_focus());
         rect()
+            .a11y_modal(true)
+            .a11y_role(AccessibilityRole::Dialog)
             .layer(Layer::Overlay)
             .position(Position::new_global())
             .on_global_key_down({
@@ -359,6 +363,7 @@ impl Component for SearchRow {
             .height(Size::px(SEARCH_HEIGHT))
             .width(Size::fill())
             .horizontal()
+            .content(Content::Flex)
             .cross_align(Alignment::Center)
             .spacing(SEARCH_GAP)
             .padding(Gaps::new(0., SEARCH_INSET, 0., SEARCH_INSET))
@@ -532,6 +537,44 @@ fn perform(ctx: &PaletteCtx, entry: &Entry) {
             session
                 .write_channel(Chan::Layout)
                 .open_right_pane(RightPane::Inspector);
+        }
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+    use freya_testing::TestingRunner;
+    use std::time::Duration;
+
+    fn search() -> impl IntoElement {
+        use_init_theme(|| crate::theme::strata_theme(&strata_core::theme::load("midnight")));
+        use_provide_context(|| {
+            crate::state::ConfigStation::create(strata_core::config::AppConfig::default())
+        });
+        let query = use_state(String::new);
+        rect().width(Size::fill()).child(SearchRow {
+            query,
+            on_key: EventHandler::new(|_| {}),
+        })
+    }
+
+    #[test]
+    fn escape_hint_stays_inside_the_search_row_at_narrow_widths() {
+        for width in [320., 420., 640.] {
+            let (mut runner, ()) = TestingRunner::new(search, (width, 100.).into(), |_| (), 1.);
+            runner.poll_n(Duration::from_millis(10), 4);
+            let hint = runner
+                .find(|node, element| {
+                    Label::try_downcast(element)
+                        .filter(|label| label.text == "ESC")
+                        .map(|_| node.layout().area)
+                })
+                .expect("Escape hint");
+            assert!(
+                hint.min_x() >= 0. && hint.max_x() <= width,
+                "{hint:?} exceeds {width}"
+            );
         }
     }
 }

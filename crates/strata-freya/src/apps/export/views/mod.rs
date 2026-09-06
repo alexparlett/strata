@@ -19,12 +19,12 @@ use crate::apps::export::views::partition::Partition;
 use crate::apps::export::{preview, ExportCtx, ExportThemePartial, ExportThemePreference};
 use crate::components::divider::Divider;
 use crate::components::form::OptionList;
-use crate::components::metrics::{R_1, SP_4, SP_5, SP_6};
+use crate::components::metrics::{R_1, SP_4, SP_5};
 use crate::components::typography::{Eyebrow, Readout};
 
 /// The window body's inset (canvas `padding: var(--sp-5)`), and the gap between its sections.
 const BODY_PADDING: Gaps = Gaps::new(SP_5, SP_5, SP_5, SP_5);
-const SECTION_SPACING: f32 = SP_6;
+const SECTION_SPACING: f32 = SP_5;
 
 /// Everything between the title bar and the footer, scrolling as one — the format cards, the
 /// option list, the partition picker, then the preview.
@@ -44,9 +44,9 @@ impl Component for ExportBody {
                         .spacing(SECTION_SPACING)
                         .padding(BODY_PADDING)
                         .child(Formats)
+                        .child(Preview)
                         .child(Options)
-                        .child(Partition)
-                        .child(Preview),
+                        .child(Partition),
                 ),
         )
     }
@@ -91,7 +91,7 @@ impl Component for Preview {
             .vertical()
             .spacing(SP_4)
             .child(Divider::horizontal().color(theme.border_fill))
-            .child(Eyebrow::new("PREVIEW").color(theme.label_color))
+            .child(Eyebrow::new("Preview").color(theme.label_color))
             .child(
                 rect()
                     .width(Size::fill())

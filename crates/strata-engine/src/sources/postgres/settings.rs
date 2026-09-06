@@ -37,7 +37,7 @@ pub const SSL_MODES: &[&str] = &["disable", "prefer", "require", "verify-ca", "v
 pub const SSL_VERIFYING: &[&str] = &["verify-ca", "verify-full"];
 
 /// The sections this source's rows sit in.
-const CONNECTION: Option<&str> = Some("CONNECTION");
+const CONNECTION: Option<&str> = Some("Connection");
 const SSL: Option<&str> = Some("SSL");
 
 /// Every row a `PostgreSQL` data source has, in the order it has them.
@@ -48,7 +48,7 @@ const SSL: Option<&str> = Some("SSL");
 pub const SETTINGS: &[SourceSetting] = &[
     SourceSetting {
         key: "address",
-        label: "ADDRESS",
+        label: "Address",
         field: Field::Text,
         group: CONNECTION,
         required: true,
@@ -59,7 +59,7 @@ pub const SETTINGS: &[SourceSetting] = &[
     },
     SourceSetting {
         key: "user",
-        label: "USER",
+        label: "User",
         field: Field::Text,
         group: CONNECTION,
         required: true,
@@ -73,7 +73,7 @@ pub const SETTINGS: &[SourceSetting] = &[
     },
     SourceSetting {
         key: PASSWORD,
-        label: "PASSWORD",
+        label: "Password",
         field: Field::Secret,
         group: CONNECTION,
         required: false,
@@ -84,7 +84,7 @@ pub const SETTINGS: &[SourceSetting] = &[
     },
     SourceSetting {
         key: "sslmode",
-        label: "SSL MODE",
+        label: "SSL mode",
         field: Field::Choice(SSL_MODES),
         group: SSL,
         required: false,
@@ -95,7 +95,7 @@ pub const SETTINGS: &[SourceSetting] = &[
     },
     SourceSetting {
         key: "sslrootcert",
-        label: "ROOT CERTIFICATE",
+        label: "Root certificate",
         field: Field::Path,
         group: SSL,
         required: false,

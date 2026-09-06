@@ -16,7 +16,7 @@ use crate::apps::export::{ExportCtx, ExportThemePartial, ExportThemePreference, 
 use crate::components::icon::{Icon, IconName};
 use crate::components::metrics::{R_2, SP_3, SP_4};
 use crate::components::type_palette::{kind_color, type_palette};
-use crate::components::typography::{Eyebrow, Meta, Strong};
+use crate::components::typography::{Eyebrow, Strong};
 use crate::theme::{use_roles, Role};
 use strata_model::Kind;
 
@@ -49,7 +49,7 @@ impl Component for Formats {
             .width(Size::fill())
             .vertical()
             .spacing(SP_4)
-            .child(Eyebrow::new("FORMAT").color(theme.label_color))
+            .child(Eyebrow::new("Format").color(theme.label_color))
             .child(row)
     }
 }
@@ -96,25 +96,25 @@ impl Component for FormatCard {
             (theme.panel_background, theme.control_border_fill)
         };
 
-        rect()
+        TooltipContainer::new(Tooltip::new_text(format.description()))
             .width(Size::flex(1.))
-            .vertical()
-            .spacing(SP_3)
-            .padding((SP_4, SP_4))
-            .corner_radius(R_2)
-            .background(background)
-            .border(Border::new().width(1.).fill(border))
-            .on_pointer_enter(move |_| hovered.set(true))
-            .on_pointer_leave(move |_| hovered.set(false))
-            .on_press(move |_| {
-                ctx.edit(|draft| draft.format = format);
-            })
-            .child(Icon::new(IconName::File).size(17.).color(glyph))
-            .child(Strong::new(format.name()).color(theme.card_color))
             .child(
-                Meta::new(format.description())
-                    .color(theme.label_color)
-                    .wrap(),
+                rect()
+                    .width(Size::fill())
+                    .horizontal()
+                    .cross_align(Alignment::Center)
+                    .spacing(SP_3)
+                    .padding((SP_3, SP_4))
+                    .corner_radius(R_2)
+                    .background(background)
+                    .border(Border::new().width(1.).fill(border))
+                    .on_pointer_enter(move |_| hovered.set(true))
+                    .on_pointer_leave(move |_| hovered.set(false))
+                    .on_press(move |_| {
+                        ctx.edit(|draft| draft.format = format);
+                    })
+                    .child(Icon::new(IconName::File).size(17.).color(glyph))
+                    .child(Strong::new(format.name()).color(theme.card_color)),
             )
     }
 

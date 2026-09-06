@@ -154,7 +154,7 @@ impl Component for Row {
 
         let required = self
             .required
-            .then(|| Meta::new("REQUIRED").color(theme.required_color));
+            .then(|| Meta::new("Required").color(theme.required_color));
 
         let label = match variant {
             Variant::Fields => rect()

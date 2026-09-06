@@ -55,9 +55,9 @@ impl SourceKind for TestSource {
 const TEST_SETTINGS: &[SourceSetting] = &[
     SourceSetting {
         key: "address",
-        label: "ADDRESS",
+        label: "Address",
         field: Field::Text,
-        group: Some("CONNECTION"),
+        group: Some("Connection"),
         required: true,
         default: None,
         when: None,
@@ -66,9 +66,9 @@ const TEST_SETTINGS: &[SourceSetting] = &[
     },
     SourceSetting {
         key: "user",
-        label: "USER",
+        label: "User",
         field: Field::Text,
-        group: Some("CONNECTION"),
+        group: Some("Connection"),
         required: true,
         default: None,
         when: None,
@@ -77,9 +77,9 @@ const TEST_SETTINGS: &[SourceSetting] = &[
     },
     SourceSetting {
         key: "password",
-        label: "PASSWORD",
+        label: "Password",
         field: Field::Secret,
-        group: Some("CONNECTION"),
+        group: Some("Connection"),
         required: false,
         default: None,
         when: None,
@@ -88,7 +88,7 @@ const TEST_SETTINGS: &[SourceSetting] = &[
     },
     SourceSetting {
         key: "mode",
-        label: "MODE",
+        label: "Mode",
         field: Field::Choice(&["off", "on"]),
         group: Some("SECURITY"),
         required: false,
@@ -99,7 +99,7 @@ const TEST_SETTINGS: &[SourceSetting] = &[
     },
     SourceSetting {
         key: "certificate",
-        label: "ROOT CERTIFICATE",
+        label: "Root certificate",
         field: Field::Path,
         group: Some("SECURITY"),
         required: true,
@@ -379,21 +379,21 @@ fn a_registered_sources_rows_are_the_ones_it_declared() {
     );
 
     for row in [
-        "PROVIDER",
-        "NAME",
-        "ADDRESS",
-        "USER",
-        "PASSWORD",
-        "MODE",
-        "READ ONLY",
+        "Provider",
+        "Name",
+        "Address",
+        "User",
+        "Password",
+        "Mode",
+        "Read only",
     ] {
         assert!(shows(&runner, row), "{row}: {:?}", texts(&runner));
     }
     assert!(
-        !shows(&runner, "ROOT CERTIFICATE"),
+        !shows(&runner, "Root certificate"),
         "'off' does not read a certificate, so there is no control for one"
     );
-    for heading in ["CONNECTION", "SECURITY"] {
+    for heading in ["Connection", "SECURITY"] {
         assert!(
             shows(&runner, heading),
             "{heading}: the sections the kind grouped its keys into, {:?}",
@@ -401,12 +401,12 @@ fn a_registered_sources_rows_are_the_ones_it_declared() {
         );
     }
     assert!(
-        !shows(&runner, "READ ONLY") || registrant().writable,
+        !shows(&runner, "Read only") || registrant().writable,
         "the read-only switch is offered because the kind says it can be written to"
     );
     assert!(
-        shows(&runner, TestSource::BADGE),
-        "and the picker offers it by its own badge"
+        shows(&runner, TestSource::LABEL),
+        "and the picker offers its full registered name"
     );
 }
 
@@ -419,15 +419,15 @@ fn a_registered_sources_rows_are_the_ones_it_declared() {
 fn a_declared_condition_is_what_puts_a_row_on_screen() {
     let (mut runner, (ctx, ..)) = runner("conditional", SourceTarget::New, source_draft());
     settle(&mut runner);
-    assert!(!shows(&runner, "ROOT CERTIFICATE"));
+    assert!(!shows(&runner, "Root certificate"));
 
     ctx.edit(|draft| draft.set("mode", "on".into()));
     settle(&mut runner);
-    assert!(shows(&runner, "ROOT CERTIFICATE"), "{:?}", texts(&runner));
+    assert!(shows(&runner, "Root certificate"), "{:?}", texts(&runner));
 
     ctx.edit(|draft| draft.set("mode", "off".into()));
     settle(&mut runner);
-    assert!(!shows(&runner, "ROOT CERTIFICATE"), "and back again");
+    assert!(!shows(&runner, "Root certificate"), "and back again");
 }
 
 /// **A source's form has no standing note.** What each secret box does with what is typed into it
@@ -461,12 +461,12 @@ fn a_group_heading_rides_the_rows_that_survive() {
     let headings = |runner: &TestingRunner| {
         texts(runner)
             .into_iter()
-            .filter(|t| t == "CONNECTION" || t == "SECURITY")
+            .filter(|t| t == "Connection" || t == "SECURITY")
             .collect::<Vec<_>>()
     };
     assert_eq!(
         headings(&runner),
-        ["CONNECTION", "SECURITY"],
+        ["Connection", "SECURITY"],
         "one each, in declaration order — MODE keeps SECURITY on screen"
     );
 
@@ -474,10 +474,10 @@ fn a_group_heading_rides_the_rows_that_survive() {
     settle(&mut runner);
     assert_eq!(
         headings(&runner),
-        ["CONNECTION", "SECURITY"],
+        ["Connection", "SECURITY"],
         "and revealing a second key under it does not print it twice"
     );
-    assert!(shows(&runner, "ROOT CERTIFICATE"));
+    assert!(shows(&runner, "Root certificate"));
 }
 
 /// **The address is refused by the kind's own rule**, reached through

@@ -173,7 +173,7 @@ fn remote_with_no_source_explains_itself_and_blocks_save() {
     let (mut runner, (ctx, ..)) = runner("empty", false, draft("events/"));
     settle(&mut runner);
 
-    click_lowest(&mut runner, "Remote");
+    click_lowest(&mut runner, "Data source");
 
     assert!(ctx.draft.peek().remote());
     assert_eq!(ctx.draft.peek().source, None, "there is none to pick");
@@ -210,7 +210,7 @@ fn a_table_saved_over_a_source_carries_the_name_and_a_relative_path() {
     let (mut runner, (ctx, project, _)) = runner("save", true, draft);
     settle(&mut runner);
 
-    click_lowest(&mut runner, "Remote");
+    click_lowest(&mut runner, "Data source");
 
     assert_eq!(
         ctx.draft.peek().source.as_deref(),
@@ -218,7 +218,7 @@ fn a_table_saved_over_a_source_carries_the_name_and_a_relative_path() {
         "the provider's first data source is picked for you"
     );
     assert!(
-        shows(&runner, "SOURCE PATH"),
+        shows(&runner, "Source path"),
         "one path, said in the singular: {:?}",
         texts(&runner)
     );
@@ -264,15 +264,15 @@ fn flipping_back_to_local_returns_the_multi_path_list_and_keeps_the_choice() {
     let (mut runner, (ctx, ..)) = runner("back", true, draft);
     settle(&mut runner);
 
-    click_lowest(&mut runner, "Remote");
-    assert!(shows(&runner, "CONNECTION"), "{:?}", texts(&runner));
+    click_lowest(&mut runner, "Data source");
+    assert!(shows(&runner, "Connection"), "{:?}", texts(&runner));
     assert_eq!(
         ctx.draft.peek().nonblank_sources(),
         ["events/2024/"],
         "the bucket's own path is what the one box holds"
     );
 
-    click_lowest(&mut runner, "Local");
+    click_lowest(&mut runner, "Files");
 
     assert!(!ctx.draft.peek().remote());
     assert_eq!(
@@ -297,11 +297,11 @@ fn flipping_back_to_local_returns_the_multi_path_list_and_keeps_the_choice() {
     );
     let texts = texts(&runner);
     assert!(
-        !texts.iter().any(|t| t == "CONNECTION" || t == "TYPE"),
+        !texts.iter().any(|t| t == "Connection" || t == "Type"),
         "the store row is gone: {texts:?}"
     );
     assert!(
-        texts.iter().any(|t| t == "SOURCE PATHS"),
+        texts.iter().any(|t| t == "Source paths"),
         "and the label is plural again: {texts:?}"
     );
     assert!(
@@ -354,9 +354,9 @@ fn internal_shows_columns_and_hides_everything_about_files() {
     let (mut runner, _) = runner("internal", false, internal_draft());
     settle(&mut runner);
 
-    assert!(shows(&runner, "Internal"), "the segment is offered");
-    assert!(shows(&runner, "COLUMNS"), "{:?}", texts(&runner));
-    for absent in ["SOURCE PATHS", "SOURCE PATH", "FORMAT", "HIVE PARTITIONING"] {
+    assert!(shows(&runner, "Managed table"), "the segment is offered");
+    assert!(shows(&runner, "Columns"), "{:?}", texts(&runner));
+    for absent in ["Source paths", "Source path", "Format", "Hive partitioning"] {
         assert!(!shows(&runner, absent), "{absent} is still on screen");
     }
 }
@@ -375,21 +375,21 @@ fn internal_is_offered_on_a_new_table_and_refused_on_an_edit() {
     target.set(ConfigureTarget::Edit("orders".into()));
     settle(&mut editing);
 
-    click_lowest(&mut editing, "Internal");
+    click_lowest(&mut editing, "Managed table");
     settle(&mut editing);
     assert!(
         !ctx.draft.peek().internal(),
         "an edit may not move a table's data into Strata"
     );
     assert!(
-        shows(&editing, "SOURCE PATHS"),
+        shows(&editing, "Source paths"),
         "…and the form is unchanged"
     );
 
     draft.name = "fresh".into();
     let (mut fresh, (ctx, _, _)) = runner("internal-new", false, draft);
     settle(&mut fresh);
-    click_lowest(&mut fresh, "Internal");
+    click_lowest(&mut fresh, "Managed table");
     settle(&mut fresh);
     assert!(ctx.draft.peek().internal());
 }

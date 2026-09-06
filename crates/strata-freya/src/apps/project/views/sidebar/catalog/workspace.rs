@@ -58,9 +58,9 @@ impl Group {
 
     fn label(self) -> &'static str {
         match self {
-            Group::Tables => "TABLES",
-            Group::Views => "VIEWS",
-            Group::Queries => "QUERIES",
+            Group::Tables => "Tables",
+            Group::Views => "Views",
+            Group::Queries => "Queries",
         }
     }
 }
@@ -120,6 +120,9 @@ pub fn walk_workspace(
         .filter(|t| matches(&t.def.name, needle))
         .collect();
     if group(Group::Tables, tables.len(), needle, open, out) {
+        if tables.is_empty() && !filtering {
+            out.push(Node::leaf(ENTRY_DEPTH, NodeKind::EmptyGroup(Group::Tables)));
+        }
         for row in tables {
             entry(
                 Entry {
@@ -144,6 +147,9 @@ pub fn walk_workspace(
         .filter(|v| matches(&v.def.name, needle))
         .collect();
     if group(Group::Views, views.len(), needle, open, out) {
+        if views.is_empty() && !filtering {
+            out.push(Node::leaf(ENTRY_DEPTH, NodeKind::EmptyGroup(Group::Views)));
+        }
         for row in views {
             entry(
                 Entry {
@@ -178,7 +184,10 @@ pub fn walk_workspace(
             ));
         }
         if queries.is_empty() && !filtering {
-            out.push(Node::leaf(ENTRY_DEPTH, NodeKind::NoQueries));
+            out.push(Node::leaf(
+                ENTRY_DEPTH,
+                NodeKind::EmptyGroup(Group::Queries),
+            ));
         }
     }
 }
@@ -280,30 +289,43 @@ pub fn group_row(at: &Place, group: Group, count: usize, cx: &RowCtx) -> RowBody
     let tree = cx.tree;
     let (open, path) = (at.open, at.path.clone());
 
-    let plus = (group == Group::Tables).then(|| {
-        let actions = cx.catalog.clone();
-        TooltipContainer::new(Tooltip::new_text("New table"))
-            .position(AttachedPosition::Bottom)
-            .child(
-                Button::new()
-                    .flat()
-                    .theme_layout(
-                        ButtonLayoutThemePartial::default()
-                            .width(Size::px(ROW_ACTION))
-                            .height(Size::px(ROW_ACTION))
-                            .padding(Gaps::new_all(0.)),
-                    )
-                    .on_press(move |e: Event<PressEventData>| {
-                        e.stop_propagation();
-                        actions.configure(ConfigureTarget::New);
-                    })
-                    .child(
-                        Icon::new(IconName::Plus)
-                            .size(13.)
-                            .color(cx.theme.label_color),
-                    ),
-            )
-            .into_element()
+    let plus = Some({
+        let mut actions = cx.catalog.clone();
+        TooltipContainer::new(Tooltip::new_text(match group {
+            Group::Tables => "New table",
+            Group::Views => "New view",
+            Group::Queries => "New query",
+        }))
+        .position(AttachedPosition::Bottom)
+        .child(
+            Button::new()
+                .flat()
+                .theme_layout(
+                    ButtonLayoutThemePartial::default()
+                        .width(Size::px(ROW_ACTION))
+                        .height(Size::px(ROW_ACTION))
+                        .padding(Gaps::new_all(0.)),
+                )
+                .on_press(move |e: Event<PressEventData>| {
+                    e.stop_propagation();
+                    match group {
+                        Group::Tables => actions.configure(ConfigureTarget::New),
+                        Group::Views => super::menu::new_view(&actions),
+                        Group::Queries => {
+                            actions
+                                .session
+                                .write_channel(crate::apps::project::state::Chan::Tabs)
+                                .open_blank();
+                        }
+                    }
+                })
+                .child(
+                    Icon::new(IconName::Plus)
+                        .size(13.)
+                        .color(cx.theme.label_color),
+                ),
+        )
+        .into_element()
     });
 
     body(
@@ -329,13 +351,17 @@ pub fn group_row(at: &Place, group: Group, count: usize, cx: &RowCtx) -> RowBody
 /// An ordinary [`Row`], because the tree's rows are one height — which is what lets the list be
 /// virtualized at all — and a row's own indent already puts the note where the rows it stands in
 /// for would be.
-pub fn no_queries_row(at: &Place, cx: &RowCtx) -> RowBody {
+pub fn empty_group_row(at: &Place, group: Group, cx: &RowCtx) -> RowBody {
     body(
         Row::new(at.depth, cx.theme.clone()).child(
-            Caption::new("No saved queries yet")
-                .color(cx.theme.meta_color)
-                .width(Size::flex(1.))
-                .text_overflow(TextOverflow::Ellipsis),
+            Caption::new(match group {
+                Group::Tables => "No tables",
+                Group::Views => "No views",
+                Group::Queries => "No saved queries",
+            })
+            .color(cx.theme.meta_color)
+            .width(Size::flex(1.))
+            .text_overflow(TextOverflow::Ellipsis),
         ),
     )
 }

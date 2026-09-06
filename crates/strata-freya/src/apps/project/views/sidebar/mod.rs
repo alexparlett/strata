@@ -105,7 +105,7 @@ impl Component for Sidebar {
                 .child(
                     InputTypography::mono(
                         Input::new(filter)
-                            .placeholder("Filter data sources…")
+                            .placeholder("Filter catalog")
                             .compact()
                             .leading(Icon::new(IconName::Search).color(faint).size(13.))
                             .width(Size::flex(1.)),

@@ -23,3 +23,19 @@ pub use windows::{
     pick_project_folder, quit, quit_windows, resolve_project_folder, resolve_recent,
     use_register_window, WindowKind, WindowRegistry, Windows,
 };
+
+/// Apply native title-bar decoration while keeping component tests platform-independent.
+pub fn window_attributes(
+    attrs: freya::winit::window::WindowAttributes,
+) -> freya::winit::window::WindowAttributes {
+    #[cfg(target_os = "macos")]
+    {
+        use freya::winit::platform::macos::WindowAttributesExtMacOS;
+        attrs
+            .with_titlebar_transparent(true)
+            .with_fullsize_content_view(true)
+            .with_title_hidden(true)
+    }
+    #[cfg(not(target_os = "macos"))]
+    attrs
+}

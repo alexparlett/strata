@@ -57,6 +57,9 @@ pub(super) fn rows(
     scope: &str,
 ) -> Form {
     let mut form = form.child(NameField { key: DiffKey::None }.key(format!("name·{scope}")));
+    if registrant.as_ref().is_some_and(|info| info.writable) {
+        form = form.child(ReadOnly { key: DiffKey::None }.key(format!("read_only·{scope}")));
+    }
     let mut heading: Option<&'static str> = None;
     for declared in keys
         .iter()
@@ -75,10 +78,7 @@ pub(super) fn rows(
             .key(declared.key),
         );
     }
-    match registrant.as_ref().is_some_and(|info| info.writable) {
-        true => form.child(ReadOnly { key: DiffKey::None }.key(format!("read_only·{scope}"))),
-        false => form,
-    }
+    form
 }
 
 /// **NAME** — the handle: what every surface calls this data source, and the catalog its relations
@@ -118,7 +118,7 @@ impl Component for NameField {
             let name = text.read().clone();
             ctx.edit(move |draft| draft.name = name);
         });
-        Row::new("NAME")
+        Row::new("Name")
             .required()
             .hint(
                 "What this data source is called, and the catalog its tables are queried by: \
@@ -202,6 +202,7 @@ impl Component for KeyField {
                 )
                 .into_element(),
             Field::Flag => row
+                .trailing()
                 .child(
                     Switch::new()
                         .toggled(value.trim() == "true")
@@ -245,18 +246,36 @@ impl Component for TextKey {
     fn render(&self) -> impl IntoElement {
         let ctx = use_consume::<SourceCtx>();
         let name = self.declared.key;
+        let required = self.declared.required;
+        let label = self.declared.label;
+        let mut edited = use_state(|| false);
+        let initial = use_hook(|| ctx.draft.peek().value(name));
         let text = use_state({
             let initial = ctx.draft.peek().value(name);
             move || initial
         });
         use_side_effect(move || {
             let typed = text.read().clone();
+            if typed != initial {
+                edited.set(true);
+            }
             ctx.edit(move |draft| draft.set(name, typed));
         });
 
-        ValueField::new(text)
+        let missing = required && edited() && text.read().trim().is_empty();
+        rect()
             .width(Size::fill())
-            .map(self.declared.placeholder, ValueField::placeholder)
+            .spacing(SP_3)
+            .child(
+                ValueField::new(text)
+                    .width(Size::fill())
+                    .map(self.declared.placeholder, ValueField::placeholder),
+            )
+            .maybe_child(missing.then(|| {
+                Prose::new(format!("{label} is required."))
+                    .color(tones().error)
+                    .wrap()
+            }))
     }
 }
 
@@ -482,7 +501,8 @@ impl Component for ReadOnly {
         let ctx = use_consume::<SourceCtx>();
         let read_only = ctx.draft.read().read_only;
 
-        Row::new("READ ONLY")
+        Row::new("Read only")
+            .trailing()
             .hint(
                 "Strata never changes what this data source holds. Turn it off to allow INSERT \
                  and CREATE TABLE AS SELECT",

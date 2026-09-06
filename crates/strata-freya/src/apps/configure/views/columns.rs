@@ -59,7 +59,7 @@ impl Component for Columns {
             return rect().into_element();
         }
 
-        Row::new("COLUMNS")
+        Row::new("Columns")
             .required()
             .hint(COLUMNS_HINT)
             .child(

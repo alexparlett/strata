@@ -41,7 +41,7 @@ pub const SSL_MODES: &[&str] = &["disabled", "preferred", "required"];
 pub const SSL_DEFAULT: &str = "preferred";
 
 /// The sections this source's rows sit in.
-const CONNECTION: Option<&str> = Some("CONNECTION");
+const CONNECTION: Option<&str> = Some("Connection");
 const SSL: Option<&str> = Some("SSL");
 
 /// Every row a `MySQL` data source has, in the order it has them.
@@ -51,7 +51,7 @@ const SSL: Option<&str> = Some("SSL");
 pub const SETTINGS: &[SourceSetting] = &[
     SourceSetting {
         key: "address",
-        label: "ADDRESS",
+        label: "Address",
         field: Field::Text,
         group: CONNECTION,
         required: true,
@@ -62,7 +62,7 @@ pub const SETTINGS: &[SourceSetting] = &[
     },
     SourceSetting {
         key: "user",
-        label: "USER",
+        label: "User",
         field: Field::Text,
         group: CONNECTION,
         required: true,
@@ -76,7 +76,7 @@ pub const SETTINGS: &[SourceSetting] = &[
     },
     SourceSetting {
         key: PASSWORD,
-        label: "PASSWORD",
+        label: "Password",
         field: Field::Secret,
         group: CONNECTION,
         required: false,
@@ -87,7 +87,7 @@ pub const SETTINGS: &[SourceSetting] = &[
     },
     SourceSetting {
         key: "ssl",
-        label: "SSL MODE",
+        label: "SSL mode",
         field: Field::Choice(SSL_MODES),
         group: SSL,
         required: false,

@@ -302,12 +302,12 @@ chosen kind *declared*, so registering a `DataSource` puts a working editor in f
 no UI code. A control that cannot mean anything for the chosen kind is not shipped disabled — it
 is not shipped.
 
-1. **PROVIDER** — a segmented pill, one segment per **registered kind**, badged with its own
-   `SourceKind::BADGE`. Pressing one carries the kind *and its declaration*
+1. **Provider** — a dropdown containing every **registered kind**, using its full
+   `SourceKind::LABEL`. Choosing one carries the kind *and its declaration*
    (`SourceInfo::settings`) onto the draft, so the rows below and the values written cannot
    describe different kinds. A new source opens on the first registrant, because "none chosen" is
    a state only a build with no kinds can reach.
-2. **NAME** — the handle: what every surface calls this source *and* the catalog its relations
+2. **Name** — the handle: what every surface calls this source *and* the catalog its relations
    are addressed under (`lake` makes `lake.public.orders`). One field, because they are one
    thing, and nothing mints it — the name **is** the identity. **The editor's own row, not a
    declared one**: the store keys by it, `check_catalog` judges it, and a kind has no opinion
@@ -331,7 +331,7 @@ is not shipped.
 **The address is an ordinary declared setting** and lands in `config` like any other. There is no
 `Slot` and no typed address field: everything about a source is a property, and which property is
 the address is the kind's own business — `SourceKind::SCHEME` and its `check_address` are what
-read it. So S3 declares `label: "BUCKET"` with its own hint and placeholder, HTTP declares
+read it. So S3 declares `label: "Bucket"` with its own hint and placeholder, HTTP declares
 `label: "URL"`, and the editor gains nothing either way.
 
 **A `Field::Secret` row is the one thing not fully declared**, and deliberately: a secret has
@@ -367,14 +367,10 @@ enumeration already sits and where one picker serves New and Edit alike — a se
 same list is two controls that can disagree, and the editor is pre-connect, so it has nothing to
 enumerate from.
 
-Last comes a standing note saying where credentials actually come from — per provider, and for a
-source off its **declaration**: whether the kind takes any `Field::Secret` at all, because no
-sentence here may name a setting only one kind has.
-
 **What the form can be wrong about is the handle, and a shown `required` key being empty.** What a
 *value* may be is the kind's own rule, asked by `connect`, whose refusal lands on the data source's
-row. A field's error lives in the **footer**, not on the field: one value both disables Save and
-explains it, so the form cannot hold two accounts of its own validity. Three of those the draft
+row. The footer explains why Save is unavailable. A required text field also shows a local
+error when the user clears an edited value. Three of those the draft
 cannot answer alone — the kind's address rule (asked of the registry), a name another source
 holds, and a catalog name another database source holds (`check_catalog_name`).
 
@@ -1025,8 +1021,8 @@ silently resolved against the local disk — and no surface keeps a second copy 
 same rule is why `Catalog::detect_partitions` takes a data source name and def-relative paths rather
 than composed ones.
 
-In the Configure window, **LOCATION** is an explicit Local / Remote toggle — never inferred from
-a path's scheme. Remote mode shows a single bucket-relative SOURCE PATH (rendered with the
+In the Configure window, **Location** explicitly offers Files / Data source / Managed table — never inferred from
+a path's scheme. Data source mode shows a single bucket-relative SOURCE PATH (rendered with the
 non-editable bucket prefix), a TYPE segmented control that *filters* a SOURCE dropdown (a
 filter, never the table's provider), and a **New data source…** entry that opens the editor. A def
 naming a data source the project no longer has keeps naming it, and Save is blocked with:

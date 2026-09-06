@@ -111,7 +111,7 @@ impl Component for ConfigureDialog {
                             .horizontal()
                             .cross_align(Alignment::Center)
                             .spacing(SP_3)
-                            .child(Eyebrow::new("BASE URL").color(roles.get(Role::TextMuted)))
+                            .child(Eyebrow::new("Base URL").color(roles.get(Role::TextMuted)))
                             .maybe_child(
                                 matches!(provider.base_url, BaseUrl::Required)
                                     .then(|| Meta::new("REQUIRED").color(required_color)),
@@ -127,7 +127,7 @@ impl Component for ConfigureDialog {
                 rect()
                     .width(Size::fill())
                     .spacing(SP_3)
-                    .child(Eyebrow::new("API KEY").color(roles.get(Role::TextMuted)))
+                    .child(Eyebrow::new("API key").color(roles.get(Role::TextMuted)))
                     .child(
                         rect()
                             .width(Size::fill())
@@ -228,7 +228,7 @@ impl Component for ConfigureDialog {
                         );
                         slot.set(None);
                     })
-                    .child(Control::new("Save")),
+                    .child(Control::new("Done")),
             )
     }
 }

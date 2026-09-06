@@ -219,6 +219,7 @@ impl<E: Clone + PartialEq + 'static> KeyExt for OptionGroup<E> {
 impl<E: Clone + PartialEq + 'static> Component for OptionGroup<E> {
     fn render(&self) -> impl IntoElement {
         let on_edit = self.on_edit.clone();
+        let compact = matches!(&self.group.control, Control::Char(_) | Control::Num { .. });
         let control: Element = match self.group.control.clone() {
             Control::Seg { options, custom } => SegControl {
                 options,
@@ -267,6 +268,7 @@ impl<E: Clone + PartialEq + 'static> Component for OptionGroup<E> {
         };
 
         Row::new(self.group.label.clone())
+            .maybe(compact, Row::trailing)
             .map(self.group.hint, Row::hint)
             .child(control)
     }

@@ -145,7 +145,7 @@ pub enum NodeKind {
         name: String,
     },
     /// What the QUERIES group says when it has nothing in it.
-    NoQueries,
+    EmptyGroup(Group),
     /// A data source of either kind.
     Source(Source),
     /// A workspace table read through an object-store data source, as a jump to its own row.

@@ -373,6 +373,31 @@ impl Component for Catalog {
             reveal.set(None);
         });
 
+        let no_matches = !needle.is_empty()
+            && nodes.iter().all(|node| {
+                matches!(
+                    node.kind,
+                    NodeKind::Workspace { .. }
+                        | NodeKind::Group { count: 0, .. }
+                        | NodeKind::AddSource
+                )
+            });
+        if no_matches {
+            let mut filter = self.filter;
+            return rect()
+                .expanded()
+                .padding(BODY_PAD)
+                .spacing(SP_3)
+                .child(crate::components::typography::Prose::new("No matches"))
+                .child(
+                    Button::new()
+                        .flat()
+                        .on_press(move |_| filter.set(String::new()))
+                        .child(crate::components::typography::Control::new("Clear filter")),
+                )
+                .into_element();
+        }
+
         let length = nodes.len();
         let data = TreeData {
             nodes: Rc::new(nodes),
@@ -406,5 +431,6 @@ impl Component for Catalog {
                         .item_height(ROW_HEIGHT),
                 ),
             )
+            .into_element()
     }
 }

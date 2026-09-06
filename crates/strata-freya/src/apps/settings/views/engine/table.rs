@@ -93,7 +93,7 @@ impl Component for PropTable {
                         rect()
                             .width(Size::fill())
                             .vertical()
-                            .maybe_child(list.is_empty().then_some(EmptyGrid))
+                            .maybe_child(list.is_empty().then_some(EmptyGrid { rows }))
                             .child(body),
                     ),
             )
@@ -381,11 +381,14 @@ impl Component for RestartMarker {
 /// No overrides at all. A statement rather than an absence, so the grid says it rather than
 /// standing there as two empty columns.
 #[derive(PartialEq)]
-struct EmptyGrid;
+struct EmptyGrid {
+    rows: State<PropRows>,
+}
 
 impl Component for EmptyGrid {
     fn render(&self) -> impl IntoElement {
         let theme = settings_theme();
+        let mut rows = self.rows;
 
         rect()
             .width(Size::fill())
@@ -401,6 +404,14 @@ impl Component for EmptyGrid {
             .child(
                 Caption::new("No properties. The engine uses its defaults.")
                     .color(theme.hint_color),
+            )
+            .child(
+                Button::new()
+                    .outline()
+                    .on_press(move |_| {
+                        rows.write().add();
+                    })
+                    .child(Control::new("Add property")),
             )
     }
 }

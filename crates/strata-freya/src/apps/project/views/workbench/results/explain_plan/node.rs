@@ -14,7 +14,7 @@ use strata_core::util::fmt_int;
 use super::palette::PlanPalette;
 use crate::components::badge::Badge;
 use crate::components::icon::{Icon, IconName};
-use crate::components::metrics::{pill, HAIRLINE, R_1, R_2, R_XS, SP_1, SP_2, SP_3, SP_4, SP_5};
+use crate::components::metrics::{pill, HAIRLINE, R_1, R_2, R_XS, SP_1, SP_2, SP_3, SP_4};
 use crate::components::typography::{Caption, Eyebrow, Meta, MonoValue, Path};
 
 /// The time-share bar's fill percentage: self-time over the tree max, floored at 3% so a
@@ -178,13 +178,14 @@ impl Component for PlanNodeCard {
                     rect()
                         .width(Size::fill())
                         .horizontal()
-                        .spacing(SP_4)
+                        .content(Content::Flex)
+                        .spacing(SP_3)
                         .child(
                             Path::new(part.key.clone())
                                 .color(t.key_color)
                                 .width(Size::px(key_w)),
                         )
-                        .child(value.width(Size::fill()))
+                        .child(value.width(Size::flex(1.)))
                         .into_element()
                 } else {
                     value.width(Size::fill()).into_element()
@@ -314,7 +315,7 @@ impl Component for PlanNodeCard {
                             .horizontal()
                             .cross_align(Alignment::Center)
                             .spacing(SP_3)
-                            .padding((SP_3, SP_4))
+                            .padding((SP_2, SP_3))
                             .background(t.group_background)
                             .child(
                                 rect()
@@ -332,7 +333,7 @@ impl Component for PlanNodeCard {
                                 .horizontal()
                                 .cross_align(Alignment::Center)
                                 .content(Content::Flex)
-                                .spacing(SP_5)
+                                .spacing(SP_4)
                                 .padding((SP_2, SP_4))
                                 .border(Border::new().width(top_border()).fill(t.border_fill))
                                 .maybe(m.zero, |el| el.opacity(0.55))
@@ -356,7 +357,7 @@ impl Component for PlanNodeCard {
                     grid = grid.child(
                         rect()
                             .width(Size::fill())
-                            .padding((SP_3, SP_4))
+                            .padding((SP_2, SP_3))
                             .background(t.group_background)
                             .border(Border::new().width(top_border()).fill(t.border_fill))
                             .child(PlanLink {
@@ -399,7 +400,7 @@ impl Component for PlanNodeCard {
                 rect()
                     .width(Size::fill())
                     .vertical()
-                    .padding((SP_3, SP_4))
+                    .padding((SP_2, SP_3))
                     .child(head)
                     .maybe_child(detail_grid)
                     .maybe_child(detail_toggle)

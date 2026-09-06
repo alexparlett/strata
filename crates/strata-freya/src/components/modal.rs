@@ -1,29 +1,4 @@
-//! The **modal base** — what makes a centred surface modal, with no opinion about the card
-//! on it or what confirming it means: the overlay layer over the window content, the
-//! backdrop, and the key barrier. A modal is **open or closed**, nothing else — Esc and a
-//! press outside the card are both a *close request*, and whether "confirm" even exists is
-//! the surface's own semantic, handled on its own card.
-//!
-//! [`Dialog`](super::dialog::Dialog) wraps its confirm card in this; a working surface with
-//! its own proportions (the Shape panel) wraps its own card in the same base — so "how a
-//! modal behaves" is written once and "what a modal looks like" stays each surface's.
-//!
-//! ## The barrier, and the two keys it leaves alone
-//!
-//! Same-name global listeners fire in **pre-order**, and a prevented key stops the listeners
-//! after it (the fork's guarantee — `keymap`'s module note). This wrapper is the card's
-//! ancestor, so anything it consumes never reaches the card: the barrier therefore consumes
-//! every key **except Esc and Enter**. Esc is the modal's own close request, answered by a
-//! listener placed *after* the card subtree, so a control inside the card that consumed it
-//! first — an open `Select` closing its list — wins over the close. Enter is deliberately
-//! left to the surface's own handler, which should also sit after its controls — the Dialog
-//! confirms on it; a surface with no confirm should consume it there instead. Everything
-//! below the modal in document order still sees nothing, because whichever listener consumed
-//! the key did so before the features' listeners run.
-//!
-//! The barrier's one honest limit is unchanged from the dialog it came from: `KeyDown`
-//! outranks `GlobalKeyDown`, so a *focused* element (the SQL editor) still sees keys first.
-//! Mount it only while the surface is open — it renders no closed state.
+//! Modal backdrop, keyboard boundary, and focus restoration for an overlay surface.
 
 use freya::components::PopupBackground;
 use freya::prelude::*;
@@ -67,10 +42,17 @@ impl Modal {
 impl Component for Modal {
     fn render(&self) -> impl IntoElement {
         let roles = use_roles();
+        let focus = use_a11y();
+        let previous = use_hook(|| *Platform::get().focused_accessibility_id.peek());
+        use_drop(move || previous.request_focus());
         let close = self.on_close_request.clone();
         let backdrop_close = self.on_close_request.clone();
 
         rect()
+            .a11y_id(focus)
+            .a11y_auto_focus(true)
+            .a11y_modal(self.barrier)
+            .a11y_role(AccessibilityRole::Dialog)
             .layer(Layer::Overlay)
             .position(Position::new_global())
             .on_global_key_down({

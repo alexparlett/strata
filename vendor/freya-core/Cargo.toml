@@ -1,0 +1,72 @@
+[package]
+name = "freya-core"
+version = "0.5.0-rc.2"
+description = "Reactivity runtime, tree management, accessibility integration, rendering pipeline and more, for Freya"
+edition = "2024"
+license = "MIT"
+authors = ["Marc Espín <mespinsanz@gmail.com>"]
+readme = "README.md"
+homepage = "https://freyaui.dev/"
+repository = "https://github.com/marc2332/freya"
+
+[workspace]
+
+[dependencies]
+# Core
+generational-box = "0.7"
+tracing = "0.1.41"
+rustc-hash = "2.1.1"
+bitflags = "2.9.3"
+pathgraph = { git = "https://github.com/alexparlett/freya", branch = "main" }
+# Core/async
+futures-util = "0.3.31"
+futures-channel = "0.3.31"
+futures-lite = "2.6.1"
+
+# Text
+keyboard-types = "0.8.0"
+unicode-segmentation = "1.11"
+
+# Layout
+torin = { git = "https://github.com/alexparlett/freya", branch = "main" }
+smallvec = "1.15.1"
+
+# OS preferences
+mundy = { version = "0.2.3", default-features = false, features = ["async-io", "callback", "accent-color"] }
+
+# Layers
+itertools = "0.14.0"
+
+# Rendering
+freya-engine = { git = "https://github.com/alexparlett/freya", branch = "main" }
+
+# Events
+ragnarok = { git = "https://github.com/alexparlett/freya", branch = "main" }
+
+# accessibility
+accesskit = "0.24.0"
+
+# Performance
+hotpath = "0.22.0"
+
+# SVG
+bytes = "1.10.1"
+
+# Extensions
+paste = "1.0.15"
+
+# Devtools
+serde = { version = "1", optional = true }
+subsecond = { version = "0.7.4", optional = true }
+dioxus-devtools = { version = "0.7.4", optional = true }
+
+# Cursor styling
+cursor-icon = "1.2.0"
+
+[features]
+hotpath = ["hotpath/hotpath", "ragnarok/hotpath"]
+hotreload = ["dep:subsecond", "dep:dioxus-devtools"]
+debug-integrity = []
+devtools = ["serde"]
+serde = ["dep:serde"]
+test = []

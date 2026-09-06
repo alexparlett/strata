@@ -6,6 +6,8 @@ the results toolbar on the run that is on screen, and it **pins that snapshot**
 truncate the table under a running write, and an export is always an export of what was on
 screen.
 
+The body shows compact format choices, then the preview, followed by format and partition options. Character and numeric options place the value beside its label.
+
 Two sources of truth sit under this, and they are the ones to change:
 
 - **`strata-engine::export`** — `ExportSpec` and the `CopyJob` it builds. Every option a spec can

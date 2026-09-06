@@ -59,7 +59,7 @@ impl Component for NameField {
             ctx.edit(move |draft| draft.name = name);
         });
 
-        Row::new("TABLE NAME").required().child(
+        Row::new("Table name").required().child(
             ValueField::new(text)
                 .width(Size::fill())
                 .placeholder("my_table"),
@@ -97,7 +97,7 @@ impl Component for FormatPicker {
             })
             .collect();
 
-        Row::new("FORMAT").child(
+        Row::new("Format").child(
             rect()
                 .width(Size::fill())
                 .height(Size::px(FIELD_HEIGHT))

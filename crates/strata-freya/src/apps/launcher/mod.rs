@@ -15,8 +15,8 @@
 mod model;
 mod views;
 
+use crate::platform::window_attributes;
 use freya::prelude::*;
-use freya::winit::platform::macos::WindowAttributesExtMacOS;
 use strata_core::config::Command;
 use strata_core::theme::os_is_dark;
 
@@ -73,12 +73,7 @@ impl LauncherApp {
             .with_min_size(640., 460.)
             .with_background(background)
             .with_traffic_light_inset(7., 5.)
-            .with_window_attributes(move |attrs, _| {
-                attrs
-                    .with_titlebar_transparent(true)
-                    .with_fullsize_content_view(true)
-                    .with_title_hidden(true)
-            })
+            .with_window_attributes(move |attrs, _| window_attributes(attrs))
     }
 }
 

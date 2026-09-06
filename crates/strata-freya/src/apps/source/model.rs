@@ -449,9 +449,9 @@ mod tests {
     const TEST_SETTINGS: &[SourceSetting] = &[
         SourceSetting {
             key: "address",
-            label: "ADDRESS",
+            label: "Address",
             field: Field::Text,
-            group: Some("CONNECTION"),
+            group: Some("Connection"),
             required: true,
             default: None,
             when: None,
@@ -460,9 +460,9 @@ mod tests {
         },
         SourceSetting {
             key: "user",
-            label: "USER",
+            label: "User",
             field: Field::Text,
-            group: Some("CONNECTION"),
+            group: Some("Connection"),
             required: true,
             default: None,
             when: None,
@@ -471,9 +471,9 @@ mod tests {
         },
         SourceSetting {
             key: "password",
-            label: "PASSWORD",
+            label: "Password",
             field: Field::Secret,
-            group: Some("CONNECTION"),
+            group: Some("Connection"),
             required: false,
             default: None,
             when: None,
@@ -482,7 +482,7 @@ mod tests {
         },
         SourceSetting {
             key: "mode",
-            label: "MODE",
+            label: "Mode",
             field: Field::Choice(&["off", "on"]),
             group: Some("SECURITY"),
             required: false,
@@ -493,7 +493,7 @@ mod tests {
         },
         SourceSetting {
             key: "certificate",
-            label: "ROOT CERTIFICATE",
+            label: "Root certificate",
             field: Field::Path,
             group: Some("SECURITY"),
             required: true,
@@ -510,7 +510,7 @@ mod tests {
     /// A second kind, taking one setting the first does not.
     const OTHER_SETTINGS: &[SourceSetting] = &[SourceSetting {
         key: "prefix",
-        label: "PREFIX",
+        label: "Prefix",
         field: Field::Text,
         group: None,
         required: true,
@@ -751,7 +751,7 @@ mod tests {
     #[test]
     fn a_name_is_one_a_query_could_write() {
         let mut reserved = source_draft();
-        reserved.name = "STRATA".into();
+        reserved.name = "Strata".into();
         assert!(reserved
             .blocker()
             .unwrap()
@@ -833,7 +833,7 @@ mod tests {
         assert!(SecretRow::Typed.note(&noun(key)).contains("This password"));
 
         let other = SourceSetting {
-            label: "SECRET ACCESS KEY",
+            label: "Secret access key",
             ..*key
         };
         assert!(SecretRow::Missing

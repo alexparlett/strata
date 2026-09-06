@@ -56,8 +56,8 @@ use uuid::Uuid;
 
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::state::{
-    catalog_settled, log_event, persisted_defs, use_catalog, use_report, Catalog, Chan,
-    LogLevel, ProjChan, ProjectState, ReportCtx, SessionState,
+    catalog_settled, log_event, persisted_defs, use_catalog, use_report, Catalog, Chan, LogLevel,
+    ProjChan, ProjectState, ReportCtx, SessionState,
 };
 use crate::apps::project::views::{CancelButtonThemePartial, CancelButtonThemePreference};
 use crate::components::badge::Badge;
@@ -135,9 +135,16 @@ impl DropTarget {
     /// are the same string). A saved query is *deleted*, not dropped — it was never registered
     /// with the engine — and a data source is *forgotten*, which is the spec's own word for it
     /// and the right one: nothing in the bucket changes.
-    fn verb(&self) -> &'static str {
+    pub(crate) fn verb(&self) -> &'static str {
         match self {
-            DropTarget::Table { .. } => "Drop table",
+            DropTarget::Table {
+                origin: TableOrigin::Internal,
+                ..
+            } => "Delete table and data",
+            DropTarget::Table {
+                origin: TableOrigin::External,
+                ..
+            } => "Remove table",
             DropTarget::View(_) => "Drop view",
             DropTarget::Query { .. } => "Delete query",
             DropTarget::Source { .. } => "Forget data source",
@@ -305,7 +312,7 @@ impl Component for DropConfirm {
             .child(Title::new(target.verb()).color(roles.get(Role::Text)))
             .child(
                 MonoValue::new(target.name().to_string())
-                    .color(roles.get(Role::Accent))
+                    .color(roles.get(Role::TextMuted))
                     .text_overflow(TextOverflow::Ellipsis),
             );
 
@@ -861,7 +868,7 @@ mod tests {
         let (mut runner, (mut slot, ..)) = runner("names");
         open(&mut runner, &mut slot, dropping("orders"));
 
-        assert_eq!(title(&runner), "Drop table orders");
+        assert_eq!(title(&runner), "Remove table orders");
         assert!(
             shows(&runner, "2 views read this table and will be left invalid:"),
             "the consequence line leads with the count: {:?}",
@@ -881,7 +888,7 @@ mod tests {
         let (mut runner, (mut slot, ..)) = runner("nodeps");
         open(&mut runner, &mut slot, dropping("users"));
 
-        assert_eq!(title(&runner), "Drop table users");
+        assert_eq!(title(&runner), "Remove table users");
         assert!(
             !texts(&runner).iter().any(|t| t.contains("left invalid")),
             "nothing reads `users`: {:?}",
@@ -908,7 +915,7 @@ mod tests {
             },
         );
 
-        assert_eq!(title(&runner), "Drop table daily");
+        assert_eq!(title(&runner), "Delete table and data daily");
         let texts = texts(&runner);
         assert!(
             texts.iter().any(|t| t.contains("data files")),
@@ -975,7 +982,7 @@ mod tests {
         let (mut runner, (mut slot, _, project, ..)) = runner("confirm");
         open(&mut runner, &mut slot, dropping("orders"));
 
-        click_action(&mut runner, "Drop table");
+        click_action(&mut runner, "Remove table");
 
         let p = project.peek();
         assert!(
@@ -1001,7 +1008,7 @@ mod tests {
         let (mut runner, (mut slot, _, _, log)) = runner("logged");
         open(&mut runner, &mut slot, dropping("orders"));
 
-        click_action(&mut runner, "Drop table");
+        click_action(&mut runner, "Remove table");
 
         let recorded: Vec<(LogLevel, String)> = log
             .peek()
@@ -1035,7 +1042,7 @@ mod tests {
         open(&mut runner, &mut slot, dropping("orders"));
 
         std::fs::set_permissions(&strata, std::fs::Permissions::from_mode(0o500)).unwrap();
-        click_action(&mut runner, "Drop table");
+        click_action(&mut runner, "Remove table");
         std::fs::set_permissions(&strata, std::fs::Permissions::from_mode(0o700)).unwrap();
 
         let recorded: Vec<(LogLevel, String)> = log
@@ -1075,7 +1082,7 @@ mod tests {
         open(&mut runner, &mut slot, dropping("orders"));
 
         std::fs::set_permissions(&strata, std::fs::Permissions::from_mode(0o500)).unwrap();
-        click_action(&mut runner, "Drop table");
+        click_action(&mut runner, "Remove table");
         std::fs::set_permissions(&strata, std::fs::Permissions::from_mode(0o700)).unwrap();
 
         let p = project.peek();
@@ -1107,7 +1114,7 @@ mod tests {
         open(&mut runner, &mut slot, dropping("orders"));
 
         std::fs::set_permissions(&strata, std::fs::Permissions::from_mode(0o500)).unwrap();
-        click_action(&mut runner, "Drop table");
+        click_action(&mut runner, "Remove table");
         std::fs::set_permissions(&strata, std::fs::Permissions::from_mode(0o700)).unwrap();
 
         let after: Vec<String> = project
@@ -1544,7 +1551,7 @@ mod tests {
             },
         );
 
-        click_action(&mut runner, "Drop table");
+        click_action(&mut runner, "Delete table and data");
 
         for _ in 0..200 {
             if !dir.exists() {

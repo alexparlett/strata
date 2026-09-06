@@ -373,12 +373,12 @@ pub struct FactRow {
 /// value per row. It is shown wherever the source reports it.
 pub fn fact_rows(facts: &ColumnFacts) -> Vec<FactRow> {
     let mut rows = vec![FactRow {
-        label: "TYPE",
+        label: "Type",
         value: facts.dtype.clone(),
     }];
     if let Some(n) = facts.rows {
         rows.push(FactRow {
-            label: "ROWS",
+            label: "Rows",
             value: fmt_int(n),
         });
     }
@@ -393,12 +393,12 @@ pub fn fact_rows(facts: &ColumnFacts) -> Vec<FactRow> {
 
 fn fact_label(key: StatKey) -> &'static str {
     match key {
-        StatKey::Nulls => "NULLS",
-        StatKey::Min => "MIN",
-        StatKey::Max => "MAX",
-        StatKey::Distinct => "DISTINCT",
-        StatKey::Mean => "MEAN",
-        StatKey::Median => "MEDIAN",
+        StatKey::Nulls => "Nulls",
+        StatKey::Min => "Min",
+        StatKey::Max => "Max",
+        StatKey::Distinct => "Distinct",
+        StatKey::Mean => "Mean",
+        StatKey::Median => "Median",
     }
 }
 
@@ -696,10 +696,10 @@ mod tests {
                 .map(|r| (r.label, r.value))
                 .collect::<Vec<_>>(),
             vec![
-                ("TYPE", "Float64".to_string()),
-                ("ROWS", "2,413,118".to_string()),
-                ("MIN", "-240.0".to_string()),
-                ("MAX", "4990.0".to_string()),
+                ("Type", "Float64".to_string()),
+                ("Rows", "2,413,118".to_string()),
+                ("Min", "-240.0".to_string()),
+                ("Max", "4990.0".to_string()),
             ],
             "no DISTINCT / MEAN / MEDIAN row: a footer doesn't carry them, and P3-09's scan \
              is what fills them in"
@@ -714,7 +714,7 @@ mod tests {
         let facts = column(&p, &sel(CatalogKind::Table, "events", &["amount"]));
 
         assert!(
-            !fact_rows(&facts).iter().any(|r| r.label == "NULLS"),
+            !fact_rows(&facts).iter().any(|r| r.label == "Nulls"),
             "the null count belongs to the completeness bar alone"
         );
         let fill = completeness(&facts).expect("a real null count and a real row count");
@@ -740,7 +740,7 @@ mod tests {
                 .into_iter()
                 .map(|r| r.label)
                 .collect::<Vec<_>>(),
-            vec!["TYPE"],
+            vec!["Type"],
             "no row count either — the CSV never reported one"
         );
         assert_eq!(completeness(&facts), None);
@@ -761,7 +761,7 @@ mod tests {
                 .into_iter()
                 .map(|r| r.label)
                 .collect::<Vec<_>>(),
-            vec!["TYPE"]
+            vec!["Type"]
         );
     }
 
@@ -883,7 +883,7 @@ mod tests {
         assert_eq!(
             fact_rows(&facts)
                 .into_iter()
-                .find(|r| r.label == "MAX")
+                .find(|r| r.label == "Max")
                 .map(|r| r.value),
             Some("~Radia Perl".to_string())
         );
@@ -958,17 +958,17 @@ mod tests {
                 .map(|r| (r.label, r.value))
                 .collect::<Vec<_>>(),
             vec![
-                ("TYPE", "Float64".to_string()),
-                ("ROWS", "2,413,118".to_string()),
-                ("DISTINCT", "40,312".to_string()),
-                ("MIN", "-240.0".to_string()),
-                ("MAX", "4990.0".to_string()),
-                ("MEAN", "812.4".to_string()),
-                ("MEDIAN", "640.0".to_string()),
+                ("Type", "Float64".to_string()),
+                ("Rows", "2,413,118".to_string()),
+                ("Distinct", "40,312".to_string()),
+                ("Min", "-240.0".to_string()),
+                ("Max", "4990.0".to_string()),
+                ("Mean", "812.4".to_string()),
+                ("Median", "640.0".to_string()),
             ]
         );
         assert!(
-            !fact_rows(&scanned).iter().any(|r| r.label == "NULLS"),
+            !fact_rows(&scanned).iter().any(|r| r.label == "Nulls"),
             "the scan's null count is still the bar, not a row as well"
         );
     }
@@ -1003,7 +1003,7 @@ mod tests {
         assert_eq!(
             fact_rows(&scanned)
                 .into_iter()
-                .find(|r| r.label == "MAX")
+                .find(|r| r.label == "Max")
                 .map(|r| r.value),
             Some("Radia Perlman".to_string()),
             "no ~ — this is the value, not a bound on it"
@@ -1035,7 +1035,7 @@ mod tests {
                 .into_iter()
                 .map(|r| r.label)
                 .collect::<Vec<_>>(),
-            vec!["TYPE", "ROWS", "DISTINCT"]
+            vec!["Type", "Rows", "Distinct"]
         );
         let fill = completeness(&scanned).expect("a counted null count and a counted row count");
         assert_eq!((fill.nulls, fill.rows), (100, 500));
@@ -1066,7 +1066,7 @@ mod tests {
                 .into_iter()
                 .map(|r| r.label)
                 .collect::<Vec<_>>(),
-            vec!["TYPE", "ROWS"],
+            vec!["Type", "Rows"],
             "the row count, and not one fact of the top-level `city`"
         );
         assert!(scanned.child, "…because it is a nested field");
@@ -1130,7 +1130,7 @@ mod tests {
         );
         assert_eq!(completeness(&no_nulls), None);
         assert!(
-            fact_rows(&no_nulls).iter().any(|r| r.label == "DISTINCT"),
+            fact_rows(&no_nulls).iter().any(|r| r.label == "Distinct"),
             "the facts it did compute still land"
         );
     }
@@ -1274,7 +1274,7 @@ mod tests {
                 .into_iter()
                 .map(|r| r.label)
                 .collect::<Vec<_>>(),
-            vec!["TYPE"],
+            vec!["Type"],
             "no ROWS: `reltuples` is an estimate, and the completeness bar divides by this number"
         );
         assert_eq!(completeness(&facts), None);

@@ -54,9 +54,9 @@ mod interaction;
 pub mod model;
 mod views;
 
+use crate::platform::window_attributes;
 use freya::prelude::*;
 use freya::radio::{use_share_radio, RadioStation};
-use freya::winit::platform::macos::WindowAttributesExtMacOS;
 use freya::winit::window::WindowId;
 use std::collections::{BTreeMap, BTreeSet};
 use strata_core::config::Command;
@@ -284,17 +284,12 @@ impl SourceApp {
             report,
             owner,
         })
-        .with_title("Data Source")
+        .with_title("Data source")
         .with_size(480., 588.)
         .with_min_size(420., 400.)
         .with_background(background)
         .with_traffic_light_inset(9., 11.)
-        .with_window_attributes(move |attrs, _| {
-            attrs
-                .with_titlebar_transparent(true)
-                .with_fullsize_content_view(true)
-                .with_title_hidden(true)
-        })
+        .with_window_attributes(move |attrs, _| window_attributes(attrs))
     }
 }
 

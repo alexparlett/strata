@@ -115,3 +115,6 @@ debug = "line-tables-only"
 opt-level = 3
 lto = "thin"
 codegen-units = 1
+
+[patch."https://github.com/alexparlett/freya"]
+freya-core = { path = "vendor/freya-core" }

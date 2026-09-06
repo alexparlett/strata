@@ -355,13 +355,13 @@ impl ExportDraft {
         match self.format {
             FormatId::Csv => groups.extend(self.csv_groups()),
             FormatId::Json => groups.push(Group {
-                label: "COMPRESSION".into(),
+                label: "Compression".into(),
                 hint: None,
                 control: compression_select(self.json_compression, Edit::JsonCompression),
             }),
             FormatId::Parquet => groups.extend(self.parquet_groups()),
             FormatId::Arrow => groups.push(Group {
-                label: "FORMAT".into(),
+                label: "Format".into(),
                 hint: None,
                 control: Control::Note(
                     "Arrow IPC is written schema-faithfully. DataFusion exposes no write \
@@ -369,7 +369,7 @@ impl ExportDraft {
                 ),
             }),
             FormatId::Extension(_) => groups.push(Group {
-                label: "FORMAT".into(),
+                label: "Format".into(),
                 hint: None,
                 control: Control::Note(
                     "This format is written by the writer it was registered with. Its options \
@@ -382,7 +382,7 @@ impl ExportDraft {
 
     fn scope_group(&self, target: &ExportTarget) -> Group {
         Group {
-            label: "ROWS TO EXPORT".into(),
+            label: "Rows to export".into(),
             hint: None,
             control: Control::Seg {
                 options: vec![
@@ -405,7 +405,7 @@ impl ExportDraft {
     fn csv_groups(&self) -> Vec<Group> {
         vec![
             Group {
-                label: "HEADER ROW".into(),
+                label: "Header row".into(),
                 hint: Some("Write column names as the first row"),
                 control: Control::Toggle {
                     on: self.csv_header,
@@ -414,7 +414,7 @@ impl ExportDraft {
                 },
             },
             Group {
-                label: "DELIMITER".into(),
+                label: "Delimiter".into(),
                 hint: Some("Field separator (use \\t for tab)"),
                 control: Control::Text(TextField {
                     value: self.csv_delimiter.clone(),
@@ -424,7 +424,7 @@ impl ExportDraft {
                 }),
             },
             Group {
-                label: "NULL VALUES AS".into(),
+                label: "NULL values as".into(),
                 hint: None,
                 control: Control::Seg {
                     options: vec![
@@ -442,7 +442,7 @@ impl ExportDraft {
                 },
             },
             Group {
-                label: "QUOTE CHARACTER".into(),
+                label: "Quote character".into(),
                 hint: Some("Wraps fields containing the delimiter"),
                 control: Control::Char(TextField {
                     value: self.csv_quote.clone(),
@@ -452,7 +452,7 @@ impl ExportDraft {
                 }),
             },
             Group {
-                label: "ESCAPE CHARACTER".into(),
+                label: "Escape character".into(),
                 hint: Some("Escapes quotes (blank = double-quote)"),
                 control: Control::Char(TextField {
                     value: self.csv_escape.clone(),
@@ -471,7 +471,7 @@ impl ExportDraft {
                 },
             },
             Group {
-                label: "COMPRESSION".into(),
+                label: "Compression".into(),
                 hint: None,
                 control: compression_select(self.csv_compression, Edit::CsvCompression),
             },
@@ -480,7 +480,7 @@ impl ExportDraft {
 
     fn parquet_groups(&self) -> Vec<Group> {
         let mut groups = vec![Group {
-            label: "COMPRESSION".into(),
+            label: "Compression".into(),
             hint: None,
             control: Control::Select {
                 options: [
@@ -515,7 +515,7 @@ impl ExportDraft {
         }
 
         groups.push(Group {
-            label: "STATISTICS".into(),
+            label: "Statistics".into(),
             hint: None,
             control: Control::Seg {
                 options: [
@@ -534,7 +534,7 @@ impl ExportDraft {
             },
         });
         groups.push(Group {
-            label: "MAX ROW GROUP SIZE".into(),
+            label: "Max row group size".into(),
             hint: Some("Rows per row group. Larger scans faster, costs more memory"),
             control: Control::Seg {
                 options: ROW_GROUPS
@@ -549,7 +549,7 @@ impl ExportDraft {
             },
         });
         groups.push(Group {
-            label: "WRITER VERSION".into(),
+            label: "Writer version".into(),
             hint: Some("2.0 enables newer encodings; 1.0 reads everywhere"),
             control: Control::Seg {
                 options: [(WriterVersion::V1, "1.0"), (WriterVersion::V2, "2.0")]
@@ -564,7 +564,7 @@ impl ExportDraft {
             },
         });
         groups.push(Group {
-            label: "DICTIONARY ENCODING".into(),
+            label: "Dictionary encoding".into(),
             hint: Some("Encode repeated values via dictionary"),
             control: Control::Toggle {
                 on: self.pq_dictionary,
@@ -814,14 +814,14 @@ mod tests {
         assert_eq!(
             labels(&draft.groups(&target())),
             vec![
-                "ROWS TO EXPORT",
-                "HEADER ROW",
-                "DELIMITER",
-                "NULL VALUES AS",
-                "QUOTE CHARACTER",
-                "ESCAPE CHARACTER",
+                "Rows to export",
+                "Header row",
+                "Delimiter",
+                "NULL values as",
+                "Quote character",
+                "Escape character",
                 "DOUBLE-QUOTE",
-                "COMPRESSION",
+                "Compression",
             ]
         );
     }
@@ -834,7 +834,7 @@ mod tests {
         };
         assert_eq!(
             labels(&draft.groups(&target())),
-            vec!["ROWS TO EXPORT", "COMPRESSION"]
+            vec!["Rows to export", "Compression"]
         );
     }
 
@@ -845,7 +845,7 @@ mod tests {
             ..Default::default()
         };
         let groups = draft.groups(&target());
-        assert_eq!(labels(&groups), vec!["ROWS TO EXPORT", "FORMAT"]);
+        assert_eq!(labels(&groups), vec!["Rows to export", "Format"]);
         assert!(matches!(groups[1].control, Control::Note(_)));
     }
 
@@ -880,12 +880,12 @@ mod tests {
     fn the_custom_null_field_shows_only_when_custom_is_picked() {
         let mut draft = ExportDraft::default();
         let groups = draft.groups(&target());
-        let null = groups.iter().find(|g| g.label == "NULL VALUES AS").unwrap();
+        let null = groups.iter().find(|g| g.label == "NULL values as").unwrap();
         assert!(matches!(&null.control, Control::Seg { custom: None, .. }));
 
         draft.csv_null = NullChoice::Custom;
         let groups = draft.groups(&target());
-        let null = groups.iter().find(|g| g.label == "NULL VALUES AS").unwrap();
+        let null = groups.iter().find(|g| g.label == "NULL values as").unwrap();
         assert!(matches!(
             &null.control,
             Control::Seg {
@@ -899,7 +899,7 @@ mod tests {
     fn every_control_carries_the_edit_it_performs() {
         let mut draft = ExportDraft::default();
         let groups = draft.groups(&target());
-        let header = groups.iter().find(|g| g.label == "HEADER ROW").unwrap();
+        let header = groups.iter().find(|g| g.label == "Header row").unwrap();
         let Control::Toggle { on, edit, .. } = &header.control else {
             panic!("a toggle");
         };

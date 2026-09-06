@@ -355,26 +355,7 @@ impl Component for RecordView {
             .child(Divider::horizontal().color(theme.divider_fill))
             .child(body);
 
-        rect()
-            .layer(Layer::Overlay)
-            .position(Position::new_global())
-            .child(
-                rect()
-                    .position(Position::new_global().top(0.).left(0.))
-                    .width(Size::window_percent(100.))
-                    .height(Size::window_percent(100.))
-                    .background(theme.backdrop)
-                    .blur(3.)
-                    .on_press(move |_: Event<PressEventData>| open.set(None)),
-            )
-            .child(
-                rect()
-                    .position(Position::new_global().top(0.).left(0.))
-                    .width(Size::window_percent(100.))
-                    .height(Size::window_percent(100.))
-                    .center()
-                    .child(card),
-            )
+        crate::components::modal::Modal::new(card).on_close_request(move |()| open.set(None))
     }
 }
 

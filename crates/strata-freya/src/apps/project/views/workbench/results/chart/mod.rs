@@ -1097,7 +1097,7 @@ mod tests {
             "the notice did not render: {seen:?}"
         );
         assert!(
-            seen.iter().any(|t| t == "LEGEND") && seen.iter().any(|t| t == "amount"),
+            seen.iter().any(|t| t == "Legend") && seen.iter().any(|t| t == "amount"),
             "the notice names a legend that is not on screen: {seen:?}"
         );
 
