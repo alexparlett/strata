@@ -101,8 +101,8 @@ pub use sources::source::{
 pub use sources::RemoteRelation;
 pub use statements::arms::{drop_intent, duplicate_column, SessionScope};
 pub use statements::{
-    Fault, Form, Mechanism, PolicyRefusal, Reason, Refusal, Remote, StatementReport, StmtKind,
-    StoreEffect, Target, Unsettled,
+    Fault, Form, Mechanism, Persistence, PolicyRefusal, Reason, Refusal, Remote, StatementReport,
+    StmtKind, StoreEffect, Target, Unsettled,
 };
 pub use tables::{InternalTableStore, LocalIpcTableStore, MemTableStore};
 
@@ -113,6 +113,8 @@ use secrets::SecretProvider;
 
 use strata_arrow::config;
 use strata_arrow::config::{display_subset, DisplayStamp};
+
+use strata_core::project::ProjectStore;
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 #[cfg(test)]
@@ -227,6 +229,7 @@ pub struct RunTag(pub u128);
 /// The headless MCP host (`strata-agent`) is exactly this kernel and nothing else, which is what
 /// keeps it honest as the second deployment.
 pub struct Engine {
+    project: Option<ProjectStore>,
     engine_id: u64,
     /// This engine's own handle, from [`Arc::new_cyclic`]. It is what lets a method handing out an
     /// owning guard still take `&self`, and so still be reachable through a `Deref`. Weak, because
@@ -336,18 +339,21 @@ pub struct Engine {
 /// keep the abort from ever arriving. This holds names only, so it outlives an engine
 /// harmlessly.
 #[derive(Clone, Debug, Default)]
-pub struct InternalTables(Arc<Mutex<HashSet<String>>>);
+pub struct InternalTables {
+    names: Arc<Mutex<HashSet<String>>>,
+    creating: Arc<tokio::sync::Mutex<()>>,
+}
 
 impl InternalTables {
     /// Whether `name` is a table whose data Strata owns. `false` for an external table, a view,
     /// and a name that is not registered at all.
     pub fn contains(&self, name: &str) -> bool {
-        self.0.lock().unwrap().contains(&fold_ident(name))
+        self.names.lock().unwrap().contains(&fold_ident(name))
     }
 
     /// Record what a registration (or a drop) settled about a table's origin.
     fn note(&self, name: &str, internal: bool) {
-        let mut set = self.0.lock().unwrap();
+        let mut set = self.names.lock().unwrap();
         match internal {
             true => set.insert(fold_ident(name)),
             false => set.remove(&fold_ident(name)),
@@ -382,6 +388,12 @@ impl Engine {
     /// registration pass, whose source paths were already resolved against the root by the
     /// caller.
     pub fn set_data_dir(&self, root: &Path) {
+        assert!(
+            self.project
+                .as_ref()
+                .is_none_or(|project| project.root() == root),
+            "a project-backed engine cannot change project folders"
+        );
         *self.data_root.lock().unwrap() = Some(root.to_path_buf());
     }
 
@@ -606,7 +618,23 @@ impl Engine {
         if let Some(effect) = ran.effect.as_ref() {
             self.learn_from(effect);
         }
-        ran.at(self.generation.current())
+        self.persist_statement(ran.at(self.generation.current()))
+    }
+
+    /// Saves the durable part of a statement before its report leaves execution.
+    fn persist_statement(&self, mut report: StatementReport) -> StatementReport {
+        if let Some(project) = &self.project {
+            report.persistence = match &report.effect {
+                Some(effect) if effect.changes_defs() => {
+                    match project.update(|defs| effect.apply_defs(defs)) {
+                        Ok(()) => Persistence::Saved,
+                        Err(why) => Persistence::Failed(why),
+                    }
+                }
+                _ => Persistence::Saved,
+            };
+        }
+        report
     }
 
     /// [`settle_effect`](Self::settle_effect)'s match, which is exhaustive on [`StoreEffect`]
@@ -657,7 +685,12 @@ impl Engine {
     /// [`Classifying`], and `a_refused_statement_leaves_the_workspaces_run_alone`, which pins
     /// exactly that. Nothing is registered, planned or spooled in this window, so there is no
     /// snapshot to retire and nothing to abort but the classification itself.
-    async fn classify_bracket<F, T>(&self, ws: WsId, tag: RunTag, work: F) -> Result<T, EngineError>
+    async fn classify_bracket<F, T>(
+        &self,
+        ws: WsId,
+        tag: RunTag,
+        work: F,
+    ) -> Result<(T, ClassifyGuard<'_>), EngineError>
     where
         F: Future<Output = Result<T, EngineError>> + Send + 'static,
         T: Send + 'static,
@@ -667,9 +700,8 @@ impl Engine {
             let mut lc = self.lifecycle.lock().unwrap();
             let task = self.rt().spawn(work);
             lc.classifying.insert(
-                ws,
+                (ws, dispatch),
                 Classifying {
-                    dispatch,
                     tag,
                     abort: task.abort_handle(),
                     start: Instant::now(),
@@ -679,18 +711,10 @@ impl Engine {
             task
         };
 
-        let mut guard = ClassifyGuard::arm(self, ws, dispatch);
-        let joined = task.await;
-        guard.disarm();
-
-        let mut lc = self.lifecycle.lock().unwrap();
-        if lc.classifying.get(&ws).map(|c| c.dispatch) == Some(dispatch) {
-            lc.classifying.remove(&ws);
-        }
-        self.publish_inflight(&lc);
-        drop(lc);
-        match joined {
-            Ok(res) => res,
+        let guard = ClassifyGuard::arm(self, ws, dispatch);
+        match task.await {
+            Ok(Ok(res)) => Ok((res, guard)),
+            Ok(Err(error)) => Err(error),
             Err(join) if join.is_cancelled() => Err(EngineError::Stopped(StopReason::Cancelled)),
             Err(join) => Err(EngineError::task("policy", join)),
         }
@@ -717,6 +741,7 @@ impl Engine {
         ws: WsId,
         tag: RunTag,
         what: &str,
+        mut admission: ClassifyGuard<'_>,
         work: F,
     ) -> Result<T, EngineError>
     where
@@ -726,6 +751,7 @@ impl Engine {
         let dispatch = self.dispatch_seq.fetch_add(1, Ordering::Relaxed);
         let task = {
             let mut lc = self.lifecycle.lock().unwrap();
+            admission.dispatch(&mut lc)?;
             if let Some(prev) = lc.inflight.remove(&ws) {
                 self.abort_inflight(prev);
             }
@@ -760,18 +786,6 @@ impl Engine {
         }
     }
 
-    /// `sql` as one parsed statement with its bare names resolved.
-    ///
-    /// The entry every read arriving as text goes through; [`run`](Workspace::run) does not, its
-    /// classification having already produced the statement.
-    ///
-    /// **Not spawned onto the runtime**, unlike every call that touches the context to *do*
-    /// something: it has to land before the first await, or `query` stops publishing its in-flight
-    /// entry on the first poll and `DispatchGuard` has nothing to retract.
-    fn parse_one(&self, sql: &str) -> Result<DFStatement, EngineError> {
-        statements::pipeline::resolved_one(&self.ctx, sql).map_err(EngineError::Refused)
-    }
-
     /// [`query`](Workspace::query)'s body, plus the [`ReadPolicy`] the statement is planned under.
     ///
     /// Private, and `query` is the read-only entry every other caller keeps: the widening is only
@@ -785,6 +799,7 @@ impl Engine {
         stmt: DFStatement,
         page_size: usize,
         policy: ReadPolicy,
+        mut admission: ClassifyGuard<'_>,
     ) -> Result<RunRows, EngineError> {
         let snapshot = SnapshotId(self.snap_seq.fetch_add(1, Ordering::Relaxed));
         let dispatch = self.dispatch_seq.fetch_add(1, Ordering::Relaxed);
@@ -792,6 +807,7 @@ impl Engine {
         let fmt = CellFormat::new(&display);
         let task = {
             let mut lc = self.lifecycle.lock().unwrap();
+            admission.dispatch(&mut lc)?;
             if let Some(prev) = lc.inflight.remove(&ws) {
                 self.abort_inflight(prev);
             }

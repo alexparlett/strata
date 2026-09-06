@@ -15,7 +15,9 @@ use freya_testing::prelude::{Key, KeyboardEventName, NamedKey, PlatformEvent};
 use freya_testing::TestingRunner;
 use strata_core::config::AppConfig;
 use strata_core::models::Listings;
+use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
+use strata_engine::Registrations;
 use strata_model::Origin;
 
 use super::*;
@@ -23,7 +25,8 @@ use crate::agent::create_global_agent;
 use crate::apps::project::close::{CloseGuard, CloseTarget};
 use crate::apps::project::query::{QueryMode, RunId};
 use crate::apps::project::state::{
-    use_engine_config, Chats, EngineRestart, Log, PersistFaults, Pick,
+    use_engine_config, CatalogState, Chats, EngineRestart, Log, PersistFaults, Pick, ProjChan,
+    ProjectState, ScanRequest,
 };
 use crate::menu::create_global_menu;
 use crate::platform::{create_global_open, create_global_windows, Subtree};
@@ -87,6 +90,15 @@ fn runner() -> (
             });
             let config = r.provide_root_context(|| ConfigStation::create(AppConfig::default()));
             r.provide_root_context(EngineCtx::default);
+            r.provide_root_context(|| {
+                RadioStation::<ProjectState, ProjChan>::create(ProjectState::from_defs(
+                    ProjectDefs::default(),
+                    std::env::temp_dir().join("strata-results-interaction"),
+                ))
+            });
+            r.provide_root_context(|| State::create(CatalogState::Cold));
+            r.provide_root_context(|| State::create(Registrations::default()));
+            r.provide_root_context(|| State::create(ScanRequest::default()));
             r.provide_root_context(|| Arc::new(CloseGuard::new(false, true)));
             r.provide_root_context(|| EngineRestart(State::create(0)));
             r.provide_root_context(|| Subtree {

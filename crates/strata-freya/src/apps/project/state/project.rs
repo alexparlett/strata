@@ -32,12 +32,13 @@
 //! (save-as-view, register, drop), never on a timer. The local session file is the
 //! session-persistence slice's, not this store's.
 
+use std::cell::RefCell;
 use std::path::PathBuf;
 
 use freya::radio::RadioChannel;
-use strata_core::project::{self as project_io, name_ord, ProjectDefs};
+use strata_core::project::{name_ord, ProjectDefs, ProjectStore};
 use strata_engine::register::view_order;
-use strata_engine::{RegStatus, Registrations, TableMeta, ViewMeta};
+use strata_engine::{RegStatus, Registrations, StoreEffect, TableMeta, ViewMeta};
 use strata_model::{CatalogKind, SavedQuery, SourceDef, TableDef, ViewDef};
 use uuid::Uuid;
 
@@ -145,10 +146,12 @@ impl ViewRow {
 
 /// The open project. Rows stay sorted by [`name_ord`] on their def names (the load
 /// sorts, and every upsert inserts at the sorted slot), so index-addressed rows can't
-/// shuffle. Always built **full, from load or scaffold** ([`from_defs`](Self::from_defs))
+/// shuffle. Always built **full, from load or scaffold** ([`from_store`](Self::from_store))
 /// — there is no `Default`: a project can't exist without a folder on disk, so a rootless
 /// in-memory project is not a representable state.
 pub struct ProjectState {
+    persistence: ProjectStore,
+    saved: RefCell<ProjectDefs>,
     pub name: String,
     /// The project folder — the parent of its `.strata/` dir, and the base relative
     /// source paths resolve against. Always set: opening a project that can't be
@@ -286,10 +289,19 @@ impl ProjectState {
 
     /// The store for a project loaded (or scaffolded) from `root` — the defs, with nothing
     /// learned about any of them until the registration pass answers.
+    #[cfg(test)]
     pub fn from_defs(defs: ProjectDefs, root: PathBuf) -> Self {
+        Self::from_store(ProjectStore::new(root, defs))
+    }
+
+    /// Projects the shared definitions without taking ownership of execution's commits.
+    pub fn from_store(persistence: ProjectStore) -> Self {
+        let defs = persistence.snapshot();
         Self {
+            root: persistence.root().to_path_buf(),
+            saved: RefCell::new(defs.clone()),
+            persistence,
             name: defs.name,
-            root,
             sources: defs.sources,
             tables: defs.tables.into_iter().map(TableRow::new).collect(),
             views: defs.views.into_iter().map(ViewRow::new).collect(),
@@ -312,7 +324,15 @@ impl ProjectState {
     /// Persist the defs to `.strata/project.json`. Call at def-mutation points
     /// (view/saved-query create · drop · register/deregister).
     pub fn save_defs(&self) -> Result<(), String> {
-        project_io::save_defs(&self.root, &self.defs())
+        let defs = self.defs();
+        self.persistence.merge(&self.saved.borrow(), &defs)?;
+        *self.saved.borrow_mut() = defs;
+        Ok(())
+    }
+
+    /// Records definitions execution already saved so a later UI edit does not replay them.
+    pub fn acknowledge(&self, effect: &StoreEffect) {
+        effect.apply_defs(&mut self.saved.borrow_mut());
     }
 
     /// The one name-equality rule for user-entered catalog names: case-insensitive

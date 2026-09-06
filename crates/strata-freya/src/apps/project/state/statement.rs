@@ -1,47 +1,9 @@
-//! The **statement settle** (ED-02) — folding one intercepted statement's outcome into the
-//! window.
-//!
-//! An intercepted statement returns a `StoreEffect` rather than leaving its change somewhere to
-//! be discovered: the catalog is the `ProjectState` store, never a query, so the engine's answer
-//! is *applied* here — the report's own stamp adopted through `catalog_settled`, so every catalog
-//! row and every tab's diagnostics re-derive against the catalog the statement left → store upsert
-//! on the matching [`ProjChan`] → the def written through the persist funnel at its mutation point
-//! → the event log.
-//!
-//! **The adoption is once, up front, off the report** rather than per arm. A report carries the
-//! generation its effect left the catalog at (EA-30), so there is nothing for an arm to remember
-//! and nothing a later arm can forget: an effect that moved no generation carries the same number
-//! it started at, and adopting it is a no-op.
-//!
-//! **One fold for every effect**, not one per capability. Each later ED task adds a `StoreEffect`
-//! arm and nothing else: no new persist path, no second adoption site, no second place that knows a
-//! table row is written on `ProjChan::Tables`.
-//!
-//! Driven from the tab's request keeper (`views::keeper`) beside history and the log, and for the
-//! same reason: the pin observes the settle even while its tab is backgrounded, so a `CREATE
-//! TABLE` run in a tab the user has since left still reaches the sidebar and `project.json`. The
-//! local `applied` flag is the whole dedup — the pin is keyed by the press's nonce, so there is
-//! never a second observer of one settle.
-//!
-//! **A surface that dispatches its own work folds through the same body**, not a copy of it: the
-//! empty-table panel (IT-01) composes a `CREATE TABLE`, calls `Workspace::run` from a press and
-//! hands the report to [`settle`] through [`use_settle`]; ⌘S on a view (`editor::actions`) does
-//! the same with what `Catalog::create_view` answers. A gesture that ran a statement and stopped
-//! there would leave a table the catalog never learns about, and one that folded it itself would
-//! be a second body applying one effect.
-//!
-//! **And the log entry is recorded here, not by [`use_run_logging`](super::log::use_run_logging).**
-//! A statement's message claims something durable ("Table 't' created"), and only the fold knows
-//! whether the def actually reached `project.json` — the `save_view` lesson: a success row logged
-//! over a failed write is the log promising a table the next open loses.
+//! Projects statement effects into the window and reports their persistence outcome.
 
-use freya::prelude::{use_consume, use_side_effect, use_state, WritableUtils};
-use freya::query::{QueryStateData, UseQuery};
 use freya::radio::{use_radio_station, RadioStation};
-use strata_engine::{StatementReport, StoreEffect};
+use strata_engine::{Persistence, StatementReport, StoreEffect};
 
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::query::{QueryOutcome, RunQuery};
 
 use super::catalog::{
     catalog_settled, use_catalog, use_catalog_rescan, use_registrations, Catalog, CatalogRescan,
@@ -49,7 +11,7 @@ use super::catalog::{
 };
 use super::hooks::{refresh_table, refresh_table_rows};
 use super::log::{log_event, LogLevel};
-use super::persist::{persisted_defs, use_report, ReportCtx};
+use super::persist::{persisted, persisted_defs, use_report, ProjectFile, ReportCtx};
 use super::{ProjChan, ProjectState};
 
 /// The window's handles a fold writes through, resolved once at render and passed by value so a
@@ -75,7 +37,7 @@ pub struct Settle {
 /// For a surface that has a [`StatementReport`] in hand with **no query behind it** — the
 /// empty-table panel (IT-01) dispatches `Workspace::run` from a press rather than from a
 /// `QuerySpec`, and then has exactly the same fold to perform. It reaches [`settle`] through
-/// this; [`use_statement_settle`] stays the query-driven wrapper over the same body, and there
+/// this; the run capability stays the query-driven wrapper over the same body, and there
 /// is deliberately no second `apply`, persist path or generation adoption.
 pub fn use_settle() -> Settle {
     Settle {
@@ -87,53 +49,21 @@ pub fn use_settle() -> Settle {
     }
 }
 
-/// Fold a press's statement outcome into the window, once, when it settles. Call once per
-/// `RequestPin` (`views::keeper`).
-pub fn use_statement_settle(query: UseQuery<RunQuery>) {
-    let to = use_settle();
-    let engine = use_consume::<EngineCtx>();
-    let mut applied = use_state(|| false);
-    use_side_effect(move || {
-        if *applied.peek() {
-            return;
-        }
-        let settled = match &*query.read().state() {
-            QueryStateData::Settled {
-                res: Ok(QueryOutcome::Statement(report)),
-                ..
-            } => Some(report.clone()),
-            _ => None,
-        };
-        let Some(report) = settled else {
-            return;
-        };
-        applied.set(true);
-        let _ = settle(to, &engine, &report);
-    });
-}
-
-/// Adopt the generation `report` left the catalog at, apply its effect, then say so — in that
-/// order, because whether the statement is worth announcing is the write's answer, not the
-/// engine's, and because the report's stamp is a fact whether or not the def reached disk.
-///
-/// The engine rides beside the `Copy` handles rather than on [`Settle`], exactly as `drop_row`
-/// takes it: `EngineCtx` is an `Arc` and would cost the struct its `Copy`, for one arm.
-///
-/// `pub` for the one caller that has a report without a query — see [`use_settle`]. There is no
-/// dedup hazard in that: the `applied` flag above guards a *pin's* re-render, and a press that
-/// dispatched its own run has no pin.
-///
-/// **It answers whether the change is durable**, which is the same question [`apply`] answers and
-/// for the same reason: a surface that closes itself on success has to be able to tell a create
-/// that reached `project.json` from one that did not. The query-driven caller ignores it — the
-/// results pane has nothing to close and `persisted_defs` has already reported the cause — but
-/// the Configure window's Save does not (`configure::views::footer`).
+/// Updates the window from a completed statement and returns whether its definition is durable.
 pub fn settle(to: Settle, engine: &EngineCtx, report: &StatementReport) -> bool {
     catalog_settled(to.catalog, report.at);
     let landed = match &report.effect {
         None => true,
-        Some(effect) => apply(to, engine, effect),
+        Some(effect) => apply(to, engine, effect, &report.persistence),
     };
+    let landed = landed
+        && match &report.persistence {
+            Persistence::Failed(why) => {
+                persisted(to.report, ProjectFile::Defs, || Err(why.clone()))
+            }
+            Persistence::Saved => persisted(to.report, ProjectFile::Defs, || Ok(())),
+            Persistence::Caller => true,
+        };
     if landed {
         log_event(to.report.log, LogLevel::Ok, report.message.clone());
     }
@@ -145,7 +75,7 @@ pub fn settle(to: Settle, engine: &EngineCtx, report: &StatementReport) -> bool 
 /// faults funnel.
 ///
 /// The def-mutating arms name a channel and a mutation and nothing else: persisting at the
-/// mutation point is [`mutated`]'s, held **once** rather than spelled out per arm, and adopting
+/// mutation point is the shared mutation closure's, held **once** rather than spelled out per arm, and adopting
 /// the catalog generation is [`settle`]'s, before any of this runs. That is the difference between
 /// an invariant and four copies of it — an arm added by a later ED task cannot forget either half,
 /// because it never writes either half.
@@ -156,10 +86,22 @@ pub fn settle(to: Settle, engine: &EngineCtx, report: &StatementReport) -> bool 
 /// asks it only which **views** are failing, while a `TableUpserted` answers for the *table*. The
 /// entry this fold moves is never one this read consults. An arm that grows a synchronous read of
 /// an entry its own effect moves would have to wait for the derivation instead.
-fn apply(to: Settle, engine: &EngineCtx, effect: &StoreEffect) -> bool {
+fn apply(to: Settle, engine: &EngineCtx, effect: &StoreEffect, persistence: &Persistence) -> bool {
+    let mutate = |chan, write: &dyn Fn(&mut ProjectState)| {
+        let mut project = to.project;
+        let mut p = project.write_channel(chan);
+        write(&mut p);
+        match persistence {
+            Persistence::Caller => persisted_defs(&p, to.report),
+            Persistence::Saved | Persistence::Failed(_) => {
+                p.acknowledge(effect);
+                true
+            }
+        }
+    };
     match effect {
         StoreEffect::TableUpserted { def, meta } => {
-            let landed = mutated(to, ProjChan::Tables, |p| {
+            let landed = mutate(ProjChan::Tables, &|p| {
                 p.upsert_table(def.clone());
                 p.table_registered(&def.name, meta.clone());
             });
@@ -172,14 +114,14 @@ fn apply(to: Settle, engine: &EngineCtx, effect: &StoreEffect) -> bool {
             }
             landed
         }
-        StoreEffect::TableRemoved { name, .. } => mutated(to, ProjChan::Tables, |p| {
+        StoreEffect::TableRemoved { name, .. } => mutate(ProjChan::Tables, &|p| {
             p.remove_table(name);
         }),
-        StoreEffect::ViewUpserted { def, meta } => mutated(to, ProjChan::Views, |p| {
+        StoreEffect::ViewUpserted { def, meta } => mutate(ProjChan::Views, &|p| {
             p.upsert_view(def.clone());
             p.view_registered(&def.name, meta.clone());
         }),
-        StoreEffect::ViewRemoved { name } => mutated(to, ProjChan::Views, |p| {
+        StoreEffect::ViewRemoved { name } => mutate(ProjChan::Views, &|p| {
             p.remove_view(name);
         }),
         StoreEffect::RescanTable { name } => {
@@ -190,20 +132,6 @@ fn apply(to: Settle, engine: &EngineCtx, effect: &StoreEffect) -> bool {
         | StoreEffect::PreparedChanged
         | StoreEffect::RemoteRelationsChanged => true,
     }
-}
-
-/// One def mutation, whole: take the guard on `chan`, apply `write`, and persist at the mutation
-/// point. Answers whether the defs actually reached `project.json`.
-///
-/// The catalog generation is adopted by [`settle`] before any arm runs, and on **either** arm of
-/// this write, deliberately — validation resolves against the engine, not the project file, so a
-/// mutation whose write failed has moved what every tab's diagnostics should say just as much as
-/// one whose write landed (`save_view` settled the same point).
-fn mutated(to: Settle, chan: ProjChan, write: impl FnOnce(&mut ProjectState)) -> bool {
-    let mut project = to.project;
-    let mut p = project.write_channel(chan);
-    write(&mut p);
-    persisted_defs(&p, to.report)
 }
 
 /// Statement-fold tests — the arm that has no def to write and therefore no store mutation to
@@ -232,8 +160,7 @@ mod tests {
 
     use super::*;
 
-    /// `use_statement_settle`'s body with the query replaced by a report handed in — the fold is
-    /// what is under test, and a real `UseQuery` would only add the press that produced one.
+    /// Applies a report through the window’s real stores.
     #[derive(PartialEq)]
     struct Fold {
         report: StatementReport,

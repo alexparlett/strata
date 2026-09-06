@@ -22,5 +22,5 @@ pub mod target;
 pub use classify::{classify_stmt, Classified, Fault, Form, StmtKind};
 pub use mechanism::{mechanism, Mechanism};
 pub use pipeline::{PolicyRefusal, Reason, Refusal};
-pub use report::{StatementOutcome, StatementReport, StoreEffect, Unsettled};
+pub use report::{Persistence, StatementOutcome, StatementReport, StoreEffect, Unsettled};
 pub use target::{Remote, Target};

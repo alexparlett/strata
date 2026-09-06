@@ -14,6 +14,9 @@
 //! its sources relative to that bucket instead, and [`resolve_source`] is where the two
 //! rules meet.
 
+mod store;
+pub use store::ProjectStore;
+
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt;

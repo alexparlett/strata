@@ -13,6 +13,7 @@
 //! the run reports against the app's current one, and reads page 1 through [`PageSpec`] like any
 //! other page when they differ.
 
+use crate::apps::project::state::use_settle;
 use std::rc::Rc;
 
 use freya::prelude::*;
@@ -175,7 +176,7 @@ impl Component for ResultsBody {
     #[allow(clippy::too_many_lines)]
     fn render(&self) -> impl IntoElement {
         let engine = use_consume::<EngineCtx>();
-        let query = use_query(self.spec.query(&engine));
+        let query = use_query(self.spec.query(&engine, use_settle()));
 
         let run = self.spec.run;
         let mut running = self.running;

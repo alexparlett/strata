@@ -1,5 +1,7 @@
 //! Engine construction. See [`EngineBuilder`].
 
+use strata_core::project::ProjectStore;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -51,6 +53,7 @@ static ENGINE_SEQ: AtomicU64 = AtomicU64::new(0);
 pub struct EngineBuilder {
     config: BTreeMap<String, String>,
     data_dir: Option<PathBuf>,
+    project: Option<ProjectStore>,
     secrets: Arc<dyn SecretProvider>,
     udfs: Vec<Arc<dyn UdfPackage>>,
     memory_pool: Option<Arc<dyn MemoryPool>>,
@@ -69,6 +72,7 @@ impl Default for EngineBuilder {
         let builder = Self {
             config: BTreeMap::new(),
             data_dir: None,
+            project: None,
             secrets: Arc::new(KeystoreSecrets),
             udfs: vec![Arc::new(crate::udfs::StrataFunctions)],
             memory_pool: None,
@@ -91,6 +95,13 @@ impl Default for EngineBuilder {
 }
 
 impl EngineBuilder {
+    /// Persists statement definitions through `project` and uses its folder for internal data.
+    pub fn with_project_store(mut self, project: ProjectStore) -> Self {
+        self.data_dir = Some(project.root().to_path_buf());
+        self.project = Some(project);
+        self
+    }
+
     /// Creates an `EngineBuilder` with default settings.
     pub fn new() -> Self {
         Self::default()
@@ -221,6 +232,13 @@ impl EngineBuilder {
     /// The engine owns a Tokio runtime and a snapshot directory, both released when the last
     /// handle to it is dropped.
     pub fn build(self) -> Arc<Engine> {
+        if let Some(project) = &self.project {
+            assert_eq!(
+                self.data_dir.as_deref(),
+                Some(project.root()),
+                "project store and internal data must share a root"
+            );
+        }
         let engine_id = ENGINE_SEQ.fetch_add(1, Ordering::Relaxed);
         let rt = RuntimeBuilder::new_multi_thread()
             .worker_threads(2)
@@ -239,6 +257,7 @@ impl EngineBuilder {
             .unwrap_or_else(|| Arc::new(LocalIpcTableStore::following(Arc::clone(&data_root))));
         Arc::new_cyclic(|self_ref| Engine {
             engine_id,
+            project: self.project,
             self_ref: self_ref.clone(),
             rt: Some(rt),
             ctx,

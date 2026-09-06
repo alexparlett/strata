@@ -14,13 +14,8 @@
 //! its guarantor must live exactly as long as the open project, not as long as whichever
 //! layout happens to show the workbench.
 //!
-//! The pin is therefore also the app's **settle observer**, and owns everything a run leaves
-//! behind: **history** (P4-14, successful runs), the **event log** (P3-13, every outcome), and
-//! an intercepted statement's **`StoreEffect`** (ED-02, folded into the project stores). It
-//! observes the press settle even while its tab is backgrounded, so all three land at the run's
-//! real completion time rather than whenever the tab is next revisited. (One narrow edge remains
-//! for all of them: a run whose settle lands in the same update pass that unmounts its pin — a
-//! supersede at the instant of completion — is not recorded.)
+//! The pin observes history and query logging, including background tabs; statement definitions
+//! are committed by the engine and their window projection runs inside the query capability.
 
 use freya::prelude::*;
 use freya::query::use_query;
@@ -30,7 +25,7 @@ use strata_model::TabId;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::QuerySpec;
 use crate::apps::project::state::{
-    use_history_recording, use_run_logging, use_statement_settle, Chan, SessionState,
+    use_history_recording, use_run_logging, use_settle, Chan, SessionState,
 };
 
 /// One keeper per open tab, rendered invisibly at the project root. Subscribes the tab
@@ -108,10 +103,9 @@ impl KeyExt for RequestPin {
 impl Component for RequestPin {
     fn render(&self) -> impl IntoElement {
         let engine = use_consume::<EngineCtx>();
-        let query = use_query(self.spec.query(&engine));
+        let query = use_query(self.spec.query(&engine, use_settle()));
         use_history_recording(query, self.spec.run, self.spec.sql.clone());
         use_run_logging(query);
-        use_statement_settle(query);
         rect()
     }
 

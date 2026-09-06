@@ -122,12 +122,11 @@ mod tests {
     use strata_model::{ChartSeries, QueryOutput};
 
     use super::*;
-    use crate::apps::project::query::{QueryMode, QueryOutcome, QuerySpec, RunId, RunQuery};
+    use crate::apps::project::query::{QueryMode, QueryOutcome, QuerySpec, RunId};
     use strata_model::TabId;
 
     /// A settled Run's snapshot, so the chart read has something real to read.
     fn snapshot(engine: &EngineCtx, sql: &str) -> QueryOutput {
-        let run = RunQuery(engine.captured());
         let spec = QuerySpec {
             tab: TabId::new(),
             run: RunId::new(),
@@ -135,7 +134,10 @@ mod tests {
             mode: QueryMode::Run,
             page_size: 10,
         };
-        let QueryOutcome::Rows(page) = block_on(run.run(&spec)).expect("run") else {
+        let QueryOutcome::Rows(page) =
+            super::super::run_query::tests::with_run(engine, |run| block_on(run.run(&spec)))
+                .expect("run")
+        else {
             panic!("mode Run settles to rows");
         };
         page.output

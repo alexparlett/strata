@@ -148,6 +148,24 @@ async fn create(
         ));
     };
 
+    let _creating = cx.internal.creating.lock().await;
+    let slug = table_slug(&name);
+    let folded_name = fold_ident(&name);
+    let collision = cx
+        .internal
+        .names
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|other| *other != &folded_name && table_slug(other) == slug)
+        .cloned();
+    if let Some(other) = collision {
+        return Err(format!("Table '{name}' shares storage with '{other}'"));
+    }
+    if !cx.internal.contains(&name) && cx.tables.provider(ctx, &slug).await?.is_some() {
+        return Err(format!("Storage for table '{name}' already exists"));
+    }
+
     let replacing = match existing(ctx, &name).await {
         Some(TableType::View) => return Err(format!("'{name}' is a view")),
         Some(_) if if_not_exists => {
@@ -168,7 +186,6 @@ async fn create(
         .verify_plan(&input)
         .map_err(|e| e.to_string())?;
 
-    let slug = table_slug(&name);
     let dir = tables_dir(&root).join(&slug);
     let stream = DataFrame::new(ctx.state(), input.as_ref().clone())
         .execute_stream()
@@ -201,6 +218,7 @@ async fn create(
         Err(e) => return Err(e),
     };
 
+    cx.internal.note(&name, true);
     let verb = if replacing { "replaced" } else { "created" };
     Ok(StatementOutcome {
         message: format!("Table '{name}' {verb}, {}", plural(rows as usize, "row")),
@@ -604,23 +622,7 @@ fn table_slug(name: &str) -> String {
     slug(&fold_ident(name))
 }
 
-/// The directory name that holds `name`'s data — the folded table name where that is already a
-/// safe file name, and a sanitized form plus a short hash of the original where it is not.
-///
-/// The hash is what keeps the mapping injective: `sales eu` and `sales/eu` both sanitize to
-/// `sales_eu`, and two tables sharing a directory would overwrite each other's data. It is only
-/// paid by a name that needed sanitizing, so the ordinary table's directory is simply its name —
-/// which matters, because that path is written into `project.json` and read by people.
-///
-/// **Injective within each half, and the halves can in principle meet**: `sales eu` slugs to
-/// `sales_eu-<hash>`, and a table literally named `sales_eu-<that same hash>` is all legal
-/// characters, so it takes the shortcut and lands in the same directory. Hashing safe names that
-/// *look* hashed would close that, and it is deliberately not done — this function's answer is
-/// the slug an **existing** table's data is already held under, and [`table_slug`] re-derives it
-/// from the name on every drop. Changing the rule would therefore move the slug of tables already on
-/// disk, whose drop would then delete a path that does not exist and orphan the real one forever
-/// (the failure the one-drop funnel exists to prevent). A collision that needs a user to
-/// name one table the hash of another is the smaller hazard, and it is the one that stays.
+/// Preserves existing storage keys; creates reject a key already owned by another name.
 fn slug(name: &str) -> String {
     let safe: String = name
         .chars()
@@ -1379,6 +1381,46 @@ mod tests {
             "and the write landed on the one table either spelling means"
         );
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn a_quoted_mixed_case_table_does_not_collide_with_itself() {
+        let root = scratch("quoted-replace");
+        let eng = engine(&root, BTreeMap::new());
+        statement(&eng, r#"CREATE TABLE "MyTable" AS SELECT 1 AS n"#)
+            .await
+            .expect("created");
+
+        let noop = statement(
+            &eng,
+            r#"CREATE TABLE IF NOT EXISTS "MyTable" AS SELECT 2 AS n"#,
+        )
+        .await
+        .expect("already exists");
+        assert_eq!(noop.message, "Table 'MyTable' already exists");
+        assert_eq!(noop.effect, None);
+        assert_eq!(
+            read(&eng, r#"SELECT n FROM "MyTable""#).await,
+            vec![vec!["1"]]
+        );
+        assert_eq!(
+            statement(&eng, r#"CREATE TABLE "MyTable" AS SELECT 2 AS n"#)
+                .await
+                .expect_err("duplicate"),
+            "Table 'MyTable' already exists"
+        );
+        let replaced = statement(
+            &eng,
+            r#"CREATE OR REPLACE TABLE "MyTable" AS SELECT 3 AS n"#,
+        )
+        .await
+        .expect("replaced");
+        assert_eq!(replaced.message, "Table 'MyTable' replaced, 1 row");
+        assert_eq!(
+            read(&eng, r#"SELECT n FROM "MyTable""#).await,
+            vec![vec!["3"]]
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     /// **A table's per-file statistics land in the runtime's cache**, one entry per file, so a

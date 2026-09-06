@@ -382,48 +382,49 @@ mod tests {
         }
     }
 
-    /// A store built inline — never a production signature bent to be testable.
-    /// One registered table with a partition key, one view over it, one saved query, and one
-    /// table the engine refused.
+    /// A project containing registered rows and a failed table.
     fn store() -> ProjectState {
-        ProjectState {
-            name: "sales".to_string(),
-            root: PathBuf::from("/data/sales"),
-            sources: Vec::new(),
-            tables: vec![
-                table(
-                    "orders",
-                    &["country"],
-                    Some(TableMeta {
-                        columns: vec![
-                            column("order_id", DataType::Int64),
-                            column("country", DataType::Utf8),
-                        ],
-                        rows: Some(1_000),
-                    }),
-                ),
-                table("broken", &[], None),
-            ],
-            views: vec![ViewRow {
-                def: ViewDef {
-                    name: "revenue".to_string(),
-                    sql: "SELECT 1".to_string(),
-                },
-                info: Some(ViewMeta {
-                    columns: vec![column("total", DataType::Float64)],
-                    tables: vec!["orders".to_string()],
-                    remote: Vec::new(),
-                    views: Vec::new(),
+        let mut project = ProjectState::from_defs(
+            strata_core::project::ProjectDefs {
+                name: "sales".into(),
+                ..Default::default()
+            },
+            PathBuf::from("/data/sales"),
+        );
+        project.tables = vec![
+            table(
+                "orders",
+                &["country"],
+                Some(TableMeta {
+                    columns: vec![
+                        column("order_id", DataType::Int64),
+                        column("country", DataType::Utf8),
+                    ],
+                    rows: Some(1_000),
                 }),
-                profile: None,
-            }],
-            saved_queries: vec![SavedQuery {
-                id: Uuid::nil(),
-                name: "top countries".to_string(),
+            ),
+            table("broken", &[], None),
+        ];
+        project.views = vec![ViewRow {
+            def: ViewDef {
+                name: "revenue".to_string(),
                 sql: "SELECT 1".to_string(),
-                meta: String::new(),
-            }],
-        }
+            },
+            info: Some(ViewMeta {
+                columns: vec![column("total", DataType::Float64)],
+                tables: vec!["orders".to_string()],
+                remote: Vec::new(),
+                views: Vec::new(),
+            }),
+            profile: None,
+        }];
+        project.saved_queries = vec![SavedQuery {
+            id: Uuid::nil(),
+            name: "top countries".to_string(),
+            sql: "SELECT 1".to_string(),
+            meta: String::new(),
+        }];
+        project
     }
 
     /// The labels a group's rows carry, read back out of the flat result list.

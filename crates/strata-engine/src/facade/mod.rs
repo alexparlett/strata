@@ -181,8 +181,15 @@ mod tests {
         let mut inside = false;
         for line in src.lines() {
             if line.starts_with("impl") {
-                inside = line.starts_with(&format!("impl {ty} "))
-                    || line.starts_with(&format!("impl {ty}<"));
+                let header = line
+                    .strip_prefix("impl ")
+                    .or_else(|| {
+                        line.strip_prefix("impl<")
+                            .and_then(|rest| rest.split_once("> ").map(|(_, ty)| ty))
+                    })
+                    .unwrap_or_default();
+                inside =
+                    header.starts_with(&format!("{ty} ")) || header.starts_with(&format!("{ty}<"));
                 continue;
             }
             if line == "}" {
