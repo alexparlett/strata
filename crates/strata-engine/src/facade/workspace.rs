@@ -2,6 +2,7 @@
 
 use strata_arrow::plan::QueryPlan;
 
+use crate::lifecycle::ClassifyGuard;
 use crate::policy::{Capability, Principal};
 use crate::query::ReadPolicy;
 use crate::statements::arms;
@@ -21,7 +22,7 @@ pub struct Workspace<'a> {
     pub(super) ws: WsId,
 }
 
-impl Workspace<'_> {
+impl<'a> Workspace<'a> {
     /// Runs `sql`, as a query or as a statement the engine performs itself.
     ///
     /// One pipeline in front of dispatch, the same one [`Lang::analyze`](crate::Lang::analyze)
@@ -56,23 +57,10 @@ impl Workspace<'_> {
         let ws = self.ws;
         let engine = self.engine;
         let who = Principal::new(Capability::full()).in_session(ws);
-        let admitted = {
-            let ctx = engine.ctx.clone();
-            let policy = engine.policy.clone();
-            let who = who.clone();
-            let sql = sql.clone();
-            engine
-                .classify_bracket(ws, tag, async move {
-                    let pipeline = Pipeline::new(&ctx);
-                    accept(&pipeline, &sql, policy.as_ref(), &who)
-                        .await
-                        .map_err(EngineError::Refused)
-                })
-                .await?
-        };
+        let (admitted, admission) = self.admit(tag, sql.clone(), who.clone()).await?;
         match admitted {
             Admitted::Query { stmt, policy, .. } => engine
-                .read(ws, tag, stmt.into_statement(), page_size, policy)
+                .read(ws, tag, stmt.into_statement(), page_size, policy, admission)
                 .await
                 .map(RunOutcome::Rows),
             Admitted::Statement { kind, stmt, .. } => {
@@ -93,12 +81,17 @@ impl Workspace<'_> {
                     baseline: engine.overrides(),
                     policy: engine.policy.clone(),
                 };
-                let ran = engine
-                    .bookkeep(ws, tag, "statement", async move {
-                        arms::execute(kind, stmt, &who, cx).await
+                let owner = engine.self_ref.clone();
+                let report = engine
+                    .bookkeep(ws, tag, "statement", admission, async move {
+                        let ran = arms::execute(kind, stmt, &who, cx).await?;
+                        let engine = owner.upgrade().ok_or_else(|| {
+                            "Engine closed before statement completion".to_string()
+                        })?;
+                        Ok(engine.settle_effect(ran))
                     })
                     .await?;
-                Ok(RunOutcome::Statement(engine.settle_effect(ran)))
+                Ok(RunOutcome::Statement(report))
             }
         }
     }
@@ -118,21 +111,47 @@ impl Workspace<'_> {
         sql: String,
         page_size: usize,
     ) -> Result<RunRows, EngineError> {
-        let stmt = self.engine.parse_one(&sql)?;
+        let who = Principal::new(Capability::read_only()).in_session(self.ws);
+        let (admitted, admission) = self.admit(tag, sql, who).await?;
         self.engine
-            .read(self.ws, tag, stmt, page_size, ReadPolicy::default())
+            .read(
+                self.ws,
+                tag,
+                admitted.into_statement(),
+                page_size,
+                ReadPolicy::default(),
+                admission,
+            )
             .await
     }
 
-    /// Run an `EXPLAIN [ANALYZE]` statement — a parsed plan tree, no snapshot.
-    /// Supersedes the workspace's in-flight run (mutually exclusive, like a re-run) but
-    /// leaves its settled snapshot alone (spec §4: explains materialize nothing).
+    /// Builds a read-only plan, enforcing the engine's policy before planning or execution.
     pub async fn explain(self, tag: RunTag, sql: String) -> Result<QueryPlan, EngineError> {
-        let stmt = self.engine.parse_one(&sql)?;
+        let who = Principal::new(Capability::read_only()).in_session(self.ws);
+        let (admitted, admission) = self.admit(tag, sql, who).await?;
+        let stmt = admitted.into_statement();
         let ctx = self.engine.ctx.clone();
         self.engine
-            .bookkeep(self.ws, tag, "explain", async move {
+            .bookkeep(self.ws, tag, "explain", admission, async move {
                 explain::run_explain(&ctx, stmt).await
+            })
+            .await
+    }
+
+    async fn admit(
+        self,
+        tag: RunTag,
+        sql: String,
+        who: Principal,
+    ) -> Result<(Admitted, ClassifyGuard<'a>), EngineError> {
+        let ctx = self.engine.ctx.clone();
+        let policy = self.engine.policy.clone();
+        self.engine
+            .classify_bracket(self.ws, tag, async move {
+                let pipeline = Pipeline::new(&ctx);
+                accept(&pipeline, &sql, policy.as_ref(), &who)
+                    .await
+                    .map_err(EngineError::Refused)
             })
             .await
     }
@@ -153,21 +172,23 @@ impl Workspace<'_> {
     /// press meant.
     pub fn cancel(self, tag: RunTag) -> Option<u128> {
         let mut lc = self.engine.lifecycle.lock().unwrap();
+        let mut elapsed = None;
         if lc.inflight.get(&self.ws).map(|f| f.tag) == Some(tag) {
             let f = lc.inflight.remove(&self.ws).unwrap();
-            let elapsed = f.start.elapsed().as_millis();
+            elapsed = Some(f.start.elapsed().as_millis());
             self.engine.abort_inflight(f);
-            self.engine.publish_inflight(&lc);
-            return Some(elapsed);
         }
-        if lc.classifying.get(&self.ws).map(|c| c.tag) == Some(tag) {
-            let c = lc.classifying.remove(&self.ws).unwrap();
-            let elapsed = c.start.elapsed().as_millis();
-            c.abort.abort();
-            self.engine.publish_inflight(&lc);
-            return Some(elapsed);
-        }
-        None
+        lc.classifying.retain(|(ws, _), pending| {
+            if *ws == self.ws && pending.tag == tag {
+                elapsed = Some(pending.start.elapsed().as_millis());
+                pending.abort.abort();
+                false
+            } else {
+                true
+            }
+        });
+        self.engine.publish_inflight(&lc);
+        elapsed
     }
 
     /// Tear the workspace down (tab close): abort its in-flight run — or the statement it is
@@ -183,9 +204,14 @@ impl Workspace<'_> {
         if let Some(f) = lc.inflight.remove(&self.ws) {
             self.engine.abort_inflight(f);
         }
-        if let Some(c) = lc.classifying.remove(&self.ws) {
-            c.abort.abort();
-        }
+        lc.classifying.retain(|(ws, _), pending| {
+            if *ws == self.ws {
+                pending.abort.abort();
+                false
+            } else {
+                true
+            }
+        });
         if let Some(snap) = lc.current.remove(&self.ws) {
             self.engine.retire_or_defer(&mut lc, snap);
         }
@@ -201,6 +227,6 @@ impl Workspace<'_> {
     /// is happening (`Classifying`).
     pub fn is_running(self) -> bool {
         let lc = self.engine.lifecycle.lock().unwrap();
-        lc.inflight.contains_key(&self.ws) || lc.classifying.contains_key(&self.ws)
+        lc.inflight.contains_key(&self.ws) || lc.classifying.keys().any(|(ws, _)| *ws == self.ws)
     }
 }

@@ -151,8 +151,9 @@ pub fn use_init_project(
     root: PathBuf,
     loaded: Rc<Loaded>,
 ) -> RadioStation<ProjectState, ProjChan> {
+    assert_eq!(loaded.store.root(), root);
     let station = use_init_radio_station::<ProjectState, ProjChan>(move || {
-        ProjectState::from_defs(loaded.defs.clone(), root)
+        ProjectState::from_store(loaded.store.clone())
     });
     let catalog = use_init_catalog();
     let registrations = use_init_registrations(engine, catalog);
@@ -381,7 +382,7 @@ async fn scan_catalog(
 /// still only ever built full, never a rootless default. No derives: the window holds it
 /// behind an `Rc` whose pointer is its identity (built once per mount).
 pub struct Loaded {
-    pub defs: ProjectDefs,
+    pub store: project_io::ProjectStore,
     pub session: Option<SessionSnapshot>,
 }
 
@@ -397,7 +398,10 @@ pub fn open_project(root: &Path) -> Result<Loaded, String> {
         project_io::scaffold(root)
     }?;
     let session = restore_session(root)?;
-    Ok(Loaded { defs, session })
+    Ok(Loaded {
+        store: project_io::ProjectStore::new(root.to_path_buf(), defs),
+        session,
+    })
 }
 
 /// [`open_project`] **off the render thread** — what `ProjectRoot`'s loading arm awaits, and
@@ -902,7 +906,7 @@ mod tests {
         let loaded = open_project(&root).unwrap();
 
         assert_eq!(
-            loaded.defs.name,
+            loaded.store.snapshot().name,
             root.file_name().unwrap().to_string_lossy()
         );
         assert!(loaded.session.is_none(), "no session yet");

@@ -83,6 +83,23 @@
 //! The `settled` closure is called per def as the engine answers for it, so a host can flip one
 //! row at a time rather than waiting for the pass.
 //!
+//! # Saving statement definitions
+//!
+//! Supply a shared [`ProjectStore`](strata_core::project::ProjectStore) when executed statements
+//! should update a project's definitions before their reports are returned. Load or scaffold the
+//! definitions first; configuring the store does not register its catalog. Inspect
+//! [`StatementReport::persistence`](crate::StatementReport::persistence) for write failures and
+//! retry through the store. Without this option, the embedder saves each report's effect itself.
+//!
+//! ```
+//! use strata_core::project::{ProjectDefs, ProjectStore};
+//! use strata_engine::Engine;
+//!
+//! let store = ProjectStore::new("/data/lake".into(), ProjectDefs::default());
+//! let engine = Engine::builder().with_project_store(store.clone()).build();
+//! assert_eq!(store.root(), std::path::Path::new("/data/lake"));
+//! ```
+//!
 //! # Connecting a database
 //!
 //! A database is a **data source**: one def, connected once, and its whole catalog is queryable.

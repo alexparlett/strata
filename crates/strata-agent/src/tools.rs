@@ -21,10 +21,8 @@
 //!
 //! Three rules are enforced here and nowhere else:
 //!
-//! - **The policy gate runs before dispatch.** `Workspace::query` does not enforce the managed-DDL
-//!   policy — the editor simply never dispatches what validation flagged, and an agent cannot be
-//!   trusted with that discipline. `run` asks `Lang::policy_verdicts` and refuses on any
-//!   non-clean answer, an unjudgeable one included: the gate fails closed.
+//! - **Execution enforces policy.** The host calls the engine's read-only entry points;
+//!   policy refusals are translated here into the tool vocabulary.
 //! - **A stop is not a fault.** `EngineError::Stopped` is matched once, here.
 //! - **`run` never rewrites SQL.** No injected `LIMIT`; the *response* is bounded by `page_size`
 //!   plus `read_page`.
@@ -51,7 +49,7 @@ use rmcp::model::{JsonObject, ProtocolVersion};
 use rmcp::service::Peer;
 use rmcp::{tool, tool_handler, tool_router, ErrorData, RoleServer, ServerHandler};
 use serde_json::Value;
-use strata_engine::{Engine, EngineError};
+use strata_engine::{Engine, EngineError, PolicyRefusal, Reason};
 use strata_model::{PageQuery, SnapshotId};
 use uuid::Uuid;
 
@@ -973,20 +971,15 @@ impl<H: Host> StrataTools<H> {
             return Err(AgentError::Query("The query is empty.".into()));
         }
 
-        match engine.lang().policy_verdicts(params.sql.clone()).await {
-            Err(e) => return Err(AgentError::Query(e.to_string())),
-            Ok(refusals) if !refusals.is_empty() => return Err(AgentError::Policy(refusals)),
-            Ok(_) => {}
-        }
-
         let mode = RunMode::from(params.mode.unwrap_or_default());
         let page_size = self.resolved_page_size(params.page_size);
 
+        let sql = params.sql;
         let settled = self
             .host
-            .run(&project.root, agent, session, params.sql, mode, page_size)
+            .run(&project.root, agent, session, sql.clone(), mode, page_size)
             .await?;
-        if mode == RunMode::Run {
+        if mode == RunMode::Run && !matches!(&settled, Err(EngineError::Refused(_))) {
             self.forget(agent, &project.root, session);
         }
         let handle = params.query_session;
@@ -1010,6 +1003,15 @@ impl<H: Host> StrataTools<H> {
                 query_session: handle,
                 reason: stop.to_string(),
             }),
+            Err(EngineError::Refused(refusal))
+                if matches!(refusal.reason, Reason::Policy { .. }) =>
+            {
+                Err(AgentError::Policy(vec![PolicyRefusal {
+                    index: 0,
+                    statement: sql,
+                    reason: refusal.reason,
+                }]))
+            }
             Err(e) => Err(AgentError::Query(e.to_string())),
         }
     }
@@ -1376,7 +1378,7 @@ mod tests {
     use std::fs;
     use std::{env, process};
 
-    use strata_engine::{DenyCode, Form, Reason, StmtKind};
+    use strata_engine::{DenyCode, Form, StmtKind};
     use strata_engine::{EngineError, RunTag, StopReason, TableSpec, WsId};
     use strata_model::SourceFormat;
 
@@ -2181,6 +2183,10 @@ mod tests {
     async fn run_refuses_blocked_ddl_with_the_editors_message() {
         let (_root, tools) = one_project("policy").await;
         let session = open(&tools).await;
+        tools
+            .run(run_params(&session, "SELECT id FROM people"))
+            .await
+            .unwrap();
         let Err(e) = tools
             .run(run_params(
                 &session,
@@ -2198,6 +2204,15 @@ mod tests {
             }
             .message()
         );
+        assert!(tools
+            .read_page(ReadPageParams {
+                query_session: session,
+                page: 1,
+                sort: None,
+                project: None,
+            })
+            .await
+            .is_ok());
     }
 
     /// Fail closed: input that cannot be judged is never a policy pass.

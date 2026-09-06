@@ -416,9 +416,10 @@ renders one invisible subscriber per open tab's current request (subscribing the
 `Chan::Tabs`; each keeper tracks its own tab on `Chan::Request(id)`). While a press is some
 tab's `request`, its entry is held live; superseded / cancelled / tab closed, the pin unmounts
 and the entry ages out on freya-query's own clean time. No imperative cache management —
-lifetime *is* mount. The keeper's pin is also the app's **settle observer**: history (§8), the
-run's log entry (§9) and a statement's `StoreEffect` fold all land there, at the run's real
-completion time, even for a backgrounded tab.
+lifetime *is* mount. The keeper's pin observes history (§8) and query logging (§9), including backgrounded tabs.
+Statement definitions are saved inside the engine's execution task through a shared `ProjectStore`;
+`RunQuery` projects their reports into the window before returning, independently of the pin.
+UI definition edits merge against their saved projection so they preserve unseen engine changes.
 
 **Run→Cancel**: the toolbar's Run control flips to Cancel while the press is in
 flight — but it can't derive that from `request` (which stays `Some` after settle, keeping the
@@ -763,7 +764,7 @@ crates/strata-freya/src/
       log.rs          the event-log satellite + use_run_logging (§8)
       agents.rs       the agents satellite (AA-03b, §8)
       agent.rs        use_agent_bridge — the window's agent ask/notice driver
-      statement.rs    use_statement_settle — folds an intercepted statement's StoreEffect
+      statement.rs    settle — projects statement effects and reports persistence outcomes
       persist.rs      the .strata write-failure funnel (persisted / persisted_defs / persisted_session)
       engine_config.rs use_engine_config + EngineRestart — Settings ▸ Engine driver (§7)
       hooks.rs        use_init_session / use_init_project / use_init_history / use_autosave

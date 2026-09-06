@@ -88,4 +88,4 @@ pub use project::{FaultKind, ProjChan, ProjectState};
 pub use project::{TableRow, ViewRow};
 pub use session::{ProblemGroup, QueryTab, SessionState, Stamp};
 pub use sources::{assemble, SourceContents, SourceNode};
-pub use statement::{settle, use_settle, use_statement_settle, Settle};
+pub use statement::{settle, use_settle, Settle};
