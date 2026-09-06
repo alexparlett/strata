@@ -150,13 +150,14 @@ async fn create(
 
     let _creating = cx.internal.creating.lock().await;
     let slug = table_slug(&name);
+    let folded_name = fold_ident(&name);
     let collision = cx
         .internal
         .names
         .lock()
         .unwrap()
         .iter()
-        .find(|other| *other != &name && table_slug(other) == slug)
+        .find(|other| *other != &folded_name && table_slug(other) == slug)
         .cloned();
     if let Some(other) = collision {
         return Err(format!("Table '{name}' shares storage with '{other}'"));
@@ -1380,6 +1381,46 @@ mod tests {
             "and the write landed on the one table either spelling means"
         );
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn a_quoted_mixed_case_table_does_not_collide_with_itself() {
+        let root = scratch("quoted-replace");
+        let eng = engine(&root, BTreeMap::new());
+        statement(&eng, r#"CREATE TABLE "MyTable" AS SELECT 1 AS n"#)
+            .await
+            .expect("created");
+
+        let noop = statement(
+            &eng,
+            r#"CREATE TABLE IF NOT EXISTS "MyTable" AS SELECT 2 AS n"#,
+        )
+        .await
+        .expect("already exists");
+        assert_eq!(noop.message, "Table 'MyTable' already exists");
+        assert_eq!(noop.effect, None);
+        assert_eq!(
+            read(&eng, r#"SELECT n FROM "MyTable""#).await,
+            vec![vec!["1"]]
+        );
+        assert_eq!(
+            statement(&eng, r#"CREATE TABLE "MyTable" AS SELECT 2 AS n"#)
+                .await
+                .expect_err("duplicate"),
+            "Table 'MyTable' already exists"
+        );
+        let replaced = statement(
+            &eng,
+            r#"CREATE OR REPLACE TABLE "MyTable" AS SELECT 3 AS n"#,
+        )
+        .await
+        .expect("replaced");
+        assert_eq!(replaced.message, "Table 'MyTable' replaced, 1 row");
+        assert_eq!(
+            read(&eng, r#"SELECT n FROM "MyTable""#).await,
+            vec![vec!["3"]]
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     /// **A table's per-file statistics land in the runtime's cache**, one entry per file, so a
