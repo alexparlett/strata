@@ -34,13 +34,13 @@
 use freya::components::get_theme;
 use freya::components::{MenuItem, ScrollView, Select, SelectThemePartial};
 use freya::prelude::*;
-use freya::radio::{Radio, use_radio};
+use freya::radio::{use_radio, Radio};
 use strata_arrow::MAX_BINS;
 use strata_model::{ChartConfig, ChartMark, ChartSort, ChartX, TabId};
 
 use super::config::{
-    Encoding, Roles, allows_row_index, log_axis, reads_bounds, reads_quartiles, series_options,
-    series_required, sortable, takes_many_ys, trendable, x_options, y_options,
+    allows_row_index, log_axis, reads_bounds, reads_quartiles, series_options, series_required,
+    sortable, takes_many_ys, trendable, x_options, y_options, Encoding, Roles,
 };
 use super::{ChartTheme, ChartThemePartial, ChartThemePreference};
 use crate::apps::project::state::{Chan, SessionState};
@@ -1023,8 +1023,8 @@ fn tile_dress(theme: &ChartTheme, selected: bool, hovered: bool) -> (Color, Colo
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field};
     use freya::radio::RadioStation;
-    use freya_testing::TestingRunner;
     use freya_testing::prelude::{KeyboardEventName, PlatformEvent};
+    use freya_testing::TestingRunner;
     use strata_arrow::column_info;
     use strata_core::theme::load;
     use strata_model::{Axis, ChartData, ChartSeries, ColumnInfo, Origin};

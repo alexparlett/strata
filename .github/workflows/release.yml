@@ -1,14 +1,26 @@
 name: Release
 
-# Build Strata into a DMG, and publish it as a release when there is one to publish.
+# Build Strata for macOS and Linux, and publish both as a release when there is one to publish.
+#
+# **Five jobs, and the shape is the point.** `gate` notices a release; `version` decides what it is
+# called, once, before anything compiles; `macos` and `linux` build side by side; `publish` waits
+# for both and is the only job that writes to the repository.
+#
+#   gate ─→ version ─┬─→ macos ──┐
+#                    └─→ linux ──┴─→ publish
+#
+# That split is what lets a release carry two artifacts without either build waiting on the other —
+# a 150-minute universal macOS build in front of a 20-minute AppImage, or the other way round, is
+# most of a release's wall-clock for no reason. It also means the job holding the signing secrets
+# no longer holds `contents: write`, and the job that tags no longer holds a toolchain.
 #
 # The everyday path is a merge rather than a press: `scripts/release-pr.sh` opens the pull request
 # that moves the version, and merging it is what makes the release. Either way the publishing
-# happens *after* the build succeeds - a published release's tag cannot be moved or deleted, so
+# happens *after* both builds succeed - a published release's tag cannot be moved or deleted, so
 # tagging first would let a failed build leave a permanent tag behind.
 #
 # Run by hand from the Actions tab (Release -> Run workflow), the release box is off by default: a
-# DMG appears as an artifact on the run page and nothing about the repository changes.
+# DMG and an AppImage appear as artifacts on the run page and nothing about the repository changes.
 #
 # This workflow does not write to the repository, and that is the whole shape of it. The version it
 # builds is whatever the workspace's `Cargo.toml` already says, so the DMG's name, the Info.plist
@@ -133,28 +145,32 @@ jobs:
           fi
           echo "build=true" >> "$GITHUB_OUTPUT"
           echo "::notice::Version moved $PREV -> $NOW. Building and publishing it."
-
-  bundle:
+  # **What this build calls itself**, resolved once and handed to everything below.
+  #
+  # It was a step inside the macOS job, which was fine while that job was also the only thing that
+  # published. It is not fine with two build jobs: each would resolve the version separately, and
+  # two answers to "which release is this" is one more than a release can have. The preflight that
+  # refuses an already-published tag also belongs here, before *any* runner spends time compiling —
+  # it used to guard two hours of macOS build and now guards two builds at once.
+  #
+  # Cheap by construction: it reads a manifest and asks GitHub about a tag. No toolchain, no cache,
+  # no cargo.
+  version:
     needs: gate
     if: needs.gate.outputs.build == 'true'
-    runs-on: macos-latest
-    # A cold universal build compiles DataFusion and links Skia twice over. The cache is keyed on
-    # the lockfile and this job runs rarely enough to miss it often, so size for cold.
-    timeout-minutes: 150
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
-      # Creating the tag and the release page. Nothing else needs writing - the version bump this
-      # job used to push is a pull request now.
-      contents: write
-      # For the release-notes step: claude-code-action authenticates over OIDC. Same grant the
-      # review workflow makes.
-      id-token: write
+      # Reading tags, and asking whether a release already exists.
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      publish: ${{ steps.version.outputs.publish }}
     steps:
       - uses: actions/checkout@v6
         with:
-          # The bundle script derives CFBundleVersion from `git rev-list --count HEAD`, which a
-          # shallow clone answers wrong - every build would call itself build 1 and macOS would
-          # stop seeing newer ones as newer. Full depth also brings the tags, which the version
-          # preflight and the release-notes range both read.
+          # Full depth for the tags the preflight and the notes range both read.
           fetch-depth: 0
 
       # Everything about *what this build calls itself*, decided before the two hours of compiling
@@ -226,7 +242,53 @@ jobs:
               exit 1
             fi
           fi
-
+  # The macOS half: the DMG a tester installs from, and the `.app.zip` the in-app updater fetches.
+  # Builds and uploads; publishing is `publish` below, so this job and `linux` run side by side
+  # instead of one waiting on the other.
+  macos:
+    needs: [gate, version]
+    if: needs.gate.outputs.build == 'true'
+    runs-on: macos-latest
+    # **The signing secrets live in an environment, not in the repository.**
+    #
+    # A repository secret is readable by any workflow in the repository — not by reading it back
+    # (GitHub never shows it again) but by *using* it: anyone who can push a branch can add a
+    # workflow that echoes the value somewhere. Log masking redacts it from logs and stops nothing
+    # else. So "write access" and "has the Developer ID key" were the same thing.
+    #
+    # An environment with a **deployment branch policy** closes that: the secrets are reachable only
+    # from `main` and `v*` tags, so a workflow on a branch cannot request them at all. Chosen over
+    # required reviewers deliberately — it is the rule that costs nothing at release time, and a
+    # release that pauses for a click is one people route around.
+    #
+    # A `workflow_dispatch` run from some other branch still builds; it simply does not get the
+    # secrets, and `bundle-macos.sh` degrades to an ad-hoc signature and says so. That is the
+    # behaviour that was already there for an unconfigured repository.
+    environment: release
+    # A cold universal build compiles DataFusion and links Skia twice over. The cache is keyed on
+    # the lockfile and this job runs rarely enough to miss it often, so size for cold.
+    timeout-minutes: 150
+    permissions:
+      # It builds and uploads an artifact. Creating the tag and the release page is `publish`'s
+      # grant now, which is the point of splitting them: the job holding the signing secrets no
+      # longer also holds `contents: write`.
+      contents: read
+    outputs:
+      # **How this build was signed**, for the install note `publish` writes. It used to be a step
+      # output read a few steps later in the same job; with the publish split it has to cross a job
+      # boundary, and a `steps.` reference that no longer resolves is not an error — it is an empty
+      # string, which reads as "unsigned" and would have put the Gatekeeper workaround on the
+      # release page for a properly notarized build.
+      cert: ${{ steps.signing.outputs.cert }}
+      notary: ${{ steps.signing.outputs.notary }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # The bundle script derives CFBundleVersion from `git rev-list --count HEAD`, which a
+          # shallow clone answers wrong - every build would call itself build 1 and macOS would
+          # stop seeing newer ones as newer. Full depth also brings the tags, which the version
+          # preflight and the release-notes range both read.
+          fetch-depth: 0
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
@@ -242,6 +304,12 @@ jobs:
       # Signing is opt-in and degrades honestly: with no secrets set the script ad-hoc signs and
       # says so, which is still a usable tester build. Adding these secrets is the only change
       # needed to start producing notarized ones - the script already takes that path.
+      #
+      # **They belong to the `release` environment, not to the repository** (see the note on this
+      # job). A repository secret is one any branch's workflow can use and therefore exfiltrate; an
+      # environment secret with a branch policy is not. Moving one is two steps in
+      # Settings -> Environments: add it there, then delete the repository-level copy - a secret
+      # that exists in both places still resolves, so leaving the old one is leaving the hole open.
       #
       #   MACOS_CERTIFICATE           base64 of a Developer ID Application .p12
       #   MACOS_CERTIFICATE_PASSWORD  the .p12 export password
@@ -323,12 +391,11 @@ jobs:
         run: |
           rm -f "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/cert.p12"
           security delete-keychain "$RUNNER_TEMP/build.keychain" 2>/dev/null || true
-
       # Always uploaded, published or not - this is how a build with the release box unticked
       # reaches a tester, and it is also the copy that survives if publishing fails.
       - uses: actions/upload-artifact@v4
         with:
-          name: strata-macos-${{ steps.version.outputs.version }}-${{ inputs.arch || 'universal' }}
+          name: strata-macos-${{ needs.version.outputs.version }}-${{ inputs.arch || 'universal' }}
           # The DMG a tester installs from, and the .app.zip the in-app updater fetches. The
           # notarize submission's own zip is deleted by the script before it gets here, so the
           # glob matches exactly the one archive.
@@ -336,14 +403,186 @@ jobs:
             target/dist/*.dmg
             target/dist/*.zip
           if-no-files-found: error
+          retention-days: 30  # The Linux half: one AppImage a user can chmod +x and run. `scripts/bundle-linux.sh` is the whole
+  # of it, for the reason the macOS script is — a release path that only exists in a workflow file
+  # is one nobody can debug.
+  #
+  # **ubuntu-22.04, deliberately, and not `ubuntu-latest`.** An AppImage carries its own libraries
+  # but never glibc, so the oldest glibc it can run against is the one it was *built* against.
+  # Building on 24.04 would need glibc 2.39 and refuse to start on Debian 12 or Ubuntu 22.04 — a
+  # large share of the people an AppImage exists for. 22.04 is glibc 2.35 and costs nothing else.
+  # (`linux` in ci.yml stays on `ubuntu-latest`: it proves the code compiles, which has no glibc
+  # floor to hold.)
+  linux:
+    needs: [gate, version]
+    if: needs.gate.outputs.build == 'true'
+    runs-on: ubuntu-22.04
+    # One architecture and no notarization, so well under the macOS job's — but still a cold
+    # DataFusion compile and a Skia download on a cache miss.
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # The script reads the short SHA for its build banner and `scripts/version.sh` for the
+          # number. Neither needs history, but the tags cost nothing here and keep this checkout
+          # the same shape as the other two.
+          fetch-depth: 0
+
+      # What the build links, derived from `ldd` on a built binary rather than copied from a
+      # template — the same list `docs/PLATFORMS.md` gives a person building by hand. gtk and
+      # libxdo are muda's Linux backend, OpenSSL rides the Postgres and MySQL table providers.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev libglib2.0-dev libgtk-3-dev libxdo-dev
+
+      # appimagetool is not packaged by any distribution, so the runner fetches the upstream
+      # release binary. Pinned to a release rather than `continuous`: a packaging tool that changes
+      # under a release build is a release that cannot be reproduced. The AppImage runtime it
+      # prepends needs FUSE to *run*, but not to be built, so nothing else is installed here.
+      - name: Install appimagetool
+        env:
+          APPIMAGETOOL_VERSION: "1.9.0"
+        run: |
+          set -euo pipefail
+          url="https://github.com/AppImage/appimagetool/releases/download/$APPIMAGETOOL_VERSION/appimagetool-x86_64.AppImage"
+          curl -fsSL --retry 3 -o /tmp/appimagetool "$url"
+          chmod +x /tmp/appimagetool
+          # Extracted rather than run: the runner has no FUSE, and an AppImage cannot mount itself
+          # without it. `--appimage-extract` is the documented way out and needs nothing.
+          ( cd /tmp && ./appimagetool --appimage-extract >/dev/null )
+          sudo install -m 755 /tmp/squashfs-root/AppRun /usr/local/bin/appimagetool
+          appimagetool --version
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+          cache-on-failure: false
+          # See the macOS job: this action defaults to `-D warnings`, which would fail a release on
+          # warnings the test workflow tolerates.
+          rustflags: ""
+
+      - name: Bundle
+        run: ./scripts/bundle-linux.sh
+
+      # Always uploaded, published or not — this is how a build with the release box unticked
+      # reaches a tester, and the copy that survives if publishing fails.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: strata-linux-${{ needs.version.outputs.version }}-x86_64
+          path: |
+            target/dist/*.AppImage
+            target/dist/*.AppImage.zsync
+          if-no-files-found: error
           retention-days: 30
+  # **Publishing, once both builds have something to publish.**
+  #
+  # Its own job because there are two artifacts now and a release carries both. Leaving the
+  # `gh release create` inside the macOS job would have meant either the Linux build waiting on the
+  # macOS one (serialising a 150-minute universal build in front of a 20-minute AppImage) or a
+  # release page that gets its AppImage attached some minutes after it appears. Neither is a release
+  # anyone wants to reason about.
+  #
+  # It compiles nothing. Both builds arrive as artifacts, and this job's work is notes, a tag and an
+  # upload — so it is the one job holding `contents: write`, and neither build job needs that grant
+  # any more.
+  #
+  # `needs` both builds, so a red build is a release that never happens rather than one published
+  # half-finished.
+  publish:
+    needs: [gate, version, macos, linux]
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The same environment, for the same reason: this job holds the Homebrew tap token and the
+    # notes token, and it is the only job with `contents: write`. See the note on `macos`.
+    environment: release
+    permissions:
+      # Creating the tag and the release page.
+      contents: write
+      # For the release-notes step: claude-code-action authenticates over OIDC.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # The notes step walks tags to find what this release covers, so it needs the history and
+          # the tags both.
+          fetch-depth: 0
+
+      # Both builds' output, back into `target/dist` where the publish and cask steps expect to
+      # find it — the same paths they read when this was one job.
+      - name: Collect the builds
+        uses: actions/download-artifact@v4
+        with:
+          path: target/dist
+          pattern: strata-*
+          merge-multiple: true
+
+      - name: What was built
+        run: ls -la target/dist
+
+      # **Sign every release asset with the project's own key.**
+      #
+      # Here rather than in either build job, deliberately: this is the only job that holds both
+      # artifacts, so one step covers both platforms and neither builder ever sees the key. The
+      # environment's branch policy is what keeps that key off a branch workflow.
+      #
+      # It is what `strata_core::update::verify_signature` checks, and the one guarantee a checksum
+      # cannot give: GitHub derives an asset's digest from whatever was uploaded, so anyone able to
+      # replace an asset gets a matching digest free. They cannot produce a matching signature.
+      #
+      # **Missing secrets skip signing rather than fail**, matching how macOS signing degrades — a
+      # repository with no key set still cuts usable builds. The cost is stated where it lands: an
+      # unsigned release is one the in-app updater will refuse to install, so the step says so
+      # loudly rather than leaving it to be discovered.
+      - name: Sign the release assets
+        id: sign
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_SECRET_KEY_PASSWORD: ${{ secrets.MINISIGN_SECRET_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MINISIGN_SECRET_KEY:-}" ]; then
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No MINISIGN_SECRET_KEY - the assets are unsigned, and the in-app updater will refuse to install this release. Users must download it from the release page."
+            exit 0
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends minisign
+
+          # The key reaches the runner as base64 of the `.key` file minisign writes, so a multi-line
+          # secret cannot be mangled by however it was pasted in.
+          echo -n "$MINISIGN_SECRET_KEY" | base64 --decode > "$RUNNER_TEMP/minisign.key"
+          chmod 600 "$RUNNER_TEMP/minisign.key"
+
+          # One `.minisig` per asset, named `<asset>.minisig` — the pairing `update::signature_for`
+          # looks for. `-t` puts the version in the trusted comment, which is the part of the
+          # signature that cannot be edited without breaking it.
+          shopt -s nullglob
+          for f in target/dist/*.dmg target/dist/*.zip target/dist/*.AppImage; do
+            minisign -S -s "$RUNNER_TEMP/minisign.key" \
+              -t "strata ${{ needs.version.outputs.version }} $(basename "$f")" \
+              -m "$f" </dev/null
+            echo "signed $(basename "$f")"
+          done
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      # The key is on disk for exactly as long as the step above needs it. `always()`, so a failed
+      # signing run does not leave it behind for whatever runs next.
+      - name: Clean up the signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/minisign.key"
 
       # How the notes get written, and what they cover. Its own step because the `secrets` context
       # is not reachable from a step-level `if` - only `steps` is - the same reason the signing
       # detection above is a step rather than a condition.
       - name: Decide how the release notes are written
         id: notes
-        if: steps.version.outputs.publish == 'true'
+        if: needs.version.outputs.publish == 'true'
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           WANT: ${{ inputs.notes }}
@@ -365,7 +604,7 @@ jobs:
           # about to create, would name a range that says nothing about this build.
           PREV=""
           for t in $(git tag --list 'v*' --sort=-version:refname); do
-            if [ "$t" = "${{ steps.version.outputs.tag }}" ]; then
+            if [ "$t" = "${{ needs.version.outputs.tag }}" ]; then
               continue
             fi
             if git merge-base --is-ancestor "$t" HEAD 2>/dev/null; then
@@ -397,7 +636,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
-            Write the user-facing release notes for Strata ${{ steps.version.outputs.version }} and
+            Write the user-facing release notes for Strata ${{ needs.version.outputs.version }} and
             save them to `target/release-notes.md`.
 
             That file IS the deliverable. Nothing reads your final message, and if the file is
@@ -439,11 +678,11 @@ jobs:
       # that was actually built (`--target`). One step, and no tag exists until there is a DMG to
       # attach to it.
       - name: Tag and publish the release
-        if: steps.version.outputs.publish == 'true'
+        if: needs.version.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
-          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
           # `--target` is the commit that was checked out and built, not the branch, so a branch
@@ -462,17 +701,23 @@ jobs:
           # Built with `printf '%s\n'`, one argument per line, because a plain multi-line shell
           # string would have to start its continuation lines in column 0 and that ends the YAML
           # block scalar this whole step lives in.
-          if [ "${{ steps.signing.outputs.notary }}" = "true" ] && [ "${{ steps.signing.outputs.cert }}" = "true" ]; then
+          if [ "${{ needs.macos.outputs.notary }}" = "true" ] && [ "${{ needs.macos.outputs.cert }}" = "true" ]; then
             INSTALL_NOTE="$(printf '%s\n' \
               '## Installing' \
               '' \
-              'Download the DMG, drag Strata to your Applications folder, and open it. This' \
-              'build is signed and notarized by Apple, so it opens like any other app.')"
+              '**macOS** — download the DMG, drag Strata to your Applications folder, and open' \
+              'it. This build is signed and notarized by Apple, so it opens like any other app.' \
+              '' \
+              '**Linux** — download the AppImage, `chmod +x` it and run it. It needs FUSE (most' \
+              'distributions have it; otherwise run it with `--appimage-extract-and-run`).')"
           else
             INSTALL_NOTE="$(printf '%s\n' \
               '## Installing' \
               '' \
-              'Download the DMG and drag Strata to your Applications folder.' \
+              '**Linux** — download the AppImage, `chmod +x` it and run it. It needs FUSE (most' \
+              'distributions have it; otherwise run it with `--appimage-extract-and-run`).' \
+              '' \
+              '**macOS** — download the DMG and drag Strata to your Applications folder.' \
               '' \
               'This build is **not** signed with an Apple Developer ID, so the first time you' \
               'open it macOS will say it is damaged or from an unidentified developer. It is' \
@@ -500,7 +745,14 @@ jobs:
             echo "::warning::The release-notes step produced nothing - publishing with GitHub's generated changelog only."
           fi
           ARGS+=(--notes "$NOTES")
-          gh release create "$TAG" target/dist/*.dmg target/dist/*.zip "${ARGS[@]}"
+          # The signatures ride with the assets they sign; `update::signature_for` pairs them by name,
+          # so a release missing them is one the in-app updater declines to install from.
+          shopt -s nullglob
+          gh release create "$TAG" \
+            target/dist/*.dmg target/dist/*.zip \
+            target/dist/*.AppImage target/dist/*.AppImage.zsync \
+            target/dist/*.minisig \
+            "${ARGS[@]}"
 
       # `brew tap alexparlett/strata` then `brew install --cask strata`. The cask is generated from the DMG this run
       # built - version, architecture, checksum and the Gatekeeper caveat all read off the file - so
@@ -514,10 +766,10 @@ jobs:
       # problem than a release run that goes red after it has already published - but a token that
       # is present and does not work is a real failure, and fails here.
       - name: Update the Homebrew cask
-        if: steps.version.outputs.publish == 'true'
+        if: needs.version.outputs.publish == 'true'
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          TAG: ${{ steps.version.outputs.tag }}
+          TAG: ${{ needs.version.outputs.tag }}
           OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail

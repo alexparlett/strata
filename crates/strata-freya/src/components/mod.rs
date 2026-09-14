@@ -10,12 +10,14 @@
 
 pub mod avatar;
 pub mod badge;
+pub mod chrome;
 pub mod dialog;
 pub mod divider;
 pub mod dot;
 pub mod form;
 pub mod icon;
 pub mod keycap;
+pub mod menu_bar;
 pub mod metrics;
 pub mod modal;
 pub mod run_button;

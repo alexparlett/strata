@@ -700,6 +700,14 @@ mod tests {
             name: "Strata-0.4.0-update.zip".into(),
             url: "https://example.invalid/Strata.zip".into(),
             size: 1 << 20,
+            // Both present, because an offer missing either cannot be installed — these tests are
+            // about which affordance an offer produces, and a fixture that could never install
+            // would be testing the wrong offer. Neither value is checked here: verifying them is
+            // `strata_core::update`'s job and is tested there.
+            digest: Some(
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000".into(),
+            ),
+            signature: Some("https://example.invalid/Strata.zip.minisig".into()),
         }
     }
 

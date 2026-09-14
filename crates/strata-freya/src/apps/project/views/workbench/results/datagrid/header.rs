@@ -9,7 +9,7 @@ use freya::prelude::*;
 
 use super::cell::Cell;
 use super::{
-    ColWindow, DataGridTheme, EDGE_MARGIN, EDGE_STEP, GRIP_W, GUTTER_W, GridData, HEADER_H,
+    ColWindow, DataGridTheme, GridData, EDGE_MARGIN, EDGE_STEP, GRIP_W, GUTTER_W, HEADER_H,
     MAX_COL_W, MIN_COL_W, TRAIL_W,
 };
 use crate::apps::project::views::workbench::results::selection::{CellRole, SelCtl};

@@ -32,7 +32,7 @@
 //! entry would outlive the data source that answered it.
 
 use freya::prelude::{use_side_effect, use_state};
-use freya::query::{Captured, Query, QueryCapability, QueryStateData, UseQuery, use_query};
+use freya::query::{use_query, Captured, Query, QueryCapability, QueryStateData, UseQuery};
 use std::collections::BTreeMap;
 use std::time::Duration;
 use strata_engine::sql::SessionName;

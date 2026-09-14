@@ -31,13 +31,21 @@ use strata_core::config::Command;
 
 use self::project_menu::ProjectMenu;
 use crate::apps::project::views::PaletteOpen;
+use crate::components::chrome::WindowControls;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
-use crate::components::metrics::{R_1, SP_3, SP_4, TRAFFIC_LIGHT_GUTTER};
+use crate::components::menu_bar::MenuBar;
+use crate::components::metrics::{R_1, SP_3, SP_4, TRAFFIC_LIGHT_GUTTER, WINDOW_CONTROLS_GUTTER};
 use crate::components::typography::Title;
 use crate::keymap::use_hint_title;
+use crate::menu::MenuScope;
 use crate::platform::open_settings;
 use crate::state::AppCtx;
+
+/// The header's height — **the project window's title-bar strip**. Named rather than repeated now
+/// that three places need it: the bar itself, the load-fault arm's bare drag strip, and the window
+/// controls, which centre themselves in whatever bar hosts them.
+pub const HEADER_HEIGHT: f32 = 48.;
 
 define_theme!(
     %[component]
@@ -116,8 +124,9 @@ impl Component for WindowDragStrip {
 
         rect()
             .width(Size::window_percent(100.))
-            .height(Size::px(48.))
+            .height(Size::px(HEADER_HEIGHT))
             .on_pointer_down(title_bar_press(is_filled, self.filled_by_app))
+            .child(WindowControls::new(HEADER_HEIGHT))
     }
 }
 
@@ -191,10 +200,15 @@ impl Component for HeaderBar {
             .horizontal()
             .cross_align(Alignment::Center)
             .content(Content::Flex)
-            .padding(Gaps::new(0., SP_4, 0., TRAFFIC_LIGHT_GUTTER))
+            .padding(Gaps::new(
+                0.,
+                SP_4 + WINDOW_CONTROLS_GUTTER,
+                0.,
+                TRAFFIC_LIGHT_GUTTER,
+            ))
             .spacing(SP_4)
             .on_pointer_down(title_bar_press(is_filled, self.filled_by_app))
-            .child(brand)
+            .child(MenuBar::new(use_consume::<MenuScope>()).label(brand))
             .child(Divider::vertical().length(Size::px(20.)).color(border_fill))
             .child(ProjectMenu)
             .child(rect().height(Size::px(1.)).width(Size::flex(1.)))
@@ -204,9 +218,10 @@ impl Component for HeaderBar {
             .background(background)
             .color(color)
             .content(Content::Flex)
-            .height(Size::px(48.))
+            .height(Size::px(HEADER_HEIGHT))
             .width(Size::fill())
             .child(bar)
             .child(Divider::horizontal().color(border_fill))
+            .child(WindowControls::new(HEADER_HEIGHT))
     }
 }

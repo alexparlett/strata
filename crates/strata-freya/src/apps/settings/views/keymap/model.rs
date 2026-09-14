@@ -197,7 +197,18 @@ mod test {
 
         let find = row(Command::Find);
         assert!(find.custom && !find.unbound());
-        assert_eq!(find.caps, vec!["⌘", "G"]);
+        // Through `chord_caps` rather than spelled `["⌘", "G"]`: the modifier's *name* is the
+        // platform's (⌘ on macOS, Ctrl elsewhere) while the binding is the same either way, and
+        // what this row is being tested for is that it shows the override's chord.
+        assert_eq!(
+            find.caps,
+            chord_caps(&KeyChord {
+                primary: true,
+                shift: false,
+                alt: false,
+                key: "g".to_string(),
+            })
+        );
 
         let new_tab = row(Command::NewTab);
         assert!(new_tab.custom && new_tab.unbound());

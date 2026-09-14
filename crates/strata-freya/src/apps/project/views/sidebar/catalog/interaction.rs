@@ -11,13 +11,13 @@ use std::time::Duration;
 
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use freya::radio::RadioStation;
-use freya_testing::TestingRunner;
 use freya_testing::prelude::{MouseEventName, PlatformEvent};
+use freya_testing::TestingRunner;
 use strata_arrow::column_info;
 use strata_core::project::ProjectDefs;
 use strata_core::theme::load;
-use strata_engine::SourceKind;
 use strata_engine::sources::postgres::Pg;
+use strata_engine::SourceKind;
 use strata_engine::{SourceMode, TableMeta, ViewMeta};
 use strata_model::{
     CatalogKind, ColOwner, ColRef, ColumnInfo, Origin, RemoteRef, RightPane, SavedQuery, SourceDef,
@@ -29,7 +29,7 @@ use crate::apps::configure::ConfigureTarget;
 use crate::apps::project::state::{CatalogState, Chats, Log, PersistFaults, Pick};
 
 use super::entry::watched_scan;
-use super::row::{Folds, ICON_SLOT, INDENT, fold_plan};
+use super::row::{fold_plan, Folds, ICON_SLOT, INDENT};
 use super::*;
 use crate::apps::project::contexts::EngineCtx;
 use crate::apps::project::query::{ProfileTarget, ScanId};

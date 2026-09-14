@@ -25,14 +25,6 @@ pub use close::{CloseGuard, CloseTarget};
 /// its handles from. Safe for a child to hold precisely because it is owned by the *window*
 /// rather than by that subtree, so it survives the remount it causes.
 pub use state::EngineRestart;
-/// The window's event log (P3-13), for the Export window: it is a separate OS window, so it
-/// carries the handle as a launch value and records its outcome into the project window's log
-/// — which is where the user is looking when the export window has closed itself.
-pub use state::{log_event, LogCtx, LogLevel};
-/// The `.strata` write funnel and where it reports, for the same window: a def written by
-/// Configure is persisted the way every other def mutation is, its answer is checked rather than
-/// assumed, and a failed write raises the same Problems row it would from here.
-pub use state::{persisted_defs, use_report, ReportCtx};
 /// The catalog store, its scan request and the pass that serves it — `pub` for the **Configure**
 /// window, which is its own OS window and so carries the station as a launch value rather than
 /// inheriting this one's context. It writes the def and asks for the pass; the driver here runs
@@ -41,6 +33,14 @@ pub use state::{
     catalog_settled, refresh_catalog, refresh_table, use_registrations, Catalog, CatalogRescan,
     ProjChan, ProjectState, RegistrationsCtx,
 };
+/// The window's event log (P3-13), for the Export window: it is a separate OS window, so it
+/// carries the handle as a launch value and records its outcome into the project window's log
+/// — which is where the user is looking when the export window has closed itself.
+pub use state::{log_event, LogCtx, LogLevel};
+/// The `.strata` write funnel and where it reports, for the same window: a def written by
+/// Configure is persisted the way every other def mutation is, its answer is checked rather than
+/// assumed, and a failed write raises the same Problems row it would from here.
+pub use state::{persisted_defs, use_report, ReportCtx};
 /// The window's one statement fold, for the **Configure** window: a memory table is created by a
 /// statement rather than registered from a def (IT-01), and it folds its report exactly as the
 /// editor's own Run does.

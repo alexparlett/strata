@@ -6,7 +6,7 @@ on:
   pull_request:
 
 # One test run per branch. A new push supersedes the in-flight run rather than
-# holding a macOS runner for a diff nobody is waiting on any more. This group only
+# holding a runner for a diff nobody is waiting on any more. This group only
 # ever supersedes *within* a branch; serializing across branches is the job-level
 # group below, and the two do different jobs.
 concurrency:
@@ -16,7 +16,9 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
 
-# Two jobs, split on one axis only: whether a test needs the container runtime.
+# Three jobs on two axes. `test` and `containers` split on whether a test needs the container
+# runtime; `linux` is the portability guard, and its own comment says what it is for and what
+# it deliberately leaves to `test`.
 #
 # Everything the shared container worker forces on a job - the repo-wide queue, the cloud
 # agent, the release step, the capacity retry - is a cost the *other* tests were paying
@@ -83,8 +85,9 @@ jobs:
     if: needs.changes.outputs.rust == 'true'
     # macOS, not ubuntu: the app is macOS-first (the muda menubar, the traffic-light
     # gutter, `set_window_parent`), so a green Linux build would not be evidence the
-    # thing we ship compiles. It also skips the gtk/webkit apt dance the fork's own
-    # Linux job needs. The repository is public, so macOS runner minutes are free.
+    # thing we ship compiles — which is why this job, and not the `linux` one below,
+    # carries the published-crate steps. The repository is public, so macOS runner
+    # minutes are free.
     runs-on: macos-latest
     # A cold run compiles DataFusion and pulls Skia; warm runs are minutes. The cache
     # is best-effort, so size this for the cold case.
@@ -324,3 +327,66 @@ jobs:
         with:
           token: ${{ secrets.TC_CLOUD_TOKEN }}
           action: terminate
+
+  # **The Linux build, which is a portability guard and not a second test run.**
+  #
+  # Every platform-specific thing in this workspace is a `cfg` — the keystore backend, the
+  # themes/logs directories, the file-manager reveal, the traffic-light inset, the updater's
+  # opener — and a `cfg` arm that no CI job compiles is an arm that is only ever read, never
+  # checked. That is what this job holds: `clippy --all-targets` compiles the non-macOS arms and
+  # the tests beside them, and `cargo test` runs them.
+  #
+  # It deliberately does **not** repeat the four published-crate steps in `test` (cargo doc, the
+  # `testing` feature's clippy and doctests, the no-sources check). Those hold documentation, a
+  # cargo feature and a dependency boundary — none of which has a platform axis — so running them
+  # twice would double their cost and guard nothing. macOS stays the job that proves what we ship.
+  #
+  # The apt list is what the build actually **links**, derived from `ldd` on a built
+  # `strata-freya` rather than copied from a template: `libgtk-3-dev` and `libxdo-dev` are muda's
+  # Linux backend (the `menu` feature — gtk draws the menubar, libxdo synthesizes the key presses),
+  # `libssl-dev` is `openssl-sys` under the Postgres and MySQL table providers' `native-tls`, and
+  # `libglib2.0-dev` is named rather than left to gtk's own dependencies because it is the one
+  # every gtk-sys probe wants first. Skia's fontconfig headers arrive with `libgtk-3-dev`
+  # (→ `libcairo2-dev` → `libfontconfig-dev`) and need no entry of their own. A package that turns
+  # out to be missing fails loud at link time, which is the right failure for this list to have.
+  linux:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    # Shorter than `test`'s 90: no universal build and no notarization, but still a cold
+    # DataFusion compile and a Skia download on a cache miss.
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev libglib2.0-dev libgtk-3-dev libxdo-dev
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          # A separate cache from `test`'s by virtue of the runner OS, which rust-cache keys on.
+          cache: true
+          # See the note in `test`.
+          cache-on-failure: false
+          # See the note in `test`: the action's `-D warnings` default would apply to the
+          # dependency builds too, and denying warnings belongs to the clippy step below.
+          rustflags: ''
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      # The same `--skip` list as `test`, for the same reason: this job has no container runtime
+      # either. Everything else in the suite runs, the Freya component tests included — they drive
+      # the UI through `freya-testing` rather than a window, so they need no display.
+      - name: cargo test
+        run: |
+          cargo test --workspace --locked -- \
+            --skip a_table_over_a_source_reads_through_the_object_store \
+            --skip a_database_source_registers_a_federated_catalog \
+            --skip a_mysql_source_registers_a_federated_catalog

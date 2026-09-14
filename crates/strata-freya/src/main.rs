@@ -14,6 +14,7 @@ use std::{env, fs, io, process};
 
 use apps::launcher::LauncherApp;
 use apps::project::{window_geometry_blocking, ProjectApp};
+use freya::borderless::BorderlessPlugin;
 use freya::prelude::*;
 use strata_agent::assistant::Assistant;
 use strata_agent::serve_stdio;
@@ -89,7 +90,7 @@ fn main() {
         update_request,
     };
     let menu_app = app.clone();
-    let launch_config = with_embedded_fonts(LaunchConfig::new()).with_menu(
+    let launch_config = with_chrome(with_embedded_fonts(LaunchConfig::new())).with_menu(
         move || {
             let (menu, handles) = menu::app_menu(menu_chords);
             let mut menu_state = menu_state;
@@ -148,6 +149,22 @@ static EMBEDDED_FONTS: [(&str, &[u8]); 6] = [
         include_bytes!("../../../assets/fonts/JetBrainsMono-SemiBold.ttf"),
     ),
 ];
+
+/// **Put back what an undecorated window lost.** `platform::window_attributes` takes the WM's
+/// decoration off every window outside macOS, which removes the resize borders along with the
+/// title bar; `BorderlessPlugin` overlays invisible bands along the window's edges that drive a
+/// native `drag_resize_window`, and paints the resize cursors while the pointer is over one.
+///
+/// A launch-level plugin rather than a per-window one because it *is* per-window: the plugin wraps
+/// every window's root, so one registration covers the project windows, the launcher and the four
+/// child windows without any of them knowing.
+///
+/// **Inert on macOS** by the plugin's own `root_component` — AppKit still owns the frame there, so
+/// bands over the edges would fight it. No corner radius: our windows are square, and a radius
+/// would clip the canvas on macOS too, where the frame is not ours to reshape.
+fn with_chrome(config: LaunchConfig) -> LaunchConfig {
+    config.with_plugin(BorderlessPlugin::new())
+}
 
 /// Register [`EMBEDDED_FONTS`] on the launch config.
 fn with_embedded_fonts(config: LaunchConfig) -> LaunchConfig {

@@ -256,7 +256,7 @@ pub fn propose(settings: &Settings, cmd: Command, rebind: &Rebind) -> Bind {
     let Some(&first) = holders.first() else {
         return Bind::Ready;
     };
-    let caps = chord_caps(&chord).concat();
+    let caps = chord_caps(&chord).join(CAP_JOIN);
     if let Some(&fixed) = holders.iter().find(|held| is_fixed(**held)) {
         return Bind::Refused {
             message: format!("{caps} is reserved for '{}'", describe(fixed).0),
@@ -337,18 +337,34 @@ pub fn is_custom(settings: &Settings, cmd: Command) -> bool {
     !is_fixed(cmd) && settings.keybinds.iter().any(|bind| bind.command == cmd)
 }
 
+/// The modifier caps, in canvas order (⇧ ⌥ ⌘ / Shift Alt Ctrl).
+///
+/// **The glyphs are macOS's, not the keymap's.** A [`KeyChord`] stores `primary` — the platform's
+/// primary modifier, ⌘ there and Ctrl everywhere else ([`KeyChord::primary`]) — so the *binding* is
+/// already platform-neutral and only its name is not. Printing ⌘ on Linux names a key that keyboard
+/// does not have, for a chord the user presses with Ctrl.
+///
+/// Spelled out rather than swapped glyph-for-glyph off macOS: ⌃ is the Unicode for Control, but no
+/// other platform writes it that way — Windows and every Linux desktop write "Ctrl", "Alt" and
+/// "Shift", and a hint is worth nothing if it is not the word on the key.
+#[cfg(target_os = "macos")]
+const CAPS: [&str; 3] = ["⇧", "⌥", "⌘"];
+#[cfg(not(target_os = "macos"))]
+const CAPS: [&str; 3] = ["Shift", "Alt", "Ctrl"];
+
 /// The chord as display key caps, canvas modifier order (⇧ ⌥ ⌘) then the key:
-/// `["⇧", "⌘", "T"]`.
+/// `["⇧", "⌘", "T"]` on macOS, `["Shift", "Ctrl", "T"]` elsewhere — see [`CAPS`].
 pub fn chord_caps(chord: &KeyChord) -> Vec<String> {
+    let [shift, alt, primary] = CAPS;
     let mut caps = Vec::new();
     if chord.shift {
-        caps.push("⇧".to_string());
+        caps.push(shift.to_string());
     }
     if chord.alt {
-        caps.push("⌥".to_string());
+        caps.push(alt.to_string());
     }
     if chord.primary {
-        caps.push("⌘".to_string());
+        caps.push(primary.to_string());
     }
     caps.push(key_cap(&chord.key));
     caps
@@ -369,11 +385,19 @@ fn key_cap(key: &str) -> String {
     }
 }
 
-/// The effective chord as one compact hint string (`"⇧⌘T"`), or `""` when unbound —
-/// drop the surrounding label too when empty.
+/// What joins the caps in a [`hint`]. Nothing on macOS, where the glyphs are single marks that
+/// read as one token (`⇧⌘T`); a `+` elsewhere, where they are words and running them together
+/// would give `ShiftCtrlT`.
+#[cfg(target_os = "macos")]
+const CAP_JOIN: &str = "";
+#[cfg(not(target_os = "macos"))]
+const CAP_JOIN: &str = "+";
+
+/// The effective chord as one compact hint string (`"⇧⌘T"`, or `"Shift+Ctrl+T"` off macOS), or
+/// `""` when unbound — drop the surrounding label too when empty.
 pub fn hint(settings: &Settings, cmd: Command) -> String {
     effective_chord(settings, cmd)
-        .map(|chord| chord_caps(&chord).concat())
+        .map(|chord| chord_caps(&chord).join(CAP_JOIN))
         .unwrap_or_default()
 }
 
@@ -381,6 +405,28 @@ pub fn hint(settings: &Settings, cmd: Command) -> String {
 mod test {
     use super::*;
     use crate::config::KeyBind;
+
+    /// The hint a chord should render to **on the platform the test is running on**.
+    ///
+    /// These assertions are about the mapping — which modifiers a binding carries and in what
+    /// order — not about macOS's glyphs, so they are written through the same [`CAPS`] and
+    /// [`CAP_JOIN`] the renderer uses. Spelling `"⌘F"` here would have made every one of them a
+    /// test that only passes on one platform, for a function whose whole job is to differ.
+    fn want(shift: bool, alt: bool, primary: bool, key: &str) -> String {
+        let [s_cap, a_cap, p_cap] = CAPS;
+        let mut caps = Vec::new();
+        if shift {
+            caps.push(s_cap);
+        }
+        if alt {
+            caps.push(a_cap);
+        }
+        if primary {
+            caps.push(p_cap);
+        }
+        caps.push(key);
+        caps.join(CAP_JOIN)
+    }
 
     fn chord(primary: bool, shift: bool, key: &str) -> KeyChord {
         KeyChord {
@@ -617,7 +663,13 @@ mod test {
             panic!("⌘T is New query tab's");
         };
         assert_eq!(holders, vec![Command::NewTab]);
-        assert_eq!(message, "⌘T is already assigned to 'New query tab'");
+        assert_eq!(
+            message,
+            format!(
+                "{} is already assigned to 'New query tab'",
+                want(false, false, true, "T")
+            )
+        );
         assert_eq!(
             propose(&s, Command::Find, &Rebind::To(chord(false, false, "g"))),
             Bind::Refused {
@@ -662,12 +714,12 @@ mod test {
     fn apply_commits_the_three_rebinds() {
         let mut s = Settings::default();
         apply(&mut s, Command::Find, &Rebind::To(chord(true, false, "g")));
-        assert_eq!(hint(&s, Command::Find), "⌘G");
+        assert_eq!(hint(&s, Command::Find), want(false, false, true, "G"));
         assert!(is_custom(&s, Command::Find));
 
         apply(&mut s, Command::Find, &Rebind::To(chord(true, true, "g")));
         assert_eq!(s.keybinds.len(), 1);
-        assert_eq!(hint(&s, Command::Find), "⇧⌘G");
+        assert_eq!(hint(&s, Command::Find), want(true, false, true, "G"));
 
         apply(&mut s, Command::Find, &Rebind::Off);
         assert_eq!(effective_chord(&s, Command::Find), None);
@@ -676,7 +728,7 @@ mod test {
         apply(&mut s, Command::Find, &Rebind::Default);
         assert!(s.keybinds.is_empty());
         assert!(!is_custom(&s, Command::Find));
-        assert_eq!(hint(&s, Command::Find), "⌘F");
+        assert_eq!(hint(&s, Command::Find), want(false, false, true, "F"));
     }
 
     #[test]
@@ -738,7 +790,7 @@ mod test {
         );
         assert!(s.keybinds.is_empty());
         assert!(!is_custom(&s, Command::Find));
-        assert_eq!(hint(&s, Command::Find), "⌘F");
+        assert_eq!(hint(&s, Command::Find), want(false, false, true, "F"));
 
         apply(&mut s, Command::Find, &Rebind::To(chord(true, false, "g")));
         assert!(is_custom(&s, Command::Find));
@@ -783,8 +835,8 @@ mod test {
         apply(&mut s, Command::NewTab, &Rebind::Off);
         reset_all(&mut s);
         assert!(s.keybinds.is_empty());
-        assert_eq!(hint(&s, Command::Find), "⌘F");
-        assert_eq!(hint(&s, Command::NewTab), "⌘T");
+        assert_eq!(hint(&s, Command::Find), want(false, false, true, "F"));
+        assert_eq!(hint(&s, Command::NewTab), want(false, false, true, "T"));
     }
 
     #[test]
@@ -792,13 +844,19 @@ mod test {
         let s = Settings::default();
         assert_eq!(
             chord_caps(&default_chord(Command::ReopenTab)),
-            ["⇧", "⌘", "T"]
+            [CAPS[0], CAPS[2], "T"]
         );
-        assert_eq!(hint(&s, Command::RunQuery), "⌘↵");
+        assert_eq!(hint(&s, Command::RunQuery), want(false, false, true, "↵"));
         assert_eq!(hint(&s, Command::Cancel), "Esc");
-        assert_eq!(hint(&s, Command::CycleWindow), "⌘`");
-        assert_eq!(hint(&s, Command::OpenSettings), "⌘,");
-        assert_eq!(hint(&s, Command::Undo), "⌘Z");
-        assert_eq!(hint(&s, Command::Redo), "⇧⌘Z");
+        assert_eq!(
+            hint(&s, Command::CycleWindow),
+            want(false, false, true, "`")
+        );
+        assert_eq!(
+            hint(&s, Command::OpenSettings),
+            want(false, false, true, ",")
+        );
+        assert_eq!(hint(&s, Command::Undo), want(false, false, true, "Z"));
+        assert_eq!(hint(&s, Command::Redo), want(true, false, true, "Z"));
     }
 }

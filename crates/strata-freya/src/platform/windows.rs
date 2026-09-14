@@ -261,6 +261,15 @@ pub fn use_register_window(
     menu: MenuScope,
 ) -> State<Option<WindowId>> {
     use_file_menu(app, menu);
+    // Also put the scope in reach of this window's own subtree, for the in-app menubar
+    // (`components::menu_bar`) drawn in the title bar off macOS: it has to grey its rows by the
+    // same `Gate` the macOS menubar greys by, and the scope is what answers that. Provided here
+    // rather than by each root because every window root calls this anyway, so a new kind of
+    // window cannot ship with a menubar that does not know what it is looking at.
+    //
+    // Per-window context, never an app-global: `MenuScope::Project` holds this window's `OpenCtx`,
+    // which must not outlive it — the reason `use_file_menu` parks its copy behind a drop guard.
+    use_provide_context(move || menu);
     let mut windows = app.windows;
     let mut id = use_state(|| None::<WindowId>);
     use_hook(move || {
@@ -434,6 +443,21 @@ pub fn quit() {
     let platform = Platform::get();
     begin_quit();
     drop(platform.post_callback(|_, ctx| quit_windows(ctx)));
+}
+
+/// **Ask this window to close, the way the OS would.** What our own close button presses
+/// ([`crate::components::chrome::WindowControls`]) on the platforms where the button is ours.
+///
+/// `request_close_window` rather than `close_current_window`: the former queues the same
+/// `CloseRequested` an AppKit traffic light or a WM's × raises, so the window's `on_close` hook
+/// keeps its veto — a project with a query running still raises the T2 confirm, a Configure window
+/// with an unsaved form still refuses. The latter closes unconditionally, which would have made a
+/// drawn close button the one press in the app that skips every guard.
+///
+/// A renderer hop because `NativeEventExt` lives on [`RendererContext`], exactly as [`quit`] hops
+/// for the same reason.
+pub fn request_close() {
+    drop(Platform::get().post_callback(|_, ctx| ctx.request_close_window(None)));
 }
 
 /// Quit from the renderer thread (the menubar's Quit item, which already holds the

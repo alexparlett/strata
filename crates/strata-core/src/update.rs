@@ -24,8 +24,33 @@
 //! archive unpacks *into that folder*, so a staged bundle's parent **is** its staging folder —
 //! which is what lets [`discard`] sweep one from the path alone.
 //!
-//! **macOS.** Not `cfg`-gated because it does not need to be: [`site`] finds no bundle anywhere
-//! else, and an updater with no install site is inert.
+//! **Two platforms, one shape.** macOS installs a `.app` bundle out of a `.app.zip`; Linux installs
+//! an AppImage, which is the executable itself. Everything around that is shared — the check, the
+//! offer, the staging layout, the three-step swap — and the four places they genuinely differ are
+//! `cfg`-gated and say why: [`installed_at`] (what an update would replace), [`UPDATE_ASSET`]
+//! (which asset is ours), [`unpack`] (an archive, or the file), and [`copy_into`] / [`relaunch`].
+//!
+//! **What makes a download safe to install**, and — carefully — what it is worth.
+//!
+//! Both platforms check [`verify_digest`]: the listing's SHA-256, read from `api.github.com`,
+//! against bytes fetched from `objects.githubusercontent.com`. Two hosts, so whoever controls the
+//! download host cannot also choose what the download is compared against. That is this module's
+//! stated promise — a MITM or a compromised CDN can withhold an update, never substitute one.
+//!
+//! macOS checks a signature as well ([`verify`]: strict, naming [`TEAM_ID`] and claiming
+//! [`APP_ID`]), and Linux has nothing equivalent. It would be easy to read that as macOS being the
+//! stronger of the two against a **compromised publisher**, and it is not: the Developer ID key
+//! lives in the same CI secrets as everything else the release workflow holds, so an attacker who
+//! can push a workflow can sign with it. Against that threat the two platforms are equal, and
+//! adding a signing key for Linux whose private half sat beside it would buy symmetry rather than
+//! safety. Only a key kept out of CI — signed offline when a release is cut — changes that answer.
+//!
+//! The digest's own limit, which is different and worth stating plainly: GitHub *derives* it from
+//! the uploaded bytes, so anyone able to replace a release **asset** gets a matching digest for
+//! free. It secures the download path, not the publishing one.
+//!
+//! **Windows** has no published artifact, so [`installed_at`] finds nothing, the offer degrades to
+//! its release page, and the updater is inert exactly as it is in a `cargo run` build.
 
 use std::env;
 use std::ffi::OsStr;
@@ -41,19 +66,51 @@ use semver::Version;
 use serde::Deserialize;
 use uuid::Uuid;
 
+// The identity `verify` holds a downloaded bundle to. macOS-only with it: there is no signature to
+// read a team or a bundle id out of anywhere else.
+#[cfg(target_os = "macos")]
 use crate::secret::{APP_ID, TEAM_ID};
 
 /// The repository releases are cut from. One spelling, read by the URL below and by nothing
 /// else.
 const REPO: &str = "alexparlett/strata";
 
+/// **The public half of the key release assets are signed with** — minisign's base64 line, without
+/// the `untrusted comment:` header.
+///
+/// This is the app's own root of trust, and the thing macOS's code signature could never be for
+/// Linux: it is checked against a signature made by a key the release pipeline holds and nothing
+/// else does. `minisign-verify` is a **verification-only** crate on purpose — this binary has no
+/// way to produce a signature, only to refuse one.
+///
+/// **Empty means this build cannot verify an update, and so will not install one.** Failing closed
+/// rather than falling back: a key that is missing and a key that is wrong must not lead to
+/// different outcomes, or "no key" becomes the way around the check. `docs/RELEASING.md` has the
+/// commands that generate the pair and where each half goes.
+///
+/// Key id `22BB5BE4E7615C9F`. Changing this line is a breaking act: a user on a build carrying the
+/// old key cannot verify anything signed by the new one, and has to download once by hand. It moves
+/// only if the private half is lost or compromised.
+const MINISIGN_PUBLIC_KEY: &str = "RWSfXGHn5Fu7ImNn/npqj12H6TXgvoPlICxs7H8m79i3FATQoI8kjFcf";
+
 /// How many releases back the check looks. The newest is almost always the first entry; the
 /// window exists so a run of drafts (which are skipped) cannot hide the newest published one.
 const PER_PAGE: usize = 10;
 
-/// The filename suffix UP-01's release pipeline attaches the update archive under. The version
+/// The filename suffix UP-01's release pipeline attaches this platform's update under. The version
 /// in the filename is informative; the tag is what says which release it is.
+///
+/// Per-platform because the artifact is: macOS installs from the `.app.zip` beside the DMG, Linux
+/// from the AppImage, and a release carries both. Matching the wrong one is how an updater offers a
+/// user a file their machine cannot run.
+#[cfg(target_os = "macos")]
 const UPDATE_ASSET: &str = ".app.zip";
+#[cfg(all(unix, not(target_os = "macos")))]
+const UPDATE_ASSET: &str = ".AppImage";
+/// No Windows artifact is published yet, so nothing matches and the offer degrades to its page —
+/// the same answer an unbundled macOS build gets, by the same route.
+#[cfg(target_os = "windows")]
+const UPDATE_ASSET: &str = ".exe.zip";
 
 /// How long the check waits for GitHub, end to end. A version check is something the app does
 /// at startup without being asked, so it either answers quickly or it is not worth waiting for.
@@ -78,13 +135,32 @@ const STAGE_PREFIX: &str = "strata-update-";
 /// What the archive is called inside its staging folder while it is being written.
 const ARCHIVE: &str = "update.zip";
 
+#[cfg(target_os = "macos")]
 const CODESIGN: &str = "/usr/bin/codesign";
 /// The archiver that made the release zip. A Rust unzip that drops extended attributes or
 /// flattens symlinks produces a bundle whose signature no longer verifies, so the tool that
 /// wrote it is the tool that reads it.
+#[cfg(target_os = "macos")]
 const DITTO: &str = "/usr/bin/ditto";
+#[cfg(target_os = "macos")]
 const PLIST_BUDDY: &str = "/usr/libexec/PlistBuddy";
+#[cfg(target_os = "macos")]
 const OPEN: &str = "/usr/bin/open";
+
+/// **How a URL reaches the desktop's browser**, which is the one thing in this module that is not
+/// about a bundle — and therefore the one thing that has to work where no bundle exists.
+///
+/// A platform with no install site reaches *only* [`open_page`]: [`site`] answers
+/// [`Site::Unbundled`], the offer degrades to "open the release page", and that link is the whole
+/// of what the updater can do there. Spelling it `/usr/bin/open` everywhere made the last surviving
+/// path the broken one. macOS keeps the absolute path because Launch Services is a fixed part of
+/// the OS; the other two are resolved on `PATH`, which is where those platforms put them.
+#[cfg(target_os = "macos")]
+const BROWSER: &str = OPEN;
+#[cfg(target_os = "windows")]
+const BROWSER: &str = "explorer";
+#[cfg(all(unix, not(target_os = "macos")))]
+const BROWSER: &str = "xdg-open";
 
 /// The update archive attached to a release — UP-01's `.app.zip`.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -94,6 +170,23 @@ pub struct Asset {
     /// What the release page says it weighs, for a progress bar that has a denominator before
     /// the first byte arrives.
     pub size: u64,
+    /// **The bytes GitHub says this asset is**, as `sha256:<hex>` — the listing's own `digest`.
+    ///
+    /// Load-bearing, and not merely a checksum: the listing comes from `api.github.com` and the
+    /// bytes from `objects.githubusercontent.com`, so an attacker who controls the download host
+    /// still cannot make the two agree. That is the whole of the module's promise — withhold an
+    /// update, never substitute one — held on a platform where there is no code signature to
+    /// check instead.
+    ///
+    /// `None` for a release published before GitHub served the field. Absence is tolerated because
+    /// the signature below is what the install actually rests on — see [`verify_digest`].
+    pub digest: Option<String>,
+    /// **Where this asset's minisign signature is**, as the `<name>.minisig` asset published beside
+    /// it. Read out of the same listing rather than guessed at from the download URL, so a release
+    /// that did not publish one is visibly missing it instead of 404ing at install time.
+    ///
+    /// `None` is a release this build refuses to install ([`verify_signature`]).
+    pub signature: Option<String>,
 }
 
 /// A release newer than the running app.
@@ -230,16 +323,48 @@ pub fn is_local() -> bool {
 /// application folder can be group-writable, read-only on a mounted image, or governed by a
 /// profile.
 pub fn site() -> Site {
-    let Ok(exe) = env::current_exe() else {
-        return Site::Unbundled;
-    };
-    let Some(app) = bundle_of(&exe) else {
+    let Some(app) = installed_at() else {
         return Site::Unbundled;
     };
     match app.parent() {
         Some(dir) if writable(dir) => Site::Writable(app),
         _ => Site::ReadOnly(app),
     }
+}
+
+/// **The thing on disk that *is* this app**, or `None` when there is no such thing — a `cargo run`
+/// build, or a bare binary somebody put on their PATH.
+///
+/// One function with two answers, because "what would an update replace" is one question with a
+/// different answer per platform and everything above it — writability, the offer, the swap — is
+/// the same either way.
+#[cfg(target_os = "macos")]
+fn installed_at() -> Option<PathBuf> {
+    bundle_of(&env::current_exe().ok()?)
+}
+
+/// The AppImage this process was launched from.
+///
+/// `$APPIMAGE` is set by the AppImage runtime and is its documented way of telling the payload
+/// where the file it came from lives — which is the one thing the payload cannot work out for
+/// itself: `current_exe()` points inside the FUSE mount (`/tmp/.mount_XXXX/usr/bin/…`), which
+/// disappears when the process does and is never what an update replaces.
+///
+/// Its absence is the honest signal that there is nothing to replace: a `cargo run` build, or the
+/// binary run straight out of an extracted AppDir. Both get [`Site::Unbundled`] and an updater that
+/// links to the release page, which is right in both cases.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn installed_at() -> Option<PathBuf> {
+    let path = PathBuf::from(env::var_os("APPIMAGE")?);
+    // Set but pointing at nothing is a broken environment rather than a place to install into.
+    path.is_file().then_some(path)
+}
+
+/// No Windows install layout is published yet, so there is nothing to find and the updater is inert
+/// there for the same reason it is inert in a `cargo run` build.
+#[cfg(target_os = "windows")]
+fn installed_at() -> Option<PathBuf> {
+    None
 }
 
 /// **Put `staged` where `target` is.** Call only once no window exists — never against the
@@ -257,20 +382,12 @@ pub fn install(staged: &Path, target: &Path) -> Result<(), String> {
         .parent()
         .ok_or_else(|| format!("'{}' has no folder to install into.", target.display()))?;
     let stamp = Uuid::new_v4();
-    let incoming = dir.join(format!(".strata-staged-{stamp}.app"));
-    let outgoing = dir.join(format!(".strata-old-{stamp}.app"));
+    let incoming = dir.join(format!(".strata-staged-{stamp}{INSTALL_SUFFIX}"));
+    let outgoing = dir.join(format!(".strata-old-{stamp}{INSTALL_SUFFIX}"));
 
-    let copied = Command::new(DITTO)
-        .arg(staged)
-        .arg(&incoming)
-        .output()
-        .map_err(|e| format!("Could not run '{DITTO}': {e}."))?;
-    if !copied.status.success() {
+    if let Err(why) = copy_into(staged, &incoming) {
         sweep(&incoming);
-        return Err(format!(
-            "The update could not be copied into place. {}",
-            said(&copied.stderr)
-        ));
+        return Err(why);
     }
 
     if let Err(e) = fs::rename(target, &outgoing) {
@@ -293,12 +410,64 @@ pub fn install(staged: &Path, target: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// What the sibling files [`install`] works through are called. Cosmetic on Linux, load-bearing on
+/// macOS: a directory named `.app` is what the Finder and `LaunchServices` treat as a bundle, and a
+/// staged copy without it is briefly a folder rather than an app.
+#[cfg(target_os = "macos")]
+const INSTALL_SUFFIX: &str = ".app";
+#[cfg(not(target_os = "macos"))]
+const INSTALL_SUFFIX: &str = ".AppImage";
+
+/// Copy the staged thing to `dest`, ready to be renamed into place.
+///
+/// `ditto` on macOS for the reason the unpack uses it: a bundle copied by anything that drops
+/// extended attributes stops verifying, and the copy is a *directory tree*.
+#[cfg(target_os = "macos")]
+fn copy_into(staged: &Path, dest: &Path) -> Result<(), String> {
+    let copied = Command::new(DITTO)
+        .arg(staged)
+        .arg(dest)
+        .output()
+        .map_err(|e| format!("Could not run '{DITTO}': {e}."))?;
+    if copied.status.success() {
+        return Ok(());
+    }
+    Err(format!(
+        "The update could not be copied into place. {}",
+        said(&copied.stderr)
+    ))
+}
+
+/// One file, so a plain copy — and `fs::copy` carries the permission bits, which is the only
+/// metadata an AppImage has that matters.
+#[cfg(not(target_os = "macos"))]
+fn copy_into(staged: &Path, dest: &Path) -> Result<(), String> {
+    fs::copy(staged, dest)
+        .map(|_| ())
+        .map_err(|e| format!("The update could not be copied into place: {e}."))
+}
+
 /// Start `app` as a new process. `-n` because this one is still exiting, and `LaunchServices`
 /// would otherwise treat the request as "the app is already running" and do nothing.
+#[cfg(target_os = "macos")]
 pub fn relaunch(app: &Path) -> Result<(), String> {
     Command::new(OPEN)
         .arg("-n")
         .arg(app)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Could not start '{}': {e}.", app.display()))
+}
+
+/// Run the new AppImage directly — there is no Launch Services to ask, and the file is executable
+/// by [`unpack`].
+///
+/// Deliberately **not** waiting on it: this process is on its way out, and the child is meant to
+/// outlive it. A `Child` dropped without a `wait` leaves a zombie only until this process exits,
+/// which is immediately.
+#[cfg(not(target_os = "macos"))]
+pub fn relaunch(app: &Path) -> Result<(), String> {
+    Command::new(app)
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("Could not start '{}': {e}.", app.display()))
@@ -309,10 +478,13 @@ pub fn relaunch(app: &Path) -> Result<(), String> {
 /// download to install by hand.
 ///
 /// Here rather than in the app because the page is the updater's own artifact: the URL comes
-/// from the same listing [`check_blocking`] read, and `open` is already this module's way of
-/// reaching Launch Services.
+/// from the same listing [`check_blocking`] read, and handing a URL to the desktop is already
+/// this module's way of reaching Launch Services.
+///
+/// [`BROWSER`] rather than [`OPEN`], because this is the arm that runs where the rest of the
+/// module cannot.
 pub fn open_page(url: &str) {
-    if let Err(e) = Command::new(OPEN).arg(url).spawn() {
+    if let Err(e) = Command::new(BROWSER).arg(url).spawn() {
         tracing::error!("could not open '{url}': {e}");
     }
 }
@@ -439,6 +611,15 @@ fn newest(body: &str, current: &Version) -> Result<Check, String> {
         return Ok(Check::UpToDate);
     };
 
+    // The signature assets, pulled aside before the payload is picked: a `.minisig` is published
+    // per asset, so pairing them is a lookup by name rather than an assumption about ordering.
+    let signatures: Vec<(String, String)> = release
+        .assets
+        .iter()
+        .filter(|asset| asset.name.ends_with(SIGNATURE_SUFFIX))
+        .map(|asset| (asset.name.clone(), asset.browser_download_url.clone()))
+        .collect();
+
     Ok(Check::Newer(Offer {
         version: version.to_string(),
         page_url: release.html_url,
@@ -453,9 +634,11 @@ fn newest(body: &str, current: &Version) -> Result<Check, String> {
             .into_iter()
             .find(|asset| asset.name.ends_with(UPDATE_ASSET))
             .map(|asset| Asset {
+                signature: signature_for(&asset.name, &signatures),
                 name: asset.name,
                 url: asset.browser_download_url,
                 size: asset.size,
+                digest: asset.digest,
             }),
     }))
 }
@@ -483,6 +666,27 @@ struct ReleaseAsset {
     browser_download_url: String,
     #[serde(default)]
     size: u64,
+    /// `sha256:<hex>`. Defaulted because releases cut before GitHub served the field have none,
+    /// and a listing that would not parse is an updater that cannot see any release at all.
+    #[serde(default)]
+    digest: Option<String>,
+}
+
+/// What a signature asset is called: the thing it signs, plus this. minisign's own convention, and
+/// what `minisign -Sm <file>` writes by default.
+const SIGNATURE_SUFFIX: &str = ".minisig";
+
+/// The signature published for `name`, out of the signature assets [`newest`] set aside.
+///
+/// An exact-name match (`Strata-1.0.0.AppImage` → `Strata-1.0.0.AppImage.minisig`), never a fuzzy
+/// one: a release carries several assets and pairing the wrong signature with a payload is a
+/// failure that would look like tampering.
+fn signature_for(name: &str, signatures: &[(String, String)]) -> Option<String> {
+    let want = format!("{name}{SIGNATURE_SUFFIX}");
+    signatures
+        .iter()
+        .find(|(sig_name, _)| *sig_name == want)
+        .map(|(_, url)| url.clone())
 }
 
 /// Fetch, unpack and verify, inside a staging folder the caller cleans up on failure.
@@ -494,10 +698,34 @@ fn stage_update(
     let archive = stage.join(ARCHIVE);
     fetch(&asset.url, &archive, on_progress)?;
 
+    // A few hundred bytes, so it rides `fetch_text` rather than the progress-reporting path the
+    // payload needs — and it is fetched *after* the payload so a failure here costs the download
+    // rather than the other way round.
+    let signature = match asset.signature.as_deref() {
+        Some(url) => Some(fetch_text(url)?),
+        None => None,
+    };
+
+    // **Before anything is unpacked or made executable**, and in this order. The digest is the
+    // cheap integrity check and names a bad download as one; the signature is what says the bytes
+    // came from us, and is the check nobody who merely controls a host or a release asset can
+    // satisfy. Both run on every platform — on macOS in front of `codesign`, not instead of it.
+    verify_digest(&archive, asset.digest.as_deref())?;
+    verify_signature(&archive, signature.as_deref())?;
+
+    unpack(&archive, stage)
+}
+
+/// Turn a verified download into the thing [`install`] will put in place.
+///
+/// The one step that is genuinely different per platform, because the artifact is: a macOS release
+/// ships an archive holding a bundle, and a Linux one ships the executable itself.
+#[cfg(target_os = "macos")]
+fn unpack(archive: &Path, stage: &Path) -> Result<PathBuf, String> {
     let unpacked = Command::new(DITTO)
         .arg("-x")
         .arg("-k")
-        .arg(&archive)
+        .arg(archive)
         .arg(stage)
         .output()
         .map_err(|e| format!("Could not run '{DITTO}': {e}."))?;
@@ -507,13 +735,204 @@ fn stage_update(
             said(&unpacked.stderr)
         ));
     }
-    if let Err(e) = fs::remove_file(&archive) {
+    if let Err(e) = fs::remove_file(archive) {
         tracing::warn!("could not clear {}: {e}", archive.display());
     }
 
     let app = bundle_in(stage)?;
     verify(&app)?;
     Ok(app)
+}
+
+/// There is nothing to unpack: an AppImage release asset **is** the executable, so this renames it
+/// to its final name and makes it runnable.
+///
+/// No signature check follows, because there is nothing on this platform to check one against —
+/// [`verify_digest`] above is the whole of the verification, and its doc says what that is and is
+/// not worth.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn unpack(archive: &Path, stage: &Path) -> Result<PathBuf, String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let app = stage.join("Strata.AppImage");
+    fs::rename(archive, &app).map_err(|e| format!("The download could not be prepared: {e}."))?;
+    // The download arrives 0644 and an AppImage that is not executable is a file the user is told
+    // to chmod — which is exactly the manual step an in-app update exists to remove.
+    fs::set_permissions(&app, fs::Permissions::from_mode(0o755))
+        .map_err(|e| format!("The update could not be made executable: {e}."))?;
+    Ok(app)
+}
+
+/// No Windows artifact is published, so nothing reaches here — [`site`] answers
+/// [`Site::Unbundled`] and the offer never gets an install path.
+#[cfg(target_os = "windows")]
+fn unpack(_archive: &Path, _stage: &Path) -> Result<PathBuf, String> {
+    Err("Installing updates is not supported on this platform yet.".to_string())
+}
+
+/// **Was this signed by the key this build trusts?** — the check an install actually rests on.
+///
+/// Unlike [`verify_digest`], which GitHub derives from whatever was uploaded, a signature is made
+/// by a key that lives only in the release environment. Someone who can replace a release asset
+/// cannot produce a matching signature for it, which is the one gap a checksum structurally cannot
+/// close.
+///
+/// **Streamed, not read.** The asset is hundreds of megabytes; `verify_stream` hashes it in chunks,
+/// so verification costs a pass over the file rather than a copy of it in memory.
+///
+/// Three refusals, all deliberate, none of them a fallback:
+///
+/// - **No key compiled in** — this build was made without [`MINISIGN_PUBLIC_KEY`] and cannot judge
+///   anything. Installing anyway would make an unconfigured build the easiest way past the check.
+/// - **No signature published** — a release that did not sign its assets is one this cannot vouch
+///   for, whatever else is true of it.
+/// - **A signature that does not verify** — the interesting case, and the reason for the rest.
+///
+/// # Errors
+///
+/// Any of the three above, or the file could not be read.
+fn verify_signature(file: &Path, signature: Option<&str>) -> Result<(), String> {
+    verify_signature_with(MINISIGN_PUBLIC_KEY, file, signature)
+}
+
+/// [`verify_signature`] against a stated key rather than the compiled-in one.
+///
+/// Split out for the tests, and only for them: a round-trip needs a key it can sign with, and
+/// [`MINISIGN_PUBLIC_KEY`] has no private half anywhere near this machine. Testing the refusals
+/// alone would leave the one failure nobody notices — a check that rejects *everything*, including
+/// the genuine article — passing a green suite.
+fn verify_signature_with(key: &str, file: &Path, signature: Option<&str>) -> Result<(), String> {
+    use minisign_verify::{PublicKey, Signature};
+
+    if key.is_empty() {
+        return Err(
+            "This build cannot check that an update is genuine, so it will not install one. \
+             Install from the release page instead."
+                .to_string(),
+        );
+    }
+    let Some(signature) = signature else {
+        return Err(
+            "This release does not publish a signature, so the download cannot be shown to be \
+             genuine. Install it from the release page instead."
+                .to_string(),
+        );
+    };
+
+    let key = PublicKey::from_base64(key)
+        .map_err(|e| format!("This build's update key could not be read: {e}."))?;
+    let signature = Signature::decode(signature)
+        .map_err(|e| format!("The release's signature could not be read: {e}."))?;
+    let mut verifier = key
+        .verify_stream(&signature)
+        .map_err(|e| format!("The release's signature could not be checked: {e}."))?;
+
+    let mut file = File::open(file).map_err(|e| format!("The download could not be read: {e}."))?;
+    let mut buffer = vec![0u8; 1 << 16];
+    loop {
+        let read = std::io::Read::read(&mut file, &mut buffer)
+            .map_err(|e| format!("The download could not be read: {e}."))?;
+        if read == 0 {
+            break;
+        }
+        verifier.update(&buffer[..read]);
+    }
+    verifier.finalize().map_err(|_| {
+        "The download is not signed by the key this app trusts, so it has not been installed. \
+         Install from the release page if this keeps happening."
+            .to_string()
+    })
+}
+
+/// **Are these the bytes the release listing described?**
+///
+/// The one check that stands between a download and an install on a platform with no code
+/// signature to verify. It is worth something precisely because of *where the two halves come
+/// from*: the expected digest was read from `api.github.com` during [`check_blocking`], and the
+/// bytes from `objects.githubusercontent.com` just now. Whoever controls the download host cannot
+/// also choose what it is compared against.
+///
+/// It is **not** a defence against whoever publishes the release. GitHub derives this digest from
+/// the bytes that were uploaded, so anyone who can replace an asset gets a matching digest with it.
+/// macOS's [`verify`] looks stronger here and is not: its signing key is a CI secret, reachable by
+/// anyone who can push a workflow. A key kept out of CI would be the thing that changes that, and
+/// no checksum can stand in for one.
+///
+/// **A missing digest is not a refusal**, because it is not what the install rests on:
+/// [`verify_signature`] is, and that one refuses when absent. This runs first because it is the
+/// cheap half — a truncated download fails here with a plain "does not match" instead of reading
+/// as a bad signature, which would send somebody looking for an attacker rather than a dropped
+/// connection.
+///
+/// # Errors
+///
+/// The file could not be read, the digest is in a shape we do not parse, or the bytes do not match.
+fn verify_digest(file: &Path, expected: Option<&str>) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+
+    let Some(expected) = expected else {
+        return Ok(());
+    };
+    // GitHub spells it `sha256:<hex>`. Anything else is a field we do not understand, and guessing
+    // at it is how a check becomes decorative.
+    let Some(want) = expected.strip_prefix("sha256:") else {
+        return Err(format!(
+            "The release's checksum is in a form this app does not know how to check ('{expected}')."
+        ));
+    };
+
+    let mut file = File::open(file).map_err(|e| format!("The download could not be read: {e}."))?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher)
+        .map_err(|e| format!("The download could not be read: {e}."))?;
+    let got = hasher.finalize();
+    let got = got.iter().fold(String::new(), |mut acc, byte| {
+        use std::fmt::Write;
+        let _ = write!(acc, "{byte:02x}");
+        acc
+    });
+
+    // Case-insensitive on the hex, exact on the length: a short "expected" that happened to be a
+    // prefix must not pass.
+    if got.eq_ignore_ascii_case(want) {
+        Ok(())
+    } else {
+        Err(
+            "The download does not match the checksum the release published, so it has not been \
+             installed. Try again, and install from the release page if it keeps happening."
+                .to_string(),
+        )
+    }
+}
+
+/// Read a small file off a URL as text — the signature beside an asset, and nothing else.
+///
+/// Its own function rather than a call into [`fetch`]: that one streams to disk with a progress
+/// callback because the payload is hundreds of megabytes, and a few hundred bytes want neither.
+/// The cap is there because this is fed a URL from a listing, and a `.minisig` that is not one is
+/// not worth reading to the end of.
+fn fetch_text(url: &str) -> Result<String, String> {
+    const SIGNATURE_MAX: u64 = 8 * 1024;
+
+    let runtime = runtime()?;
+    runtime.block_on(async {
+        let response = client(None)
+            .build()
+            .map_err(|e| format!("The download could not be started: {e}."))?
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| format!("The signature could not be fetched: {e}."))?
+            .error_for_status()
+            .map_err(|e| format!("The signature could not be fetched: {e}."))?;
+        if response.content_length().is_some_and(|n| n > SIGNATURE_MAX) {
+            return Err("The release's signature file is implausibly large.".to_string());
+        }
+        response
+            .text()
+            .await
+            .map_err(|e| format!("The signature could not be read: {e}."))
+    })
 }
 
 /// Stream `url` into `dest`, reporting progress as it goes.
@@ -556,6 +975,7 @@ fn fetch(
 }
 
 /// The one `.app` in a freshly unpacked staging folder.
+#[cfg(target_os = "macos")]
 fn bundle_in(stage: &Path) -> Result<PathBuf, String> {
     let mut found: Option<PathBuf> = None;
     let entries =
@@ -588,6 +1008,7 @@ fn bundle_in(stage: &Path) -> Result<PathBuf, String> {
 /// cannot be switched on for a bundle that came from GitHub, and it is `cfg`'d out of a release
 /// build with the origin itself. It says so in the log, loudly, because a skipped signature
 /// check is the one thing here worth never doing by accident.
+#[cfg(target_os = "macos")]
 fn verify(app: &Path) -> Result<(), String> {
     if let Some(origin) = local_origin() {
         tracing::warn!("not verifying {}: it came from {origin}", app.display());
@@ -643,6 +1064,7 @@ fn verify(app: &Path) -> Result<(), String> {
 }
 
 /// What the staged bundle's `Info.plist` calls itself.
+#[cfg(target_os = "macos")]
 fn bundle_id(app: &Path) -> Result<String, String> {
     let plist = app.join("Contents").join("Info.plist");
     let read = Command::new(PLIST_BUDDY)
@@ -662,6 +1084,7 @@ fn bundle_id(app: &Path) -> Result<String, String> {
 
 /// One `Key=value` line out of a `codesign -dvv` report. Whole-line prefix, so `Identifier`
 /// cannot read `TeamIdentifier`'s line.
+#[cfg(target_os = "macos")]
 fn field<'a>(report: &'a str, key: &str) -> Option<&'a str> {
     report
         .lines()
@@ -670,6 +1093,7 @@ fn field<'a>(report: &'a str, key: &str) -> Option<&'a str> {
 }
 
 /// The first `.app` above `exe`, which is the bundle it is installed in.
+#[cfg(target_os = "macos")]
 fn bundle_of(exe: &Path) -> Option<PathBuf> {
     exe.ancestors()
         .find(|path| path.extension().is_some_and(|ext| ext == "app"))
@@ -706,9 +1130,11 @@ fn sweep(path: &Path) {
 }
 
 /// How much of a tool's own output a message carries.
+#[cfg(target_os = "macos")]
 const SAID_MAX: usize = 300;
 
 /// A tool's own words, trimmed to something a dialog can hold.
+#[cfg(target_os = "macos")]
 fn said(output: &[u8]) -> String {
     let text = String::from_utf8_lossy(output);
     let text = text.trim();
@@ -743,7 +1169,14 @@ mod tests {
               {
                 "name": "Strata-0.4.0-universal.app.zip",
                 "browser_download_url": "https://example.invalid/Strata-0.4.0-universal.app.zip",
-                "size": 111166586
+                "size": 111166586,
+                "digest": "sha256:0d9769268a96756b7bb468fe72e7e209552fc311c77b9d8a0e93234f032ad797"
+              },
+              {
+                "name": "Strata-0.4.0-x86_64.AppImage",
+                "browser_download_url": "https://example.invalid/Strata-0.4.0-x86_64.AppImage",
+                "size": 98765432,
+                "digest": "sha256:16f279cd320c0fe5534a85da01749893f1b535053fe8d2cb6240c42200861ba8"
               }
             ]
           },
@@ -768,16 +1201,29 @@ mod tests {
         }
     }
 
-    /// The ordinary case: the newest published release, its page, and the one asset an
-    /// installer can use — the DMG beside it is the first-install artifact and not this.
+    /// The ordinary case: the newest published release, its page, and the one asset an installer
+    /// can use — the DMG beside it is the first-install artifact and not this.
+    ///
+    /// **This platform's asset, out of a release that carries every platform's.** The fixture holds
+    /// what a real release holds now, so the assertion is that the picker chose *ours* rather than
+    /// the first one it saw — which is a thing that can only be got wrong once there is more than
+    /// one, and was not testable while every asset was a macOS one.
     #[test]
     fn the_newest_release_is_offered_with_its_update_archive() {
         let offer = offer(releases(), "0.3.1");
         assert_eq!(offer.version, "0.4.0");
         assert!(offer.page_url.ends_with("/v0.4.0"), "{}", offer.page_url);
         let asset = offer.asset.expect("the archive");
-        assert_eq!(asset.name, "Strata-0.4.0-universal.app.zip");
-        assert_eq!(asset.size, 111_166_586);
+        assert!(
+            asset.name.ends_with(UPDATE_ASSET),
+            "picked '{}', which is not this platform's '{UPDATE_ASSET}'",
+            asset.name
+        );
+        // The digest has to survive the listing, because the install refuses without one.
+        assert!(
+            asset.digest.is_some_and(|d| d.starts_with("sha256:")),
+            "the asset's digest was dropped between the listing and the offer"
+        );
     }
 
     /// **The offer carries what changed, as written.** GitHub's body is Markdown and reaches
@@ -886,6 +1332,7 @@ mod tests {
 
     /// The field read is a whole-line prefix, so the shorter key cannot read the longer key's
     /// line — which would have the updater compare the bundle id against the team.
+    #[cfg(target_os = "macos")]
     #[test]
     fn the_signature_report_is_read_one_whole_key_at_a_time() {
         let report = "Executable=/Applications/Strata.app/Contents/MacOS/strata\n\
@@ -899,6 +1346,7 @@ mod tests {
 
     /// An ad-hoc signature reports the absence as a value, which is why the refusal reads both
     /// that and a missing line as the same answer.
+    #[cfg(target_os = "macos")]
     #[test]
     fn an_ad_hoc_signature_reports_no_team() {
         assert_eq!(
@@ -913,6 +1361,7 @@ mod tests {
     /// The bundle is the first `.app` above the executable, not a fixed number of levels up:
     /// that is what makes it true for the real layout without hardcoding it, and false for a
     /// `cargo run` build, which is what keeps the updater inert there.
+    #[cfg(target_os = "macos")]
     #[test]
     fn the_bundle_is_the_first_app_above_the_executable() {
         assert_eq!(
@@ -927,6 +1376,7 @@ mod tests {
 
     /// A tool's own words are carried, but bounded: `codesign` can answer with a great deal
     /// more than a dialog has room for.
+    #[cfg(target_os = "macos")]
     #[test]
     fn a_tools_words_are_carried_and_bounded() {
         assert_eq!(
@@ -938,13 +1388,181 @@ mod tests {
         assert_eq!(long.len(), SAID_MAX + 3);
     }
 
-    /// A folder holding one named file, so a swap can be told apart by what is inside it.
+    /// **The check that stands in for a signature**, in all four of the ways it has to answer.
+    ///
+    /// Worth its own test because it is the only thing between a download and an install on a
+    /// platform with no code signature, and three of these four are refusals — the failure mode
+    /// that matters is a check that passes when it should not, and every arm of that is here.
+    #[test]
+    fn a_download_is_checked_against_the_digest_the_listing_gave() {
+        use sha2::{Digest, Sha256};
+
+        let dir = env::temp_dir().join(format!("strata-digest-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("payload");
+        fs::write(&file, b"the update").unwrap();
+        // sha256("the update")
+        let real = "sha256:a7e1ca5d9e5cf1b8cb3f0dbb04dbf5d2c4a8c6c8fd4f47dbc9e6ba2e38bbf5b1";
+
+        // The real digest of the bytes just written, computed the same way the function does, so
+        // the happy path is asserted against the file rather than against a constant typed twice.
+        let mut hasher = Sha256::new();
+        hasher.update(b"the update");
+        let got = hasher.finalize();
+        let hex = got.iter().fold(String::new(), |mut acc, b| {
+            use std::fmt::Write;
+            let _ = write!(acc, "{b:02x}");
+            acc
+        });
+        assert!(verify_digest(&file, Some(&format!("sha256:{hex}"))).is_ok());
+        // Case is not signal: GitHub sends lowercase, but a hand-written one must still pass.
+        assert!(verify_digest(&file, Some(&format!("sha256:{}", hex.to_uppercase()))).is_ok());
+
+        // Wrong bytes.
+        let why = verify_digest(&file, Some(real)).expect_err("a mismatch must refuse");
+        assert!(why.contains("does not match"), "{why}");
+
+        // **No digest is not a refusal**, because this is not the check the install rests on —
+        // `verify_signature` is, and that one refuses when absent. Asserted rather than left
+        // implicit, because it reads like a hole and is only safe while that stays true.
+        assert!(
+            verify_digest(&file, None).is_ok(),
+            "a missing digest is the signature's problem, not this one's"
+        );
+
+        // A prefix of the real digest must not pass as the real digest.
+        let why = verify_digest(&file, Some(&format!("sha256:{}", &hex[..16])))
+            .expect_err("a truncated digest must refuse");
+        assert!(why.contains("does not match"), "{why}");
+
+        // An algorithm we do not implement is refused by name rather than guessed at.
+        let why = verify_digest(&file, Some("sha512:abc")).expect_err("an unknown algorithm");
+        assert!(why.contains("does not know how to check"), "{why}");
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// **The check an install actually rests on**, in the three ways it refuses.
+    ///
+    /// Refusals only; that a genuine signature *passes* is
+    /// [`a_genuine_signature_verifies_and_a_mismatched_one_does_not`], which carries the fixture.
+    /// Split because these three need no key at all and that one needs a real pair.
+    #[test]
+    fn an_update_is_refused_unless_this_build_s_key_signed_it() {
+        let dir = env::temp_dir().join(format!("strata-sig-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("payload");
+        fs::write(&file, b"the update").unwrap();
+
+        // **No signature published is a refusal.** A release that did not sign its assets is one
+        // this build cannot vouch for, whatever else is true of it.
+        let why = verify_signature(&file, None).expect_err("an unsigned release must refuse");
+        assert!(
+            why.contains("does not publish a signature") || why.contains("cannot check"),
+            "{why}"
+        );
+
+        // **Nonsense in the signature slot is a refusal**, and one that names the signature rather
+        // than blaming the download.
+        let why =
+            verify_signature(&file, Some("not a signature")).expect_err("garbage must refuse");
+        assert!(
+            why.contains("signature could not be read") || why.contains("cannot check"),
+            "{why}"
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// **An unconfigured build installs nothing.** [`MINISIGN_PUBLIC_KEY`] empty means this binary
+    /// cannot judge an update, and the safe answer to "I cannot check this" is to refuse — if it
+    /// fell back to the digest, building without a key would be the way around the signature.
+    ///
+    /// Written as a property of the constant rather than of one call, because it is the constant
+    /// that decides: whichever way it is set, exactly one of these two sentences is true.
+    #[test]
+    fn a_build_with_no_key_refuses_rather_than_falling_back() {
+        let dir = env::temp_dir().join(format!("strata-nokey-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("payload");
+        fs::write(&file, b"the update").unwrap();
+
+        let why = verify_signature(&file, Some("anything at all"))
+            .expect_err("no key, or a bad signature - either way this must not install");
+        if MINISIGN_PUBLIC_KEY.is_empty() {
+            assert!(
+                why.contains("cannot check that an update is genuine"),
+                "an unconfigured build must say so plainly: {why}"
+            );
+        } else {
+            assert!(
+                why.contains("could not be read") || why.contains("not signed by the key"),
+                "a configured build must reject a bad signature: {why}"
+            );
+        }
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// **A real signature, over real bytes, verifies** — and the same signature over different
+    /// bytes does not.
+    ///
+    /// The fixture is a genuine minisign key pair and signature in the prehashed (`ED`) form the
+    /// release pipeline produces, so this exercises the actual format rather than a shape somebody
+    /// believed it had. The private half exists nowhere: it was used once to make these lines and
+    /// discarded, which is all a verification test needs.
+    ///
+    /// Without this the suite would pass for a `verify_signature` that refused *everything*, which
+    /// is the failure that looks like security right up until nobody can update.
+    #[test]
+    fn a_genuine_signature_verifies_and_a_mismatched_one_does_not() {
+        const KEY: &str = "RWTb/k+EjxBabhKuI8yvJPs4XDZipiAwnnUtjEYZfwguvPGaMyzjsLNO";
+        /// A different, unrelated public key — the minisign project's own published one, so it is
+        /// demonstrably not ours and demonstrably well-formed.
+        const OTHER_KEY: &str = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
+        const SIG: &str = concat!(
+            "untrusted comment: signature from strata test key\n",
+            "RUTb/k+EjxBabv1LfaIVezYJ07PDbmijque4r63V7/X8KUc7Qw3O8nisxH5b3GeOUr6XOdKeNDaMTDGHgSfd4Lev8+Yd24GY/Ao=\n",
+            "trusted comment: timestamp:1789400000\tfile:payload\thashed\n",
+            "hBLDIv/FtT91OfNvw0QDCi0FU23YVRh2dfEQAL4lIcuxP1JBB0yNgfX83miWEe5a9oi5iIQyjeLZkwHvFduYDA==\n",
+        );
+
+        let dir = env::temp_dir().join(format!("strata-roundtrip-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+
+        let signed = dir.join("payload");
+        fs::write(&signed, b"the update").unwrap();
+        verify_signature_with(KEY, &signed, Some(SIG)).expect("the genuine article must verify");
+
+        // One byte different is a different file, and the signature must not carry over to it.
+        let tampered = dir.join("tampered");
+        fs::write(&tampered, b"the updatf").unwrap();
+        let why = verify_signature_with(KEY, &tampered, Some(SIG))
+            .expect_err("altered bytes must refuse");
+        assert!(why.contains("not signed by the key"), "{why}");
+
+        // A well-formed signature from *another* key is refused on the key id, not silently
+        // accepted — which is what stops anyone with a minisign install signing their own build.
+        let why = verify_signature_with(OTHER_KEY, &signed, Some(SIG))
+            .expect_err("another key's signature must refuse");
+        assert!(
+            why.contains("could not be checked") || why.contains("not signed by the key"),
+            "{why}"
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A folder holding one named file, so a swap can be told apart by what is inside it. Beside
+    /// the two swap tests, and gated with them.
+    #[cfg(target_os = "macos")]
     fn bundle(at: PathBuf, marker: &str) -> PathBuf {
         fs::create_dir_all(&at).unwrap();
         fs::write(at.join("who"), marker).unwrap();
         at
     }
 
+    #[cfg(target_os = "macos")]
     fn who(at: &Path) -> String {
         fs::read_to_string(at.join("who")).unwrap()
     }
@@ -952,6 +1570,7 @@ mod tests {
     /// **The swap leaves the new app where the old one was, and nothing else behind.** The
     /// siblings it works through are named for this process and would be a visible mess in an
     /// application folder if any of them survived.
+    #[cfg(target_os = "macos")]
     #[test]
     fn installing_replaces_the_target_and_clears_up() {
         let root = env::temp_dir().join(format!("strata-test-{}", Uuid::new_v4()));
@@ -978,6 +1597,7 @@ mod tests {
     /// **A swap that cannot start leaves the folder exactly as it was.** The copy has already
     /// landed by the time the target is moved aside, so a failure there has to take it back
     /// out again or the next launch finds a stray bundle beside the app.
+    #[cfg(target_os = "macos")]
     #[test]
     fn a_swap_that_fails_leaves_nothing_behind() {
         let root = env::temp_dir().join(format!("strata-test-{}", Uuid::new_v4()));
