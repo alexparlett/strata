@@ -35,13 +35,13 @@ version = "0.4.0"
 # before merging: a patch naming a path only one machine has is a build nobody else can
 # reproduce.
 [workspace.dependencies]
-freya = { git = "https://github.com/alexparlett/freya", rev = "caa46f8715744cb4fdb2d36304e2b1bbeb4acdb0" }
-freya-core = { git = "https://github.com/alexparlett/freya", rev = "caa46f8715744cb4fdb2d36304e2b1bbeb4acdb0" }
-freya-testing = { git = "https://github.com/alexparlett/freya", rev = "caa46f8715744cb4fdb2d36304e2b1bbeb4acdb0" }
-freya-engine = { git = "https://github.com/alexparlett/freya", rev = "caa46f8715744cb4fdb2d36304e2b1bbeb4acdb0" }
-freya-edit = { git = "https://github.com/alexparlett/freya", rev = "caa46f8715744cb4fdb2d36304e2b1bbeb4acdb0" }
-freya-components = { git = "https://github.com/alexparlett/freya", rev = "caa46f8715744cb4fdb2d36304e2b1bbeb4acdb0" }
-torin = { git = "https://github.com/alexparlett/freya", rev = "caa46f8715744cb4fdb2d36304e2b1bbeb4acdb0" }
+freya = { git = "https://github.com/alexparlett/freya", rev = "ee9a59f2c94b86906f348b99d274889c96fc4d33" }
+freya-core = { git = "https://github.com/alexparlett/freya", rev = "ee9a59f2c94b86906f348b99d274889c96fc4d33" }
+freya-testing = { git = "https://github.com/alexparlett/freya", rev = "ee9a59f2c94b86906f348b99d274889c96fc4d33" }
+freya-engine = { git = "https://github.com/alexparlett/freya", rev = "ee9a59f2c94b86906f348b99d274889c96fc4d33" }
+freya-edit = { git = "https://github.com/alexparlett/freya", rev = "ee9a59f2c94b86906f348b99d274889c96fc4d33" }
+freya-components = { git = "https://github.com/alexparlett/freya", rev = "ee9a59f2c94b86906f348b99d274889c96fc4d33" }
+torin = { git = "https://github.com/alexparlett/freya", rev = "ee9a59f2c94b86906f348b99d274889c96fc4d33" }
 
 # Arrow, pinned once for the whole workspace. `strata-arrow` names it directly while
 # `strata-engine` reaches the same crate through `datafusion::arrow`, and the two must be the
