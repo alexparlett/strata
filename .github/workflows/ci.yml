@@ -396,16 +396,23 @@ jobs:
       # also the only thing that exercises the `zbus-secret-service` arm of `open_keystore`, which
       # is precisely the kind of `cfg` arm this job exists to compile and run.
       #
-      # `gnome-keyring-daemon` unlocked with an empty password, inside `dbus-run-session` so the
-      # daemon and cargo share one bus. The readiness loop is not politeness: the daemon claims
-      # `org.freedesktop.secrets` asynchronously, and starting cargo immediately raced it into the
-      # same `ServiceUnknown` the test was failing with.
+      # `gnome-keyring-daemon` inside `dbus-run-session`, so the daemon and cargo share one bus.
+      #
+      # **The password has to be non-empty.** With an empty one the daemon starts and claims
+      # `org.freedesktop.secrets`, but never unlocks a login keyring — so the default collection
+      # stays locked, and a locked collection answers a write with a *prompt* that nothing headless
+      # can dismiss. That surfaces as `Unavailable("SS error: result not returned from SS API")`,
+      # which reads like a broken keystore rather than a locked one. Reproduced both ways under an
+      # isolated `HOME` before being written down here.
+      #
+      # The readiness loop is not politeness either: the daemon claims the bus name asynchronously,
+      # and starting cargo immediately raced it into `ServiceUnknown`.
       - name: cargo test
         run: |
           cat > "$RUNNER_TEMP/run-tests.sh" <<'SCRIPT'
           #!/usr/bin/env bash
           set -euo pipefail
-          echo -n "" | gnome-keyring-daemon --unlock --components=secrets
+          printf '%s' "ci-keyring" | gnome-keyring-daemon --unlock --components=secrets
           for _ in $(seq 1 30); do
             if busctl --user status org.freedesktop.secrets >/dev/null 2>&1; then
               break
