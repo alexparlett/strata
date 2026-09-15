@@ -4,9 +4,9 @@ Strata is built for macOS and shipped there. This document is the other platform
 what compiles, what runs, and what is still macOS-shaped — so that "does it work on Linux" has an
 answer in the repository rather than in someone's memory.
 
-The short version: **the workspace builds, its whole test suite passes, and the app runs on Linux**,
-with window chrome and a menubar of its own. CI's `linux` job holds the first two. The updater and
-packaging are macOS-only by construction, and there is one NVIDIA driver bug to steer around.
+The short version: **the workspace builds, its whole test suite passes, and the app runs, updates and
+ships on Linux**, with window chrome and a menubar of its own. CI's `linux` job holds the first two.
+There is one NVIDIA driver bug to steer around, and a short list of things that are still rough.
 
 ## What the platform axis actually is
 
@@ -128,16 +128,31 @@ be a list of greyed rows; they still get window controls.
 - **The fill button reads "restore" permanently** on a tiling compositor, because `is_maximized()` is
   true for a tiled window.
 
-## Linux: what is macOS-only by construction
+## Linux: updating and packaging
 
-The **in-app updater** (`strata_core::update`) swaps one `.app` bundle for another using `ditto`,
-`codesign` and `PlistBuddy`. It is inert rather than broken elsewhere: `site()` looks for the first
-`.app` above the executable, finds none, answers `Site::Unbundled`, and every updater surface
-degrades to a link to the release page. That link is the one part that has to work off macOS, so
-`open_page` resolves the desktop's opener per OS. The two tests that drive `ditto` for real are gated
-to macOS.
+**`scripts/bundle-linux.sh` builds an AppImage**, and the Release workflow's `linux` job publishes it
+beside the macOS DMG (see [RELEASING.md](RELEASING.md)). It carries the app's own dependency closure
+but never the graphics stack or glibc — those must come from the host, and the script's `EXCLUDE`
+list says why for each. Its `AppRun` sets `FREYA_RENDERER=opengl` only where the NVIDIA bug above
+lives, and never over a user who has already chosen.
 
-**Packaging** is `scripts/bundle-macos.sh` and the Release workflow around it — a `.app`, a DMG and
-the `.app.zip` the updater installs from (see [RELEASING.md](RELEASING.md)). There is no Linux
-artifact, and adding one is a separate piece of work: an AppImage or a `.deb` would also need an
-update mechanism that is not a bundle swap, or none at all.
+**The in-app updater works there too.** `installed_at()` reads `$APPIMAGE`, which is the runtime's
+own way of telling the payload which file it came from — `current_exe()` points inside the FUSE
+mount, which vanishes with the process and is never what an update replaces. The swap is the same
+three steps as the macOS one (copy to a sibling, rename the target aside, rename in), with
+`fs::copy` where a bundle needs `ditto`. Absent `$APPIMAGE` — a `cargo run` build, or an extracted
+AppDir — `site()` answers `Site::Unbundled` and the offer degrades to a link to the release page.
+
+**Both platforms verify a minisign signature** before anything is unpacked, which is the guarantee a
+checksum structurally cannot give: GitHub derives an asset's digest from whatever was uploaded, so
+replacing an asset yields a matching digest for free, and a signature it cannot. `minisign-verify` is
+verification-only, so the app can never sign — only refuse. It fails closed: no key compiled in, no
+signature published, or one that does not verify all refuse to install. The digest check remains as
+the cheap integrity pre-check, so a truncated download reads as a bad download rather than as
+tampering.
+
+What is still macOS-only is the `.app` half: `ditto`, `codesign` and `PlistBuddy`, and the two tests
+that drive them, all `cfg`-gated. There is no `.deb` or `.rpm`, deliberately — the value of a distro
+package is its repository, and a package downloaded from a release page needs root and still has no
+update path. Flatpak is the format that would add something, and would retire the AppImage's glibc
+floor with it.

@@ -351,6 +351,24 @@ pub struct Gate {
     /// There is a second workspace window to move focus to. Gates **Cycle Windows**, which is
     /// the one item whose availability is about the app rather than about this window.
     cyclable: bool,
+    /// This build has somewhere to install an update into — `install_site().bundle().is_some()`.
+    /// Gates **Check for Updates…**, which can find one but never install it in a `cargo run`
+    /// build, and so is offered nowhere it cannot be carried out.
+    ///
+    /// The one flag here that is about the *build* rather than about a window or the window set.
+    /// It lived outside `Gate` until it did not have to: the muda menubar applied it inline while
+    /// [`allows`](Self::allows) said Check for Updates… was always live, so the two surfaces
+    /// disagreed for exactly this item in exactly the build a developer runs.
+    installed: bool,
+}
+
+/// Whether this build has somewhere to install an update into.
+///
+/// A function rather than the expression inline at both `Gate` construction sites, so "what counts
+/// as installed" is one answer: `install_site()` is cached, and a dev build's `Site::Unbundled` is
+/// exactly the case this is here to catch.
+fn installed() -> bool {
+    install_site().bundle().is_some()
 }
 
 impl Gate {
@@ -362,11 +380,13 @@ impl Gate {
     /// the two surfaces disagree about what the app can do. Reading the mapping off one function is
     /// what keeps that from being a matter of remembering.
     ///
-    /// Quit and Check for Updates… are always live: Quit acts on the app rather than on a window,
-    /// and Check for Updates… parks its answer in whichever window can raise a dialog.
+    /// Quit is always live: it acts on the app rather than on a window. Check for Updates… needs a
+    /// window that can raise its dialog *and* a build with somewhere to install into — see
+    /// [`installed`](Self::installed).
     pub fn allows(self, cmd: MenuCmd) -> bool {
         match cmd {
-            MenuCmd::Quit | MenuCmd::CheckUpdates => true,
+            MenuCmd::Quit => true,
+            MenuCmd::CheckUpdates => self.workspace && self.installed,
             MenuCmd::OpenProject | MenuCmd::OpenSettings => self.workspace,
             MenuCmd::CloseProject => self.project,
             MenuCmd::NewQuery | MenuCmd::SaveQuery => self.workbench,
@@ -550,11 +570,14 @@ impl MenuHandles {
             project: _,
             workbench,
             cyclable,
+            // Read through `gate.allows` below rather than destructured, because Check for
+            // Updates… is the one item whose rule needs two of these fields.
+            installed: _,
         } = self.gate;
         set(&self.quit, quit, None);
         set(&self.settings, open_settings, Some(workspace));
         self.check_updates
-            .set_enabled(workspace && install_site().bundle().is_some());
+            .set_enabled(self.gate.allows(MenuCmd::CheckUpdates));
         set(&self.open_project, open_project, Some(workspace));
         set(&self.close_project, close_project, None);
         set(&self.new_query, new_query, Some(workbench));
@@ -677,9 +700,11 @@ impl MenuScope {
                 project: true,
                 workbench: *open.loaded.read(),
                 cyclable: windows.workspace_count() > 1,
+                installed: installed(),
             },
             Self::Launcher(_) => Gate {
                 workspace: true,
+                installed: installed(),
                 ..Gate::default()
             },
             Self::Panel => Gate::default(),
@@ -1210,6 +1235,10 @@ mod test {
                 project: false,
                 workbench: false,
                 cyclable: false,
+                // Whatever this build is: a test binary is never a bundle, so the real answer here
+                // is `false`, and asserting it as read keeps this test about the *scope* rather
+                // than about how it was run.
+                installed: installed(),
             }
         );
         assert_eq!(MenuScope::Panel.gate(&windows), Gate::default());
@@ -1231,9 +1260,43 @@ mod test {
             project: true,
             workbench: false,
             cyclable: false,
+            installed: false,
         };
         assert_ne!(faulted, Gate::default());
         assert!(faulted.workspace && faulted.project && !faulted.workbench);
+    }
+
+    /// **Check for Updates… is gated on the build, and both menus read that from one place.**
+    ///
+    /// The regression this pins: the muda menubar applied `install_site().bundle().is_some()`
+    /// inline while [`Gate::allows`] said the item was always live, so a `cargo run` build greyed
+    /// it on macOS and offered it in the drawn menu — an item that can find an update and then
+    /// has nowhere to put it.
+    #[test]
+    fn check_for_updates_needs_a_build_it_can_install_into() {
+        let workspace = Gate {
+            workspace: true,
+            installed: true,
+            ..Gate::default()
+        };
+        assert!(workspace.allows(MenuCmd::CheckUpdates));
+
+        // A dev build: a real window, nowhere to install.
+        let unbundled = Gate {
+            installed: false,
+            ..workspace
+        };
+        assert!(!unbundled.allows(MenuCmd::CheckUpdates));
+
+        // A panel in an installed build: somewhere to install, no window to raise the answer in.
+        let panel = Gate {
+            workspace: false,
+            ..workspace
+        };
+        assert!(!panel.allows(MenuCmd::CheckUpdates));
+
+        // Quit is the one that really is always live, and must not have been caught by this.
+        assert!(Gate::default().allows(MenuCmd::Quit));
     }
 
     #[test]

@@ -353,6 +353,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      # It checks out, builds and runs tests. Nothing here writes to the repository.
+      contents: read
     # Shorter than `test`'s 90: no universal build and no notarization, but still a cold
     # DataFusion compile and a Skia download on a cache miss.
     timeout-minutes: 75
@@ -365,7 +368,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config libssl-dev libglib2.0-dev libgtk-3-dev libxdo-dev
+            build-essential pkg-config libssl-dev libglib2.0-dev libgtk-3-dev libxdo-dev \
+            gnome-keyring dbus-x11
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -384,9 +388,36 @@ jobs:
       # The same `--skip` list as `test`, for the same reason: this job has no container runtime
       # either. Everything else in the suite runs, the Freya component tests included — they drive
       # the UI through `freya-testing` rather than a window, so they need no display.
+      #
+      # **Under a D-Bus session with a real Secret Service**, which is what
+      # `crates/strata-core/tests/secret_keystore.rs` needs on Linux. That test is deliberately not
+      # `#[ignore]`d — "there is no keystore here" must fail rather than look like "the code is
+      # fine" — so a headless runner has to be given one rather than the test being skipped. It is
+      # also the only thing that exercises the `zbus-secret-service` arm of `open_keystore`, which
+      # is precisely the kind of `cfg` arm this job exists to compile and run.
+      #
+      # `gnome-keyring-daemon` unlocked with an empty password, inside `dbus-run-session` so the
+      # daemon and cargo share one bus. The readiness loop is not politeness: the daemon claims
+      # `org.freedesktop.secrets` asynchronously, and starting cargo immediately raced it into the
+      # same `ServiceUnknown` the test was failing with.
       - name: cargo test
         run: |
+          cat > "$RUNNER_TEMP/run-tests.sh" <<'SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          echo -n "" | gnome-keyring-daemon --unlock --components=secrets
+          for _ in $(seq 1 30); do
+            if busctl --user status org.freedesktop.secrets >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          busctl --user status org.freedesktop.secrets >/dev/null \
+            || { echo "::error::org.freedesktop.secrets never appeared on the session bus"; exit 1; }
           cargo test --workspace --locked -- \
             --skip a_table_over_a_source_reads_through_the_object_store \
             --skip a_database_source_registers_a_federated_catalog \
             --skip a_mysql_source_registers_a_federated_catalog
+          SCRIPT
+          chmod +x "$RUNNER_TEMP/run-tests.sh"
+          dbus-run-session -- "$RUNNER_TEMP/run-tests.sh"
