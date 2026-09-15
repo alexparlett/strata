@@ -44,6 +44,8 @@ use strata_engine::{
 use strata_model::{CsvRead, SourceDef, SourceFormat, TableDef, TableOrigin};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::ContainerAsync;
+// `with_name` / `with_tag` — how a module's hardcoded image is redirected. See `MINIO_IMAGE`.
+use testcontainers::ImageExt;
 use testcontainers_modules::minio::MinIO;
 
 /// The bucket the fixture is seeded into, and the data source's authority.
@@ -117,10 +119,29 @@ fn at_capacity(err: &impl Display) -> bool {
 /// covers two *live* jobs colliding and cannot cover the handover itself, which happens on the
 /// provider's side where nothing here can watch it. Every other failure, and this one past its
 /// budget, panics with the message it always did.
+/// **Where the MinIO image comes from, and why it is not the module's default.**
+///
+/// `testcontainers_modules::minio` hardcodes `minio/minio` on Docker Hub, and MinIO withdrew that
+/// repository — a pull now answers `404 ... repository does not exist`, which reads as a missing
+/// Docker runtime rather than a missing image and failed this suite on every branch. The same
+/// releases are published on Quay, which is where MinIO's own install docs now point.
+///
+/// Pinned rather than floating for the reason every other container tag here is: a test that pulls
+/// whatever is newest is a test that can start failing without anything in this repository changing.
+/// Upgrading is a deliberate edit, and this comment is what tells the next person why the name is
+/// not the module's.
+const MINIO_IMAGE: &str = "quay.io/minio/minio";
+const MINIO_TAG: &str = "RELEASE.2025-04-22T22-12-26Z.hotfix.c630804a1";
+
 async fn minio() -> (ContainerAsync<MinIO>, String) {
     let deadline = Instant::now() + CAPACITY_RETRY_BUDGET;
     let container = loop {
-        match MinIO::default().start().await {
+        match MinIO::default()
+            .with_name(MINIO_IMAGE)
+            .with_tag(MINIO_TAG)
+            .start()
+            .await
+        {
             Ok(container) => break container,
             Err(err) if at_capacity(&err) && Instant::now() < deadline => {
                 eprintln!("container runtime is at capacity, retrying: {err}");
