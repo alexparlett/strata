@@ -108,17 +108,6 @@ fn at_capacity(err: &impl Display) -> bool {
     msg.contains("too many concurrent requests") || msg.contains("IncompleteMessage")
 }
 
-/// A running MinIO, and the `http://` endpoint an S3 data source reaches it on.
-///
-/// The container is returned alongside the endpoint and must be held for the test's duration —
-/// dropping it stops the server.
-///
-/// **Retries a capacity refusal, and only that** — see [`at_capacity`]. CI runs against a
-/// hosted runtime with a single worker, and a worker is held by whoever has it until their
-/// session is released, so an overlap is a wait rather than a fault. Serializing the CI job
-/// covers two *live* jobs colliding and cannot cover the handover itself, which happens on the
-/// provider's side where nothing here can watch it. Every other failure, and this one past its
-/// budget, panics with the message it always did.
 /// **Where the MinIO image comes from, and why it is not the module's default.**
 ///
 /// `testcontainers_modules::minio` hardcodes `minio/minio` on Docker Hub, and MinIO withdrew that
@@ -133,6 +122,17 @@ fn at_capacity(err: &impl Display) -> bool {
 const MINIO_IMAGE: &str = "quay.io/minio/minio";
 const MINIO_TAG: &str = "RELEASE.2025-04-22T22-12-26Z.hotfix.c630804a1";
 
+/// A running MinIO, and the `http://` endpoint an S3 data source reaches it on.
+///
+/// The container is returned alongside the endpoint and must be held for the test's duration —
+/// dropping it stops the server.
+///
+/// **Retries a capacity refusal, and only that** — see [`at_capacity`]. CI runs against a
+/// hosted runtime with a single worker, and a worker is held by whoever has it until their
+/// session is released, so an overlap is a wait rather than a fault. Serializing the CI job
+/// covers two *live* jobs colliding and cannot cover the handover itself, which happens on the
+/// provider's side where nothing here can watch it. Every other failure, and this one past its
+/// budget, panics with the message it always did.
 async fn minio() -> (ContainerAsync<MinIO>, String) {
     let deadline = Instant::now() + CAPACITY_RETRY_BUDGET;
     let container = loop {
