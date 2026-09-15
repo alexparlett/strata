@@ -614,9 +614,6 @@ mod tests {
             !scan.peek().is_scanning(),
             "the claim is released by the drop"
         );
-        assert!(
-            claim_scan(scan, &engine).is_some(),
-            "…so ↻ works again"
-        );
+        assert!(claim_scan(scan, &engine).is_some(), "…so ↻ works again");
     }
 }

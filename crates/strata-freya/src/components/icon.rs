@@ -88,6 +88,15 @@ pub enum IconName {
     ProviderGroq,
     ProviderXai,
     ProviderOllama,
+    /// The three **window controls** we draw ourselves off macOS
+    /// ([`WindowControls`](super::chrome::WindowControls)). Deliberately thinner-stroked and
+    /// geometric rather than drawn from the set above: they are the window's frame, not app
+    /// content, and every desktop draws them as a bar, a square and a cross.
+    WindowMinimize,
+    WindowMaximize,
+    /// Shown in place of [`WindowMaximize`](Self::WindowMaximize) while the window is filled —
+    /// the two overlapping squares every platform uses for "put it back".
+    WindowRestore,
 }
 
 impl IconName {
@@ -171,6 +180,9 @@ impl IconName {
             IconName::ProviderGroq => PROVIDER_GROQ,
             IconName::ProviderXai => PROVIDER_XAI,
             IconName::ProviderOllama => PROVIDER_OLLAMA,
+            IconName::WindowMinimize => WINDOW_MINIMIZE,
+            IconName::WindowMaximize => WINDOW_MAXIMIZE,
+            IconName::WindowRestore => WINDOW_RESTORE,
         }
     }
 }
@@ -240,6 +252,9 @@ const CHEVRONS_UP: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 
 const CHEVRONS_DOWN: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 6 5 5 5-5M7 13l5 5 5-5"/></svg>"#;
 const DOTS: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></svg>"#;
 const SEARCH: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>"#;
+const WINDOW_MINIMIZE: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M6 12h12"/></svg>"#;
+const WINDOW_MAXIMIZE: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>"#;
+const WINDOW_RESTORE: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="5" y="9" width="10" height="10" rx="1.5"/><path d="M9 9V6.5A1.5 1.5 0 0 1 10.5 5h8A1.5 1.5 0 0 1 20 6.5v8A1.5 1.5 0 0 1 18.5 16H16"/></svg>"#;
 const CLOSE: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>"#;
 const DATABASE: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"/></svg>"#;
 const REOPEN: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14l-4-4 4-4"/><path d="M5 10h11a4 4 0 0 1 0 8h-1"/></svg>"#;

@@ -41,7 +41,7 @@ use freya::menu::{
 };
 use freya::prelude::{
     use_drop, use_hook, use_side_effect, Code, Key, Modifiers, ModifiersExt, NamedKey,
-    NativeEventExt, Platform, RendererContext, State, WritableUtils,
+    NativeEventExt, Platform, RendererContext, State, WinitPlatformExt, WritableUtils,
 };
 use strata_core::config::{Command, KeyChord, RecentProject, Settings};
 use strata_core::keymap::effective_chord;
@@ -134,7 +134,7 @@ impl MenuCmd {
     /// items, which the handler routes through the close path instead — and for **Check for
     /// Updates…**, which has no chord to synthesize (UP-03 binds none) and so acts on the
     /// focused window's parked slot, the way Open Recent acts on its parked open path.
-    fn key_command(self) -> Option<Command> {
+    pub fn key_command(self) -> Option<Command> {
         match self {
             Self::Quit | Self::CloseProject | Self::CheckUpdates => None,
             Self::OpenSettings => Some(Command::OpenSettings),
@@ -151,6 +151,120 @@ impl MenuCmd {
         }
     }
 }
+
+impl MenuCmd {
+    /// The item's text. Hoisted off the muda builder because the in-app menubar
+    /// ([`crate::components::menu_bar`]) renders the same items and must name them identically —
+    /// two spellings of "Close Project" is two features as far as a user is concerned.
+    ///
+    /// The ellipses are load-bearing: an item that opens a dialog rather than acting says so, and
+    /// that is a platform convention on every desktop, not a macOS one.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Quit => "Quit Strata",
+            Self::OpenSettings => "Settings…",
+            Self::CheckUpdates => "Check for Updates…",
+            Self::OpenProject => "Open…",
+            Self::CloseProject => "Close Project",
+            Self::NewQuery => "New Query",
+            Self::SaveQuery => "Save Query",
+            Self::CycleWindow => "Cycle Windows",
+            Self::Undo => "Undo",
+            Self::Redo => "Redo",
+            Self::Cut => "Cut",
+            Self::Copy => "Copy",
+            Self::Paste => "Paste",
+            Self::SelectAll => "Select All",
+        }
+    }
+}
+
+/// One entry in a menu's item list.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Item {
+    Cmd(MenuCmd),
+    Separator,
+    /// **Open Recent** — the one entry that is a submenu rather than a command, because each of its
+    /// rows names a different project path ([`RECENT_ID_PREFIX`]).
+    Recent,
+}
+
+/// Where a section's items sit in the **in-app** menu. macOS ignores this: a menubar is a row of
+/// submenus and every section is one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Placement {
+    /// A submenu behind its title — `File ›`, opening a flyout.
+    Submenu,
+    /// Flat at the foot of the one dropdown, with no title above them. The app-level items go here
+    /// because there is no App menu to put them in: off macOS the application's name is not a menu,
+    /// so Settings… and Quit sit at the bottom of the menu the way Vivaldi, Firefox and Chrome all
+    /// place them.
+    Root,
+}
+
+/// One menu, and the items under it.
+pub struct Section {
+    pub title: &'static str,
+    pub items: &'static [Item],
+    pub placement: Placement,
+}
+
+/// **The menus, and what is in them** — the structure of record, shared by the two surfaces that
+/// present it.
+///
+/// macOS gets a real menubar built with muda ([`app_menu`]); every other platform has no such
+/// thing to install into, so it gets [`crate::components::menu_bar::MenuBar`] drawn into the title
+/// bar we already own there. Both read this, so an item cannot exist on one platform only — which
+/// is what `every_command_is_in_exactly_one_menu` below pins.
+///
+/// The App menu's predefined Cocoa items — About, Hide, Hide Others, Show All — are deliberately
+/// **not** here. They are `PredefinedMenuItem`s with no [`MenuCmd`] behind them and no meaning off
+/// macOS (nothing hides an app on a tiling WM), so they stay inside [`app_menu`], which is the
+/// macOS-only builder and the right place for macOS-only items.
+pub const MENUS: &[Section] = &[
+    Section {
+        title: "Strata",
+        placement: Placement::Root,
+        items: &[
+            Item::Cmd(MenuCmd::CheckUpdates),
+            Item::Separator,
+            Item::Cmd(MenuCmd::OpenSettings),
+            Item::Separator,
+            Item::Cmd(MenuCmd::Quit),
+        ],
+    },
+    Section {
+        title: "File",
+        placement: Placement::Submenu,
+        items: &[
+            Item::Cmd(MenuCmd::NewQuery),
+            Item::Cmd(MenuCmd::OpenProject),
+            Item::Recent,
+            Item::Cmd(MenuCmd::SaveQuery),
+            Item::Separator,
+            Item::Cmd(MenuCmd::CloseProject),
+        ],
+    },
+    Section {
+        title: "Edit",
+        placement: Placement::Submenu,
+        items: &[
+            Item::Cmd(MenuCmd::Undo),
+            Item::Cmd(MenuCmd::Redo),
+            Item::Separator,
+            Item::Cmd(MenuCmd::Cut),
+            Item::Cmd(MenuCmd::Copy),
+            Item::Cmd(MenuCmd::Paste),
+            Item::Separator,
+            Item::Cmd(MenuCmd::SelectAll),
+        ],
+    },
+    Section {
+        title: "Window",
+        placement: Placement::Submenu,
+        items: &[Item::Cmd(MenuCmd::CycleWindow)],
+    },
+];
 
 impl From<MenuCmd> for MenuId {
     fn from(cmd: MenuCmd) -> Self {
@@ -220,7 +334,7 @@ const RECENT_ID_PREFIX: &str = "strata.file.recent:";
 /// [`Default`] is every flag off — a panel, and also what the menubar carries between launch
 /// and the first window taking focus.
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
-struct Gate {
+pub struct Gate {
     /// The focused window is one the user *works* in — the launcher or a project window, the
     /// same split [`WindowKind::is_workspace`](crate::platform::WindowKind) draws for the
     /// registry. Gates **Open…**, **Open Recent** and **Settings…**, whose listeners every
@@ -237,6 +351,62 @@ struct Gate {
     /// There is a second workspace window to move focus to. Gates **Cycle Windows**, which is
     /// the one item whose availability is about the app rather than about this window.
     cyclable: bool,
+    /// This build has somewhere to install an update into — `install_site().bundle().is_some()`.
+    /// Gates **Check for Updates…**, which can find one but never install it in a `cargo run`
+    /// build, and so is offered nowhere it cannot be carried out.
+    ///
+    /// The one flag here that is about the *build* rather than about a window or the window set.
+    /// It lived outside `Gate` until it did not have to: the muda menubar applied it inline while
+    /// [`allows`](Self::allows) said Check for Updates… was always live, so the two surfaces
+    /// disagreed for exactly this item in exactly the build a developer runs.
+    installed: bool,
+}
+
+/// Whether this build has somewhere to install an update into.
+///
+/// A function rather than the expression inline at both `Gate` construction sites, so "what counts
+/// as installed" is one answer: `install_site()` is cached, and a dev build's `Site::Unbundled` is
+/// exactly the case this is here to catch.
+fn installed() -> bool {
+    install_site().bundle().is_some()
+}
+
+impl Gate {
+    /// **Can this window carry `cmd` out?** — the flag-to-item mapping the field docs above
+    /// describe, stated once as code.
+    ///
+    /// It exists because there are now two menus to gate. `MenuHandles::take_gate` greys muda's
+    /// items from the same four flags, and the in-app menubar has to grey exactly the same ones or
+    /// the two surfaces disagree about what the app can do. Reading the mapping off one function is
+    /// what keeps that from being a matter of remembering.
+    ///
+    /// Quit is always live: it acts on the app rather than on a window. Check for Updates… needs a
+    /// window that can raise its dialog *and* a build with somewhere to install into — see
+    /// [`installed`](Self::installed).
+    pub fn allows(self, cmd: MenuCmd) -> bool {
+        match cmd {
+            MenuCmd::Quit => true,
+            MenuCmd::CheckUpdates => self.workspace && self.installed,
+            MenuCmd::OpenProject | MenuCmd::OpenSettings => self.workspace,
+            MenuCmd::CloseProject => self.project,
+            MenuCmd::NewQuery | MenuCmd::SaveQuery => self.workbench,
+            MenuCmd::CycleWindow => self.cyclable,
+            // The Edit set reaches the focused *element* through the keyboard pipeline, so it is
+            // live wherever a window is — a panel's form fields undo and paste like any other.
+            MenuCmd::Undo
+            | MenuCmd::Redo
+            | MenuCmd::Cut
+            | MenuCmd::Copy
+            | MenuCmd::Paste
+            | MenuCmd::SelectAll => true,
+        }
+    }
+
+    /// Whether **Open Recent** has anything to open into — the submenu's own gate, which is
+    /// `workspace` for the same reason [`MenuCmd::OpenProject`] is.
+    pub fn allows_recent(self) -> bool {
+        self.workspace
+    }
 }
 
 /// The mutable half of the menubar: the File and Window menus' parts and every item that
@@ -400,11 +570,14 @@ impl MenuHandles {
             project: _,
             workbench,
             cyclable,
+            // Read through `gate.allows` below rather than destructured, because Check for
+            // Updates… is the one item whose rule needs two of these fields.
+            installed: _,
         } = self.gate;
         set(&self.quit, quit, None);
         set(&self.settings, open_settings, Some(workspace));
         self.check_updates
-            .set_enabled(workspace && install_site().bundle().is_some());
+            .set_enabled(self.gate.allows(MenuCmd::CheckUpdates));
         set(&self.open_project, open_project, Some(workspace));
         set(&self.close_project, close_project, None);
         set(&self.new_query, new_query, Some(workbench));
@@ -520,16 +693,18 @@ impl MenuScope {
     /// Only a project window is `cyclable`, because the launcher and a project window never
     /// coexist — the launcher opens when the last project closes, and opening a project closes
     /// it — so the launcher is always the only workspace window there is.
-    fn gate(self, windows: &Windows) -> Gate {
+    pub fn gate(self, windows: &Windows) -> Gate {
         match self {
             Self::Project(open, _) => Gate {
                 workspace: true,
                 project: true,
                 workbench: *open.loaded.read(),
                 cyclable: windows.workspace_count() > 1,
+                installed: installed(),
             },
             Self::Launcher(_) => Gate {
                 workspace: true,
+                installed: installed(),
                 ..Gate::default()
             },
             Self::Panel => Gate::default(),
@@ -824,23 +999,37 @@ pub fn app_menu(chords: MenuChords) -> (Menu, MenuHandles) {
 /// focused window's keyboard pipeline, so the focused window (or element) and its bindings
 /// decide — the same path as typed keys.
 pub fn handle_menu_event(event: MenuEvent, mut ctx: RendererContext, app: AppCtx) {
-    let config = app.config;
     if let Some(path) = event.id().0.strip_prefix(RECENT_ID_PREFIX) {
         open_recent(&mut ctx, app, path);
         return;
     }
-    match MenuCmd::parse(event.id()) {
-        Some(MenuCmd::Quit) => platform::quit_windows(&mut ctx),
-        Some(MenuCmd::CloseProject) => ctx.request_close_window(None),
-        Some(MenuCmd::CheckUpdates) => {
+    if let Some(cmd) = MenuCmd::parse(event.id()) {
+        dispatch(cmd, &mut ctx, app);
+    }
+}
+
+/// **Carry one menu item out.** The action half of [`handle_menu_event`], split from the muda id
+/// parsing around it so the in-app menubar can reach it too — the two surfaces present the same
+/// items and must *do* the same things, and a second copy of this match is how they would stop.
+///
+/// Quit and Close Project route through the close veto (red-button semantics — the T2 confirm
+/// decides while a query runs), the first over every window and the second over the focused one.
+/// Everything else synthesizes its command's *live* effective chord into the focused window's
+/// keyboard pipeline, so the focused window (or element) and its bindings decide — the same path as
+/// typed keys.
+pub fn dispatch(cmd: MenuCmd, ctx: &mut RendererContext, app: AppCtx) {
+    match cmd {
+        MenuCmd::Quit => platform::quit_windows(ctx),
+        MenuCmd::CloseProject => ctx.request_close_window(None),
+        MenuCmd::CheckUpdates => {
             let mut asked = app.update_request;
             asked.set(true);
         }
-        Some(cmd) => {
+        cmd => {
             let Some(command) = cmd.key_command() else {
                 return;
             };
-            let Some(chord) = effective_chord(&config.peek().settings, command) else {
+            let Some(chord) = effective_chord(&app.config.peek().settings, command) else {
                 return;
             };
             let Some((key, modifiers)) = synthetic_key(&chord) else {
@@ -848,8 +1037,22 @@ pub fn handle_menu_event(event: MenuEvent, mut ctx: RendererContext, app: AppCtx
             };
             ctx.send_key_press(None, key, Code::Unidentified, modifiers);
         }
-        None => {}
     }
+}
+
+/// [`dispatch`], reached from a component rather than from the renderer.
+///
+/// The in-app menubar is drawn *in* a window, so a press arrives with a `Platform` and no
+/// [`RendererContext`] — and every action here needs one, because they all act on the window map or
+/// the keyboard pipeline. `post_callback` is the hop, exactly as `platform::quit` makes it for ⌘Q.
+pub fn dispatch_from_window(cmd: MenuCmd, app: AppCtx) {
+    drop(Platform::get().post_callback(move |_, ctx| dispatch(cmd, ctx, app)));
+}
+
+/// [`open_recent`], reached from a component — the same renderer hop as
+/// [`dispatch_from_window`], for the one item that carries a path rather than a command.
+pub fn open_recent_from_window(path: String, app: AppCtx) {
+    drop(Platform::get().post_callback(move |_, ctx| open_recent(ctx, app.clone(), &path)));
 }
 
 /// Open a recent from the menubar — the one File item that carries data rather than
@@ -909,6 +1112,50 @@ fn open_recent(ctx: &mut RendererContext, app: AppCtx, path: &str) {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    /// **Every command is in exactly one menu.** The guard on [`MENUS`], which is the structure
+    /// two surfaces present: muda's menubar on macOS and `components::menu_bar` everywhere else.
+    ///
+    /// The realistic drift is a new [`MenuCmd`] variant wired into `app_menu` and forgotten here —
+    /// the command would then exist on macOS and simply not on Linux, silently, because nothing
+    /// else compares the two. Listing one twice is the other direction and just as wrong: a
+    /// duplicate row is a second way to do one thing, and only one of them would carry the gate.
+    #[test]
+    fn every_command_is_in_exactly_one_menu() {
+        let listed: Vec<MenuCmd> = MENUS
+            .iter()
+            .flat_map(|section| section.items)
+            .filter_map(|item| match item {
+                Item::Cmd(cmd) => Some(*cmd),
+                Item::Separator | Item::Recent => None,
+            })
+            .collect();
+
+        for cmd in MenuCmd::ALL {
+            let times = listed.iter().filter(|listed| **listed == cmd).count();
+            assert_eq!(times, 1, "{cmd:?} appears in MENUS {times} times, want 1");
+        }
+        assert_eq!(
+            listed.len(),
+            MenuCmd::ALL.len(),
+            "MENUS lists a command that is not in MenuCmd::ALL"
+        );
+    }
+
+    /// **Open Recent is in the File menu, once.** It is the one entry with no [`MenuCmd`] behind
+    /// it, so the test above cannot see it, and both surfaces special-case it — muda as a submenu,
+    /// the in-app bar as a labelled section. Two of them, or none, would be a real defect in a
+    /// place neither surface would complain about.
+    #[test]
+    fn open_recent_sits_in_the_file_menu_once() {
+        let recents: Vec<&str> = MENUS
+            .iter()
+            .flat_map(|section| section.items.iter().map(move |item| (section.title, item)))
+            .filter(|(_, item)| matches!(item, Item::Recent))
+            .map(|(title, _)| title)
+            .collect();
+        assert_eq!(recents, vec!["File"]);
+    }
 
     #[test]
     fn menu_cmd_ids_round_trip() {
@@ -988,6 +1235,10 @@ mod test {
                 project: false,
                 workbench: false,
                 cyclable: false,
+                // Whatever this build is: a test binary is never a bundle, so the real answer here
+                // is `false`, and asserting it as read keeps this test about the *scope* rather
+                // than about how it was run.
+                installed: installed(),
             }
         );
         assert_eq!(MenuScope::Panel.gate(&windows), Gate::default());
@@ -1009,9 +1260,43 @@ mod test {
             project: true,
             workbench: false,
             cyclable: false,
+            installed: false,
         };
         assert_ne!(faulted, Gate::default());
         assert!(faulted.workspace && faulted.project && !faulted.workbench);
+    }
+
+    /// **Check for Updates… is gated on the build, and both menus read that from one place.**
+    ///
+    /// The regression this pins: the muda menubar applied `install_site().bundle().is_some()`
+    /// inline while [`Gate::allows`] said the item was always live, so a `cargo run` build greyed
+    /// it on macOS and offered it in the drawn menu — an item that can find an update and then
+    /// has nowhere to put it.
+    #[test]
+    fn check_for_updates_needs_a_build_it_can_install_into() {
+        let workspace = Gate {
+            workspace: true,
+            installed: true,
+            ..Gate::default()
+        };
+        assert!(workspace.allows(MenuCmd::CheckUpdates));
+
+        // A dev build: a real window, nowhere to install.
+        let unbundled = Gate {
+            installed: false,
+            ..workspace
+        };
+        assert!(!unbundled.allows(MenuCmd::CheckUpdates));
+
+        // A panel in an installed build: somewhere to install, no window to raise the answer in.
+        let panel = Gate {
+            workspace: false,
+            ..workspace
+        };
+        assert!(!panel.allows(MenuCmd::CheckUpdates));
+
+        // Quit is the one that really is always live, and must not have been caught by this.
+        assert!(Gate::default().allows(MenuCmd::Quit));
     }
 
     #[test]

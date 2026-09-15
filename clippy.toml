@@ -29,14 +29,18 @@ too-many-lines-threshold = 200
 # **prose**: the query engine and the object store this app is written *about* (230 mentions
 # between them), other IDEs cited as design precedent, another engine cited for the semantics a
 # built-in copies, a protocol and its method, a naming convention, a key, a framework, a
-# fake-GCS server. Backticking them would claim they are code, and `DataFusion` the product is
-# not `datafusion` the crate. `".."` keeps clippy's own default list (GitHub, OAuth, …) rather
-# than replacing it.
+# fake-GCS server, the Linux packaging format the app ships in, and the two database *servers* a
+# federated source talks to — `MySQL` the
+# product is the thing whose error 1045 is being explained, not a crate or a type. Backticking
+# them would claim they are code, and `DataFusion` the product is not `datafusion` the crate.
+# `".."` keeps clippy's own default list (GitHub, OAuth, …) rather than replacing it.
 #
 # Note when editing this: cargo does not always re-lint on a `clippy.toml` change alone. Touch a
 # source file (or `cargo clean -p <crate>`) before concluding an entry here is unnecessary.
 doc-valid-idents = [
     "..",
+    "AppDir",
+    "AppImage",
     "AppKit",
     "DataFusion",
     "DataGrip",
@@ -45,10 +49,12 @@ doc-valid-idents = [
     "JetBrains",
     "MinIO",
     "MiniSky",
+    "MySQL",
     "OpenAI",
     "PROPFIND",
     "PageUp",
     "PascalCase",
+    "PostgreSQL",
     "RustRover",
     "WebDAV",
 ]

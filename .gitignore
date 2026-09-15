@@ -19,3 +19,12 @@ CLAUDE.local.md
 # A local clone of the Freya fork (the build uses the git dependency; the review
 # workflow and local fork development clone here).
 /crates/freya/
+
+# **Release signing keys, if one is ever generated in the working tree.** The private half signs
+# every release the in-app updater will accept (docs/RELEASING.md), so it must never be committed —
+# and `minisign -G` writes into the current directory, which is how it ends up here in the first
+# place. A backstop, not a place to keep them: the key belongs somewhere outside this checkout.
+# The public half is not secret but has no business here either, since it lives in the source as
+# `strata_core::update::MINISIGN_PUBLIC_KEY`.
+*.key
+strata.pub

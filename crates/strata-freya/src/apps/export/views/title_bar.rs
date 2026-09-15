@@ -8,10 +8,12 @@
 use freya::prelude::*;
 
 use crate::apps::export::{ExportCtx, ExportThemePartial, ExportThemePreference};
+use crate::components::chrome::WindowControls;
 use crate::components::divider::Divider;
 use crate::components::icon::{Icon, IconName};
 use crate::components::metrics::{
     COMPACT_BUTTON, R_1, SP_1, SP_4, SP_5, TITLE_BAR_HEIGHT, TRAFFIC_LIGHT_GUTTER,
+    WINDOW_CONTROLS_GUTTER,
 };
 use crate::components::typography::{Meta, Title};
 
@@ -56,11 +58,17 @@ impl Component for TitleBar {
                     .content(Content::Flex)
                     .cross_align(Alignment::Center)
                     .spacing(SP_4)
-                    .padding(Gaps::new(0., SP_5, 0., TRAFFIC_LIGHT_GUTTER))
+                    .padding(Gaps::new(
+                        0.,
+                        SP_5 + WINDOW_CONTROLS_GUTTER,
+                        0.,
+                        TRAFFIC_LIGHT_GUTTER,
+                    ))
                     .window_drag()
                     .child(mark)
                     .child(heading),
             )
             .child(Divider::horizontal().color(theme.border_fill))
+            .child(WindowControls::new(TITLE_BAR_HEIGHT))
     }
 }

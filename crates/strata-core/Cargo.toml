@@ -21,7 +21,12 @@ reqwest = { version = "0.12", default-features = false, features = [
     "http2",
 ] }
 semver = "1"
+# The update asset's SHA-256, checked against what the release listing said it should be — see
+# `update::verify_digest`. Already in the tree under several dependencies; named here because this
+# crate uses it directly.
+sha2 = "0.10"
 zeroize = "1"
+minisign-verify = "0.2.5"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store = { version = "1", features = ["keychain"] }

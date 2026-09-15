@@ -349,6 +349,88 @@ and does the translation).
 
 ---
 
+## Signing releases for the in-app updater
+
+Every release asset is signed with a [minisign](https://jedisct1.github.io/minisign/) key, and the
+app **refuses to install an update it cannot verify against it**. This is separate from Apple code
+signing, which only covers macOS and only proves the bundle came from a Developer ID; this covers
+both platforms and is what the updater itself checks.
+
+It exists because a checksum cannot cover the publishing path. GitHub derives an asset's `digest`
+from whatever bytes were uploaded, so anyone able to replace a release asset gets a matching digest
+for free. They cannot produce a matching signature.
+
+### Generating the key, once
+
+```bash
+minisign -G -p strata.pub -s strata.key
+```
+
+Then:
+
+1. Put the **public** line — the second line of `strata.pub`, without the `untrusted comment:`
+   header — into `MINISIGN_PUBLIC_KEY` in `crates/strata-core/src/update.rs`. It is compiled into
+   the binary on purpose: a key fetched at runtime is a key an attacker can substitute.
+2. Put `base64 -w0 strata.key` into the `release` environment as `MINISIGN_SECRET_KEY`, and its
+   password as `MINISIGN_SECRET_KEY_PASSWORD`. Base64 because the file is multi-line and a secret
+   box is a poor place to preserve newlines.
+3. **Keep `strata.key` somewhere you control, off the machine that cuts releases.** If it is lost,
+   every future release needs a new public key compiled in, and users on an older build cannot
+   update to anything — they have to download by hand once.
+
+While `MINISIGN_PUBLIC_KEY` is empty the updater **fails closed**: it refuses every install and says
+so. That is deliberate — a build that cannot check a signature must not be the way around checking
+one — but it does mean the constant has to be set before the next release is cut, or in-app updating
+stops working for everyone.
+
+### What it does and does not protect
+
+It protects against a replaced release asset, a compromised CDN, and a MITM. It does **not** protect
+against someone who can run a workflow on `main`, because that workflow can use the key — the
+environment's branch policy below is what narrows that to `main`, and keeping the key out of CI
+entirely is the only thing that removes it. That would mean signing releases from your own machine
+rather than in the pipeline, which is a trade of automation for custody, not a setting.
+
+## Where the release secrets live
+
+**In the `release` environment, not in the repository.** The distinction is not cosmetic.
+
+A repository secret is available to *every* workflow in the repository. GitHub never shows it
+again — it is write-only through the UI and the API — but that is not the threat: a workflow does
+not need to read a secret back to leak it, only to use it. Anyone who can push a branch can add a
+workflow that sends the value somewhere, and log masking redacts it from the logs and nothing else.
+So while these were repository secrets, "can push to this repo" and "has the Developer ID signing
+key" were the same sentence.
+
+An environment closes that with a **deployment branch policy**: the secrets resolve only for runs on
+`main` or a `v*` tag, so a workflow on any other branch cannot reach them at all. Chosen over
+required reviewers on purpose — it costs nothing at release time, and a release that pauses for a
+click is one people learn to route around.
+
+Setting it up, once, in **Settings → Environments**:
+
+1. Create an environment named `release`.
+2. Under **Deployment branches and tags**, choose *Selected branches and tags* and add `main` and
+   `v*`.
+3. Add the secrets there: the six Apple ones listed under
+   [Signing](#signing-and-what-testers-see), the two minisign ones above, plus
+   `HOMEBREW_TAP_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN`.
+4. **Delete the repository-level copies.** A secret defined in both places still resolves, so
+   leaving the old one behind leaves the hole open.
+
+The `macos` and `publish` jobs declare `environment: release`; `gate`, `version` and `linux` do not,
+because none of them touches a secret. A `workflow_dispatch` run from another branch still builds —
+it simply gets no secrets, and the bundle script degrades to an ad-hoc signature and says so, which
+is the path an unconfigured repository was always on.
+
+### What this does not protect against
+
+Someone who can merge to `main` can still run a workflow there with the secrets. Branch protection
+on `main` is what makes that visible rather than silent, and it is the reason the policy names `main`
+rather than "any branch". Keeping a signing key out of CI entirely — signing a release from a
+machine you control — is the only thing that changes that answer, and it is a decision about how
+releases are cut rather than a workflow setting.
+
 ## What is in the bundle
 
 The binary is self-contained. Themes are compiled in (`include_str!` in `strata-core::theme`), so

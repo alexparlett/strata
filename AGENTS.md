@@ -157,6 +157,20 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 ```
 
+The same two commands also run on Linux, in CI's `linux` job. That job is a **portability guard,
+not a second test run**: every platform difference in this workspace is a `cfg` — the keystore
+backend, the themes and logs directories, the file-manager reveal, the window decoration, the
+updater's install site — and an arm no job compiles is an arm that is only ever read. macOS stays
+the platform Strata is built for and the only one the published-crate steps run on. Building on
+Linux needs `build-essential pkg-config libssl-dev libglib2.0-dev libgtk-3-dev libxdo-dev` (gtk and
+libxdo are muda's Linux backend; OpenSSL comes in under the Postgres and MySQL providers), and the
+CI job adds `gnome-keyring dbus-x11` so the Secret Service test has a keystore to talk to.
+
+Linux has its own window chrome, its own drawn menubar, an AppImage and a working in-app updater;
+[docs/PLATFORMS.md](docs/PLATFORMS.md) is the per-platform status in full, including what is still
+rough there. **On an NVIDIA GPU under Wayland, run with `FREYA_RENDERER=opengl`** — Freya defaults
+to Vulkan and the NVIDIA driver segfaults inside it.
+
 The four crates meant for a crates.io reader — `strata-model`, `strata-arrow`, `strata-engine`
 and `strata-agent` — carry `#![deny(missing_docs)]`, so an undocumented `pub` item is a build
 failure. Their rustdoc has a gate of its own, because a `[`Foo`]` naming a renamed item still

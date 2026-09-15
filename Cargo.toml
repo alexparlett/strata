@@ -28,14 +28,20 @@ version = "0.4.0"
 # Freya (Skia/native GUI) — our fork. One git source for the umbrella crate and every sibling the
 # vendored editor pulls, so the graph shares a single `freya-core`/`torin` (no duplicates).
 # Cargo.lock pins the commit; `cargo update` moves it to the fork's current `main`.
+#
+# While a fork change is in flight, point the whole git source at a local clone with a
+# `[patch."https://github.com/alexparlett/freya"]` block at the foot of this file rather than
+# editing these lines — one override, and the rev above stays the thing that ships. Remove it
+# before merging: a patch naming a path only one machine has is a build nobody else can
+# reproduce.
 [workspace.dependencies]
-freya = { git = "https://github.com/alexparlett/freya", rev = "f046650a5b9ca547bf646f85a53010de33efc8a8" }
-freya-core = { git = "https://github.com/alexparlett/freya", rev = "f046650a5b9ca547bf646f85a53010de33efc8a8" }
-freya-testing = { git = "https://github.com/alexparlett/freya", rev = "f046650a5b9ca547bf646f85a53010de33efc8a8" }
-freya-engine = { git = "https://github.com/alexparlett/freya", rev = "f046650a5b9ca547bf646f85a53010de33efc8a8" }
-freya-edit = { git = "https://github.com/alexparlett/freya", rev = "f046650a5b9ca547bf646f85a53010de33efc8a8" }
-freya-components = { git = "https://github.com/alexparlett/freya", rev = "f046650a5b9ca547bf646f85a53010de33efc8a8" }
-torin = { git = "https://github.com/alexparlett/freya", rev = "f046650a5b9ca547bf646f85a53010de33efc8a8" }
+freya = { git = "https://github.com/alexparlett/freya", rev = "ee9a59f2c94b86906f348b99d274889c96fc4d33" }
+freya-core = { git = "https://github.com/alexparlett/freya", rev = "ee9a59f2c94b86906f348b99d274889c96fc4d33" }
+freya-testing = { git = "https://github.com/alexparlett/freya", rev = "ee9a59f2c94b86906f348b99d274889c96fc4d33" }
+freya-engine = { git = "https://github.com/alexparlett/freya", rev = "ee9a59f2c94b86906f348b99d274889c96fc4d33" }
+freya-edit = { git = "https://github.com/alexparlett/freya", rev = "ee9a59f2c94b86906f348b99d274889c96fc4d33" }
+freya-components = { git = "https://github.com/alexparlett/freya", rev = "ee9a59f2c94b86906f348b99d274889c96fc4d33" }
+torin = { git = "https://github.com/alexparlett/freya", rev = "ee9a59f2c94b86906f348b99d274889c96fc4d33" }
 
 # Arrow, pinned once for the whole workspace. `strata-arrow` names it directly while
 # `strata-engine` reaches the same crate through `datafusion::arrow`, and the two must be the

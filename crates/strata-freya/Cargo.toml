@@ -14,6 +14,12 @@ freya = { workspace = true, features = [
   "plot",
   "engine",
   "markdown",
+  # Our own window chrome off macOS: `borderless` is the plugin that gives an undecorated
+  # window its resize bands back, `titlebar` the button component our controls are built on.
+  # Both are inert on macOS, where AppKit still draws the frame — see
+  # `platform::window_attributes` and `components::chrome`.
+  "borderless",
+  "titlebar",
 ] }
 
 strata-core = { path = "../strata-core" }

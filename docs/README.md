@@ -48,6 +48,7 @@ Runnable versions live in `crates/strata-engine/examples/` (`minimal_embedder`, 
 | [ARCHITECTURE.md](ARCHITECTURE.md) | The guided tour: workspace, the engine's builder and group handles, the query round trip, the statement pipeline, the data-source layer, state, windows. |
 | [FREYA_STATE_ARCHITECTURE.md](FREYA_STATE_ARCHITECTURE.md) | Per-window state in full: stores and channels, the stateful tab, persistence, the query layer, satellites, the menu seam. |
 | [RELEASING.md](RELEASING.md) | How a build reaches a tester: the bundle script, the Release workflow, versioning, signing and notarization. |
+| [PLATFORMS.md](PLATFORMS.md) | Which platforms Strata builds and runs on: every `cfg` in the workspace in one table, what Linux needs to build, what works there, and what is still macOS-shaped. |
 
 > Note on file names: several feature documents keep a historical `_SPEC` suffix because engine
 > code comments cite them by path and section. Their content is documentation, not specification.

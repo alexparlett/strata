@@ -35,11 +35,11 @@ use strata_engine::sources::put_secret_at;
 use strata_model::{check_catalog_name, SecretRef, SourceDef};
 
 use crate::apps::project::contexts::EngineCtx;
-use crate::apps::project::{log_event, use_report, LogLevel, ReportCtx};
 use crate::apps::project::{
     catalog_settled, persisted_defs, refresh_catalog, Catalog, CatalogRescan, ProjChan,
     ProjectState,
 };
+use crate::apps::project::{log_event, use_report, LogLevel, ReportCtx};
 use crate::apps::source::{SourceCtx, SourceTarget, Status};
 use crate::components::divider::Divider;
 use crate::components::form::form_theme;
@@ -95,7 +95,9 @@ impl Component for Footer {
             .height(Size::px(ACTION_HEIGHT))
             .enabled(busy.is_none() && note.is_none())
             .on_press({
-                move |_: Event<PressEventData>| save(ctx, project, rescan, catalog, engine.clone(), report)
+                move |_: Event<PressEventData>| {
+                    save(ctx, project, rescan, catalog, engine.clone(), report);
+                }
             })
             .child(Control::new(busy.unwrap_or("Save")));
 

@@ -35,7 +35,9 @@ async fn fixture_project_registers_and_queries() {
 
     let mut outcomes = Vec::new();
     eng.catalog()
-        .sync(eng.catalog().spec(root, &defs), |a| outcomes.push(a.outcome))
+        .sync(eng.catalog().spec(root, &defs), |a| {
+            outcomes.push(a.outcome);
+        })
         .await;
     assert_eq!(
         outcomes.len(),

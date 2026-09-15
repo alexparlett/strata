@@ -506,7 +506,9 @@ mod tests {
         let cold = Engine::builder().build();
         let mut outcomes = Vec::new();
         cold.catalog()
-            .sync(cold.catalog().spec(&root, &defs), |a| outcomes.push(a.outcome))
+            .sync(cold.catalog().spec(&root, &defs), |a| {
+                outcomes.push(a.outcome);
+            })
             .await;
         assert_eq!(outcomes.len(), 1);
         assert_eq!(read(&cold, "SELECT count(*) FROM t").await, [["3"]]);

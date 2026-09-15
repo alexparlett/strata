@@ -619,8 +619,25 @@ pub fn effective_id(theme_id: &str, sync_os: bool, os_dark: bool) -> String {
     }
 }
 
-/// Detect the OS dark-mode setting. macOS: `defaults read -g AppleInterfaceStyle`
-/// prints `Dark` in dark mode and errors otherwise. Non-macOS defaults to dark.
+/// Detect the OS dark-mode setting — what Sync-with-OS asks.
+///
+/// **macOS**: `defaults read -g AppleInterfaceStyle`, which prints `Dark` in dark mode and errors
+/// otherwise. There is no "light" value to read; the absence is the answer.
+///
+/// **Elsewhere**: the freedesktop [appearance portal]'s `color-scheme`, which is the one setting
+/// every desktop agreed on — GNOME, KDE and the wlroots compositors all answer it, and it is what
+/// GTK and Qt apps themselves follow. `0` is *no preference*, `1` prefer-dark, `2` prefer-light.
+///
+/// Read with `gdbus` rather than a D-Bus crate, because this module already reaches a platform
+/// setting by running the tool that owns it and one more dependency in a leaf crate is a poor trade
+/// for one integer. `gdbus` ships with `GLib`, which is linked into the app either way (it is what
+/// draws the menubar off macOS), so it is no more of an assumption than `defaults` is above.
+///
+/// **Dark when there is no answer**, which is the long-standing behaviour and the safer of the two:
+/// Strata's own default theme is dark, so a desktop that does not answer keeps the app looking the
+/// way it does with Sync-with-OS off.
+///
+/// [appearance portal]: https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Settings.html
 pub fn os_is_dark() -> bool {
     #[cfg(target_os = "macos")]
     {
@@ -632,7 +649,37 @@ pub fn os_is_dark() -> bool {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        true
+        Command::new("gdbus")
+            .args([
+                "call",
+                "--session",
+                "--dest",
+                "org.freedesktop.portal.Desktop",
+                "--object-path",
+                "/org/freedesktop/portal/desktop",
+                "--method",
+                "org.freedesktop.portal.Settings.ReadOne",
+                "org.freedesktop.appearance",
+                "color-scheme",
+            ])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .is_none_or(|o| color_scheme_is_dark(&String::from_utf8_lossy(&o.stdout)))
+    }
+}
+
+/// Read `gdbus`'s printed variant — `(<uint32 1>,)` — as "is it dark?".
+///
+/// The number is what matters and the wrapping is noise, so this looks for the digit rather than
+/// parsing `GVariant` text: `1` is prefer-dark, `2` prefer-light, `0` no preference. Anything it
+/// cannot read is dark, matching [`os_is_dark`]'s answer when the call fails outright — a reply in
+/// a shape we do not know is not more informative than no reply.
+#[cfg(not(target_os = "macos"))]
+fn color_scheme_is_dark(reply: &str) -> bool {
+    match reply.rsplit_once("uint32 ") {
+        Some((_, rest)) => !matches!(rest.trim_start().as_bytes().first(), Some(b'0' | b'2')),
+        None => true,
     }
 }
 
@@ -797,6 +844,34 @@ pub fn generate_schema(syntax_scopes: &[&str]) -> serde_json::Value {
 mod tests {
     use super::*;
     use std::process;
+
+    /// **The three values the appearance portal defines, and the two ways it can say nothing.**
+    ///
+    /// Worth a test of its own because the mapping is not "dark unless it says light": *no
+    /// preference* (`0`) is a real answer meaning the desktop has none, and it has to land on the
+    /// same side as prefer-light or a desktop that simply never set the key would force every
+    /// Sync-with-OS user dark. The unreadable arms go the other way on purpose — see the doc.
+    #[test]
+    #[cfg(not(target_os = "macos"))]
+    fn the_appearance_portals_color_scheme_reads_as_dark_or_not() {
+        assert!(color_scheme_is_dark("(<uint32 1>,)\n"), "1 is prefer-dark");
+        assert!(
+            !color_scheme_is_dark("(<uint32 2>,)\n"),
+            "2 is prefer-light"
+        );
+        assert!(
+            !color_scheme_is_dark("(<uint32 0>,)\n"),
+            "0 is *no preference*, which must not read as dark"
+        );
+        assert!(
+            color_scheme_is_dark("something we have never seen"),
+            "a reply in an unknown shape is no more informative than no reply"
+        );
+        assert!(
+            color_scheme_is_dark(""),
+            "an empty reply falls back to dark"
+        );
+    }
 
     /// A fresh, empty scratch dir under the OS temp dir (no tempfile dep for two tests).
     fn scratch_dir(tag: &str) -> PathBuf {

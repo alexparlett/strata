@@ -461,7 +461,10 @@ async fn register_defs(
             engine.catalog().sync(spec, &mut settle).await;
         }
         ScanWork::Table { spec, views } => {
-            engine.catalog().refresh(vec![spec], views, &mut settle).await;
+            engine
+                .catalog()
+                .refresh(vec![spec], views, &mut settle)
+                .await;
         }
         ScanWork::Nothing => {}
     }

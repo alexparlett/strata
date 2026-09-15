@@ -84,9 +84,37 @@ pub const ACTION_HEIGHT: f32 = 34.;
 /// launcher's is its own, shorter bar and says so where it is declared.
 pub const TITLE_BAR_HEIGHT: f32 = 50.;
 
-/// The **traffic lights' gutter**: how far in from the left edge a title bar may put content before
-/// it collides with macOS's own window buttons. The OS's geometry, so it belongs to no scale step.
-pub const TRAFFIC_LIGHT_GUTTER: f32 = 82.;
+/// The **window buttons' gutter**: how far in from the *leading* edge a title bar may put content
+/// before it collides with the window's own buttons.
+///
+/// 82px on macOS — the OS's geometry, so it belongs to no scale step — because AppKit's traffic
+/// lights are on the left and the fork's `with_traffic_light_inset` drops them into our strip.
+/// Elsewhere the buttons are ours and they go where those platforms put them, at the *trailing*
+/// edge ([`WINDOW_CONTROLS_GUTTER`]), so nothing is reserved here and a title bar starts its
+/// content at its own inset.
+///
+/// A `cfg!` in a const rather than two consts behind `#[cfg]`: every title bar reads this one name,
+/// and the value is the only thing that differs.
+pub const TRAFFIC_LIGHT_GUTTER: f32 = if cfg!(target_os = "macos") { 82. } else { SP_5 };
+
+/// The **window controls' gutter**: how much room a title bar leaves at its *trailing* edge for
+/// [`WindowControls`](super::chrome::WindowControls), which draws the close / maximize / minimize
+/// buttons on the platforms where they are ours to draw.
+///
+/// Zero on macOS, where AppKit's buttons are at the leading edge and [`TRAFFIC_LIGHT_GUTTER`]
+/// reserves for them instead. Elsewhere it is the three buttons plus the inset that keeps them off
+/// the window edge — added to a bar's own trailing padding rather than replacing it, so the content
+/// clears the controls instead of sliding under them.
+pub const WINDOW_CONTROLS_GUTTER: f32 = if cfg!(target_os = "macos") {
+    0.
+} else {
+    3. * WINDOW_CONTROL + SP_2
+};
+
+/// One **window control** — the square a close / maximize / minimize button occupies in a title bar
+/// we draw ourselves. Windows' own are 46×32 and GNOME's are round and larger; this is the size
+/// that sits in a 38px strip (the launcher's, the shortest of ours) without crowding it.
+pub const WINDOW_CONTROL: f32 = 32.;
 
 /// A **compact button** — shorter than [`ACTION_HEIGHT`] because it sits in chrome rather than
 /// committing anything: title-bar tiles, the chat pane's title trigger, Settings' inline Revert.
